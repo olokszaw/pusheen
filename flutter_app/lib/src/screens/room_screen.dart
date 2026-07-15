@@ -445,6 +445,9 @@ class _RoomScreenState extends State<RoomScreen> {
       }
       if (readinessChanged && !isOwner && latestState != null) {
         unawaited(applyRemoteState(latestState!, forceSeek: true));
+      } else if (!isOwner && latestState != null) {
+        // Continuously sync participant position even when video is ready
+        unawaited(applyRemoteState(latestState!));
       }
       if (!isOwner || !connected || isSeeking) return;
       final isOwnControlEcho = DateTime.now().isBefore(
@@ -631,7 +634,11 @@ class _RoomScreenState extends State<RoomScreen> {
     bool forceSeek = false,
   }) async {
     if (browserMode) {
-      if (!browserVideoReady || isOwner) return;
+      if (isOwner) return;
+      if (!browserVideoReady) {
+        // Retry when video becomes ready
+        return;
+      }
       final target =
           state.positionAt(DateTime.now()).clamp(0, duration).toDouble();
       final shouldSeek = forceSeek || (position - target).abs() > .35;
