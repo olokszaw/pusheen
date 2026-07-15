@@ -1,0 +1,53 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: Backend URL reachable from iPhone
+        required: true
+        default: https://processed-alike-nsw-adapters.trycloudflare.com
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      API_BASE_URL: ${{ inputs.api_base_url || 'https://processed-alike-nsw-adapters.trycloudflare.com' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: flutter_app
+        run: flutter pub get
+
+      - name: Build unsigned iOS app
+        working-directory: flutter_app
+        run: >-
+          flutter build ios --release --no-codesign
+          --dart-define=API_BASE_URL=$API_BASE_URL
+
+      - name: Package IPA for Sideloadly
+        working-directory: flutter_app
+        run: |
+          rm -rf Payload Pulse-unsigned.ipa
+          mkdir Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry Pulse-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pulse-unsigned-ipa
+          path: flutter_app/Pulse-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14

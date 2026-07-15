@@ -1,0 +1,26 @@
+name: pulse_watch_party
+description: Visual prototype of a shared watching mobile app.
+publish_to: none
+version: 1.0.0+2
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  web_socket_channel: ^3.0.1
+  webview_flutter: ^4.9.0
+  webview_flutter_wkwebview: ^3.22.0
+  video_player: ^2.9.2
+  shared_preferences: ^2.3.3
+  image_picker: ^1.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.2
+
+flutter:
+  uses-material-design: true
