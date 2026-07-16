@@ -462,22 +462,30 @@ class _RoomScreenState extends State<RoomScreen> {
     switch (event['type']) {
       case 'playback_state':
         final state = playbackFromEvent(event);
+        final command = event['command'] as String? ?? 'state';
+        final previousUpdatedAt = updatedAt;
+        if (previousUpdatedAt != null &&
+            state.serverUpdatedAt.isBefore(previousUpdatedAt)) {
+          return;
+        }
         latestState = state;
         final ownerFromServer = event['is_owner'] as bool? ?? false;
-        final ignoreBrowserEcho = browserMode && ownerFromServer;
+        // The server broadcasts an owner's command back to every connection,
+        // including the owner. Reapplying that delayed echo seeks the local
+        // player slightly backwards and makes audio/video repeat.
+        final ignoreOwnerEcho = ownerFromServer && command != 'state';
         setState(() {
           connected = true;
           isOwner = ownerFromServer;
-          if (!ignoreBrowserEcho) isPlaying = state.isPlaying;
-          if (!ignoreBrowserEcho && !isSeeking) {
+          if (!ignoreOwnerEcho) isPlaying = state.isPlaying;
+          if (!ignoreOwnerEcho && !isSeeking) {
             position = state.positionAt(DateTime.now()).clamp(0, 86400);
             displayedPosition.value = position;
           }
           updatedAt = state.serverUpdatedAt;
           if (state.vkVideoUrl.isNotEmpty) videoUrl = state.vkVideoUrl;
         });
-        final command = event['command'] as String? ?? 'state';
-        if (!ignoreBrowserEcho) {
+        if (!ignoreOwnerEcho) {
           unawaited(applyRemoteState(
             state,
             forceSeek: command == 'seek' || command == 'pause',
@@ -542,7 +550,8 @@ class _RoomScreenState extends State<RoomScreen> {
       if (!browserVideoReady || isOwner) return;
       final target =
           state.positionAt(DateTime.now()).clamp(0, duration).toDouble();
-      final shouldSeek = forceSeek || (position - target).abs() > .35;
+      final drift = target - position;
+      final shouldSeek = forceSeek || drift > 1.25 || drift < -2.5;
       await controlBrowserPlayer(
         seek: shouldSeek ? target : null,
         shouldPlay: state.isPlaying,
@@ -554,7 +563,10 @@ class _RoomScreenState extends State<RoomScreen> {
     if (isOwner && isSeeking) return;
     final target = state.positionAt(DateTime.now()).clamp(0, duration);
     final current = controller.value.position.inMilliseconds / 1000;
-    if (forceSeek || (current - target).abs() > .35) {
+    final drift = target - current;
+    // While playing, small negative drift is normally network latency. Seeking
+    // backwards for every sync packet causes repeated words and visible jumps.
+    if (forceSeek || drift > 1.25 || drift < -2.5) {
       await controller.seekTo(Duration(milliseconds: (target * 1000).round()));
     }
     if (state.isPlaying && !controller.value.isPlaying) {
