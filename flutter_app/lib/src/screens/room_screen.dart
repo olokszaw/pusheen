@@ -271,6 +271,9 @@ class _RoomScreenState extends State<RoomScreen> {
     await browserPlayer?.runJavaScript(
       'window.__pulseVkEmbed = ${vkEmbedMode ? 'true' : 'false'};',
     );
+    await browserPlayer?.runJavaScript(
+      'window.__pulseRoomOwner = ${isOwner ? 'true' : 'false'};',
+    );
     await browserPlayer?.runJavaScript(r'''
       (() => {
         if (window.__pulseBridgeInstalled) return;
@@ -369,7 +372,11 @@ class _RoomScreenState extends State<RoomScreen> {
               name => video.addEventListener(name, () => emit(name))
             );
           }
-          if (!window.__pulseVkEmbed) {
+          // VK's own controls stay visible for the room owner. For a guest,
+          // keep the actual video above VK's overlays while Flutter blocks
+          // pointer input. Otherwise iOS can play audio behind a frozen
+          // poster and the participant sees no picture.
+          if (!window.__pulseVkEmbed || !window.__pulseRoomOwner) {
             document.documentElement.style.width = '100%';
             document.documentElement.style.height = '100%';
             document.documentElement.style.margin = '0';
@@ -565,6 +572,12 @@ class _RoomScreenState extends State<RoomScreen> {
           updatedAt = state.serverUpdatedAt;
           if (state.vkVideoUrl.isNotEmpty) videoUrl = state.vkVideoUrl;
         });
+        final browser = browserPlayer;
+        if (browserMode && browser != null) {
+          unawaited(browser.runJavaScript(
+            'window.__pulseRoomOwner = ${ownerFromServer ? 'true' : 'false'};',
+          ));
+        }
         if (!ignoreBrowserEcho) {
           unawaited(applyRemoteState(
             state,

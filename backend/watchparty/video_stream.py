@@ -12,7 +12,6 @@ def resolve_vk_stream(page_url, preferred_quality=None):
         # requests to curl-cffi and presents the same TLS/browser fingerprint
         # as Chrome, while all playback authorization still stays on VK.
         "impersonate": ImpersonateTarget(client="chrome"),
-        "nocheckcertificate": True,
     }
     with YoutubeDL(options) as downloader:
         info = downloader.extract_info(page_url, download=False)
