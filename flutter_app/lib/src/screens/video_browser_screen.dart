@@ -17,6 +17,16 @@ class _VideoBrowserScreenState extends State<VideoBrowserScreen> {
   String currentUrl = 'https://www.google.com/';
   bool loading = true;
 
+  static const _blockedHosts = <String>{
+    'doubleclick.net',
+    'googlesyndication.com',
+    'googleadservices.com',
+    'adservice.google.com',
+    'popads.net',
+    'popcash.net',
+    'adnxs.com',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -24,11 +34,51 @@ class _VideoBrowserScreenState extends State<VideoBrowserScreen> {
       browser = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setNavigationDelegate(NavigationDelegate(
+          onNavigationRequest: (request) => isBlockedUrl(request.url)
+              ? NavigationDecision.prevent
+              : NavigationDecision.navigate,
           onPageStarted: (url) => updatePage(url, true),
-          onPageFinished: (url) => updatePage(url, false),
+          onPageFinished: (url) {
+            updatePage(url, false);
+            cleanPageAds();
+          },
         ))
         ..loadRequest(Uri.parse(currentUrl));
     }
+  }
+
+  bool isBlockedUrl(String value) {
+    final host = Uri.tryParse(value)?.host.toLowerCase() ?? '';
+    return _blockedHosts.any(
+      (blocked) => host == blocked || host.endsWith('.$blocked'),
+    );
+  }
+
+  Future<void> cleanPageAds() async {
+    await browser?.runJavaScript(r'''
+      (() => {
+        try { window.open = () => null; } catch (_) {}
+        const pattern = /(doubleclick|googlesyndication|googleadservices|adnxs|popunder|popads|popcash|advert|banner-?ad|(^|[-_])ads?([-_]|$))/i;
+        const clean = () => {
+          document.querySelectorAll(
+            'iframe, [id*="advert" i], [class*="advert" i], '
+            + '[id^="ad_" i], [class~="ads" i], [class*="popunder" i]'
+          ).forEach(element => {
+            const marker = [
+              element.id || '',
+              element.className || '',
+              element.getAttribute && (element.getAttribute('src') || '')
+            ].join(' ');
+            if (pattern.test(marker)) element.remove();
+          });
+        };
+        clean();
+        new MutationObserver(clean).observe(document.documentElement, {
+          childList: true,
+          subtree: true
+        });
+      })();
+    ''');
   }
 
   void updatePage(String url, bool isLoading) {

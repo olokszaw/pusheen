@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import '../../watch_party/api_client.dart';
+import '../../watch_party/media_source.dart';
 import '../../watch_party/playback_state.dart';
 import '../../watch_party/room_socket.dart';
 import '../models/room.dart';
@@ -43,6 +44,7 @@ class _RoomScreenState extends State<RoomScreen> {
   double position = 0;
   DateTime? updatedAt;
   late String videoUrl;
+  late MediaSourceType sourceType;
   List<RoomMemberModel> members = const [];
   VideoPlayerController? player;
   WebViewController? browserPlayer;
@@ -62,6 +64,7 @@ class _RoomScreenState extends State<RoomScreen> {
   void initState() {
     super.initState();
     videoUrl = widget.room.videoUrl;
+    sourceType = widget.room.sourceType;
     isOwner = widget.api.userId == widget.room.ownerId;
     initializePlayer();
     loadMessages().whenComplete(connect);
@@ -101,30 +104,35 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   Future<void> initializePlayer() async {
+    if (sourceType == MediaSourceType.web) {
+      await initializeWebSource();
+    } else {
+      await initializeVkSource();
+    }
+  }
+
+  Future<void> initializeVkSource() async {
     try {
       final resolved = await widget.api.roomStream(widget.room.id);
-      final controller =
-          VideoPlayerController.networkUrl(Uri.parse(resolved.url));
-      await controller.initialize();
-      controller.addListener(updatePlayerPosition);
-      if (!mounted) {
-        controller.dispose();
-        return;
-      }
-      setState(() {
-        stream = resolved;
-        player = controller;
-        duration = controller.value.duration.inMilliseconds / 1000;
-        if (duration <= 0) duration = resolved.durationSeconds.clamp(1, 86400);
-        playerLoading = false;
-      });
-      final state = latestState;
-      if (state != null) await applyRemoteState(state);
+      await initializeDirectStream(resolved);
     } on Object catch (error) {
       if (!mounted) return;
-      final canUseBrowserFallback =
-          error is! ApiException || error.statusCode == 502;
-      if (!kIsWeb && canUseBrowserFallback) {
+      setState(() {
+        playerLoading = false;
+        playerError = error.toString();
+      });
+    }
+  }
+
+  Future<void> initializeWebSource() async {
+    try {
+      final resolved = await widget.api.roomStream(widget.room.id);
+      await initializeDirectStream(resolved);
+    } on Object catch (error) {
+      if (!mounted) return;
+      // WEB is a separate provider: only it may fall back to an embedded page.
+      // VK failures are never rendered as the VK website.
+      if (!kIsWeb && (error is! ApiException || error.statusCode == 502)) {
         await initializeBrowserPlayer();
         return;
       }
@@ -133,6 +141,30 @@ class _RoomScreenState extends State<RoomScreen> {
         playerError = error.toString();
       });
     }
+  }
+
+  Future<void> initializeDirectStream(VideoStreamModel resolved) async {
+    final controller = VideoPlayerController.networkUrl(
+      Uri.parse(resolved.url),
+      httpHeaders: resolved.headers,
+    );
+    await controller.initialize();
+    controller.addListener(updatePlayerPosition);
+    if (!mounted) {
+      controller.dispose();
+      return;
+    }
+    setState(() {
+      stream = resolved;
+      player = controller;
+      browserMode = false;
+      duration = controller.value.duration.inMilliseconds / 1000;
+      if (duration <= 0) duration = resolved.durationSeconds.clamp(1, 86400);
+      playerLoading = false;
+      playerError = null;
+    });
+    final state = latestState;
+    if (state != null) await applyRemoteState(state);
   }
 
   Future<void> initializeBrowserPlayer() async {
@@ -190,6 +222,7 @@ class _RoomScreenState extends State<RoomScreen> {
     if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
       return NavigationDecision.prevent;
     }
+    if (isBlockedAdHost(uri.host)) return NavigationDecision.prevent;
     final trusted = browserPageHost;
     if (!browserVideoReady || trusted == null || trusted.isEmpty) {
       return NavigationDecision.navigate;
@@ -198,6 +231,20 @@ class _RoomScreenState extends State<RoomScreen> {
         uri.host.endsWith('.$trusted') ||
         trusted.endsWith('.${uri.host}');
     return sameSite ? NavigationDecision.navigate : NavigationDecision.prevent;
+  }
+
+  bool isBlockedAdHost(String value) {
+    final host = value.toLowerCase();
+    const blocked = <String>{
+      'doubleclick.net',
+      'googlesyndication.com',
+      'googleadservices.com',
+      'adservice.google.com',
+      'adnxs.com',
+      'popads.net',
+      'popcash.net',
+    };
+    return blocked.any((item) => host == item || host.endsWith('.$item'));
   }
 
   Future<void> installBrowserPlayerBridge() async {
@@ -303,6 +350,9 @@ class _RoomScreenState extends State<RoomScreen> {
           const viewWidth = document.documentElement.clientWidth || window.innerWidth;
           const viewHeight = document.documentElement.clientHeight || window.innerHeight;
           video.style.position = 'fixed';
+          video.playsInline = true;
+          video.controls = false;
+          video.removeAttribute('controls');
           video.style.inset = '0';
           // Do not use vw/vh here. On iOS they can keep the pre-keyboard
           // viewport size after Flutter shrinks the platform view.
@@ -483,7 +533,10 @@ class _RoomScreenState extends State<RoomScreen> {
             displayedPosition.value = position;
           }
           updatedAt = state.serverUpdatedAt;
-          if (state.vkVideoUrl.isNotEmpty) videoUrl = state.vkVideoUrl;
+          if (state.vkVideoUrl.isNotEmpty) {
+            videoUrl = state.vkVideoUrl;
+            sourceType = MediaSourceType.detect(videoUrl);
+          }
         });
         if (!ignoreOwnerEcho) {
           unawaited(applyRemoteState(
@@ -936,7 +989,9 @@ class _RoomScreenState extends State<RoomScreen> {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    browserMode ? 'WEB' : (stream?.quality ?? 'MP4'),
+                    sourceType == MediaSourceType.web
+                        ? (stream?.quality ?? 'WEB')
+                        : (stream?.quality ?? 'VK'),
                     style:
                         const TextStyle(fontSize: 10, color: Color(0xFFC9B5FF)),
                   ),
@@ -1276,7 +1331,7 @@ class _RoomScreenState extends State<RoomScreen> {
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Text(
-                  'Открой видео на странице. После обнаружения плеера включится синхронизация.',
+                  'Ищем основной видеоплеер на странице…',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 10),
                 ),

@@ -6,10 +6,23 @@ class VkVideo {
   const VkVideo(this.ownerId, this.videoId);
 
   static VkVideo? parse(String url) {
-    final match =
-        RegExp(r'^https://(?:m\.)?vkvideo\.ru/video(-?\d+)_(\d+)(?:\?.*)?$')
-            .firstMatch(url.trim());
-    return match == null ? null : VkVideo(match.group(1)!, match.group(2)!);
+    final value = Uri.decodeFull(url.trim());
+    final match = RegExp(
+      r'^https://(?:m\.)?(?:vkvideo\.ru|vk\.com)/video(-?\d+)_(\d+)(?:\?.*)?$',
+    ).firstMatch(value);
+    if (match != null) {
+      return VkVideo(match.group(1)!, match.group(2)!);
+    }
+    final uri = Uri.tryParse(value);
+    final zValue = uri?.queryParameters['z'];
+    final zMatch = zValue == null
+        ? null
+        : RegExp(r'^video(-?\d+)_(\d+)').firstMatch(zValue);
+    if (zMatch != null &&
+        (uri!.host == 'vk.com' || uri.host == 'm.vk.com')) {
+      return VkVideo(zMatch.group(1)!, zMatch.group(2)!);
+    }
+    return null;
   }
 
   String get embedUrl =>

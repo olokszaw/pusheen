@@ -1,3 +1,5 @@
+import '../../watch_party/media_source.dart';
+
 class RoomModel {
   final int id;
   final int ownerId;
@@ -7,6 +9,7 @@ class RoomModel {
   final String theme;
   final String inviteCode;
   final String videoUrl;
+  final MediaSourceType sourceType;
   final int membersCount;
   final bool isPrivate;
 
@@ -19,6 +22,7 @@ class RoomModel {
     required this.theme,
     required this.inviteCode,
     required this.videoUrl,
+    required this.sourceType,
     required this.membersCount,
     required this.isPrivate,
   });
@@ -32,7 +36,14 @@ class RoomModel {
       description: json['description'] as String? ?? '',
       theme: json['theme'] as String? ?? 'movie',
       inviteCode: json['invite_code'] as String,
-      videoUrl: json['vk_video_url'] as String? ?? '',
+      videoUrl:
+          json['media_url'] as String? ?? json['vk_video_url'] as String? ?? '',
+      sourceType: MediaSourceType.fromApi(
+        json['source_type'] as String?,
+        fallbackUrl: json['media_url'] as String? ??
+            json['vk_video_url'] as String? ??
+            '',
+      ),
       membersCount: json['members_count'] as int? ?? 1,
       isPrivate: json['is_private'] as bool? ?? false,
     );
@@ -96,12 +107,16 @@ class VideoStreamModel {
   final String title;
   final double durationSeconds;
   final String quality;
+  final Map<String, String> headers;
+  final MediaSourceType sourceType;
 
   const VideoStreamModel({
     required this.url,
     required this.title,
     required this.durationSeconds,
     required this.quality,
+    required this.headers,
+    required this.sourceType,
   });
 
   factory VideoStreamModel.fromJson(Map<String, dynamic> json) {
@@ -110,6 +125,9 @@ class VideoStreamModel {
       title: json['title'] as String? ?? 'VK Видео',
       durationSeconds: (json['duration_seconds'] as num? ?? 0).toDouble(),
       quality: json['quality'] as String? ?? 'MP4',
+      headers: (json['headers'] as Map<String, dynamic>? ?? const {})
+          .map((key, value) => MapEntry(key, value.toString())),
+      sourceType: MediaSourceType.fromApi(json['source_type'] as String?),
     );
   }
 }

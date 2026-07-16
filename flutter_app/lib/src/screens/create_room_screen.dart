@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../watch_party/api_client.dart';
+import '../../watch_party/media_source.dart';
 import '../models/room.dart';
 import '../widgets/glass.dart';
+import 'video_browser_screen.dart';
 
 class CreateRoomScreen extends StatefulWidget {
   final ApiClient api;
@@ -21,6 +23,7 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
   bool isPrivate = false;
   bool allowGuests = false;
   bool loading = false;
+  MediaSourceType sourceType = MediaSourceType.vk;
 
   @override
   void dispose() {
@@ -44,6 +47,7 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
         description: '',
         theme: 'movie',
         videoUrl: videoUrl.text.trim(),
+        sourceType: sourceType,
         isPrivate: isPrivate,
         allowGuestsControl: allowGuests,
       );
@@ -62,6 +66,17 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
 
   void message(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+  Future<void> openVideoBrowser() async {
+    final selected = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const VideoBrowserScreen()),
+    );
+    if (!mounted || selected == null || selected.isEmpty) return;
+    setState(() {
+      sourceType = MediaSourceType.web;
+      videoUrl.text = selected;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -89,13 +104,57 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
         const SizedBox(height: 16),
         GlassCard(
             child: Column(children: [
+          Row(children: [
+            Expanded(
+              child: ChoiceChip(
+                selected: sourceType == MediaSourceType.vk,
+                avatar: const Icon(Icons.ondemand_video_rounded, size: 18),
+                label: const Text('VK Видео'),
+                onSelected: (_) => setState(() {
+                  sourceType = MediaSourceType.vk;
+                  videoUrl.clear();
+                }),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ChoiceChip(
+                selected: sourceType == MediaSourceType.web,
+                avatar: const Icon(Icons.language_rounded, size: 18),
+                label: const Text('Сайт / Google'),
+                onSelected: (_) => setState(() {
+                  sourceType = MediaSourceType.web;
+                  videoUrl.clear();
+                }),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 12),
           TextField(
               controller: videoUrl,
               keyboardType: TextInputType.url,
-              decoration: const InputDecoration(
-                  labelText: 'Ссылка VK Видео',
-                  hintText: 'https://vkvideo.ru/video-123_456',
-                  prefixIcon: Icon(Icons.link_rounded))),
+              decoration: InputDecoration(
+                  labelText: sourceType == MediaSourceType.vk
+                      ? 'Ссылка VK Видео'
+                      : 'Ссылка на страницу фильма',
+                  prefixIcon: const Icon(Icons.link_rounded))),
+          if (sourceType == MediaSourceType.web) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: openVideoBrowser,
+                icon: const Icon(Icons.search_rounded),
+                label: const Text('Найти через Google'),
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Открой страницу фильма и выбери её. Основной видеопоток будет запущен отдельно от сайта.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11, color: Colors.white60),
+            ),
+          ],
         ])),
         const SizedBox(height: 12),
         GlassCard(

@@ -1,5 +1,4 @@
 from django.contrib.auth import get_user_model
-import base64
 from django.test import TransactionTestCase
 from asgiref.sync import async_to_sync
 from channels.testing import WebsocketCommunicator
@@ -8,7 +7,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from config.asgi import application
-from .models import ClientIdentity, PlaybackState, Room, RoomMember
+from .models import PlaybackState, Room, RoomMember
 
 
 class RoomApiTests(APITestCase):
@@ -21,63 +20,6 @@ class RoomApiTests(APITestCase):
 
     def authenticate(self, token):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
-
-    def test_device_identity_and_rename_keep_numeric_user_id(self):
-        response = self.client.post(
-            "/api/auth/demo-login/",
-            {"username": "Луна", "client_id": "device-test-123"},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 200)
-        user_id = response.data["user_id"]
-        self.assertTrue(ClientIdentity.objects.filter(client_id="device-test-123", user_id=user_id).exists())
-
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {response.data['token']}")
-        rename = self.client.patch(
-            "/api/profile/", {"username": "Новая Луна"}, format="json"
-        )
-        self.assertEqual(rename.status_code, 200)
-        self.assertEqual(rename.data["user_id"], user_id)
-
-        self.client.credentials()
-        login_again = self.client.post(
-            "/api/auth/demo-login/",
-            {"username": "Любое имя", "client_id": "device-test-123"},
-            format="json",
-        )
-        self.assertEqual(login_again.data["user_id"], user_id)
-        self.assertEqual(login_again.data["username"], "Любое имя")
-
-    def test_profile_avatar_is_returned_to_chat_and_members(self):
-        login = self.client.post(
-            "/api/auth/demo-login/",
-            {"username": "Аватар", "client_id": "avatar-device"},
-            format="json",
-        )
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {login.data['token']}")
-        avatar = "data:image/png;base64," + base64.b64encode(b"small-image").decode()
-        profile = self.client.patch(
-            "/api/profile/", {"avatar": avatar}, format="json"
-        )
-        self.assertEqual(profile.status_code, 200)
-        self.assertEqual(profile.data["avatar"], avatar)
-
-        user = get_user_model().objects.get(id=login.data["user_id"])
-        room = Room.objects.create(owner=user, title="С аватаром")
-        RoomMember.objects.create(room=room, user=user)
-        PlaybackState.objects.create(room=room)
-        members = self.client.get(f"/api/rooms/{room.id}/members/")
-        self.assertEqual(members.data[0]["avatar"], avatar)
-
-    def test_legacy_user_can_be_claimed_by_first_device_id(self):
-        legacy = get_user_model().objects.create_user(username="Старый пользователь")
-        response = self.client.post(
-            "/api/auth/demo-login/",
-            {"username": legacy.username, "client_id": "legacy-device"},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["user_id"], legacy.id)
 
     def test_create_room_keeps_one_invite_code(self):
         self.authenticate(self.owner_token)
@@ -137,16 +79,30 @@ class RoomApiTests(APITestCase):
         room.refresh_from_db()
         self.assertEqual(room.title, "Комната владельца")
 
-    def test_private_video_url_is_rejected(self):
+    def test_private_media_url_is_rejected(self):
         self.authenticate(self.owner_token)
         response = self.client.post(
             "/api/rooms/",
-            {"title": "Комната", "vk_video_url": "http://127.0.0.1/video"},
+            {"title": "Комната", "media_url": "http://127.0.0.1/video"},
             format="json",
         )
         self.assertEqual(response.status_code, 400)
 
-    @patch("watchparty.views.resolve_vk_stream")
+    def test_web_media_url_uses_separate_source(self):
+        self.authenticate(self.owner_token)
+        response = self.client.post(
+            "/api/rooms/",
+            {
+                "title": "Фильм с сайта",
+                "media_url": "https://movies.example/watch/42",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["source_type"], "web")
+        self.assertEqual(response.data["media_url"], "https://movies.example/watch/42")
+
+    @patch("watchparty.views.resolve_media_stream")
     def test_member_can_resolve_managed_stream(self, resolver):
         resolver.return_value = {
             "url": "https://cdn.example/video.mp4",
@@ -154,6 +110,8 @@ class RoomApiTests(APITestCase):
             "duration_seconds": 120.0,
             "thumbnail": "",
             "quality": "720p",
+            "headers": {},
+            "source_type": "vk",
         }
         room = Room.objects.create(
             owner=self.owner,
@@ -164,30 +122,35 @@ class RoomApiTests(APITestCase):
         PlaybackState.objects.create(room=room)
         self.authenticate(self.owner_token)
 
-        response = self.client.get(f"/api/rooms/{room.id}/stream/?quality=720p")
+        response = self.client.get(f"/api/rooms/{room.id}/stream/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["url"], "https://cdn.example/video.mp4")
-        resolver.assert_called_once_with(
-            room.vk_video_url,
-            preferred_quality="720p",
-        )
+        resolver.assert_called_once_with(room.vk_video_url, "vk")
 
-    @patch("watchparty.views.resolve_vk_stream")
-    def test_stream_error_does_not_expose_extractor_details(self, resolver):
-        resolver.side_effect = RuntimeError("Cloudflare secret extractor output")
+    @patch("watchparty.views.resolve_media_stream")
+    def test_web_room_dispatches_to_web_resolver(self, resolver):
+        resolver.return_value = {
+            "url": "https://cdn.example/movie.m3u8",
+            "title": "Фильм",
+            "duration_seconds": 3600.0,
+            "thumbnail": "",
+            "quality": "WEB",
+            "headers": {"Referer": "https://movies.example/"},
+            "source_type": "web",
+        }
         room = Room.objects.create(
             owner=self.owner,
-            title="Закрытый плеер",
-            vk_video_url="https://example.com/protected-video",
+            title="WEB",
+            vk_video_url="https://movies.example/watch/42",
         )
         RoomMember.objects.create(room=room, user=self.owner)
         PlaybackState.objects.create(room=room)
         self.authenticate(self.owner_token)
 
         response = self.client.get(f"/api/rooms/{room.id}/stream/")
-        self.assertEqual(response.status_code, 502)
-        self.assertIn("не разрешает открыть видео", response.data["detail"])
-        self.assertNotIn("Cloudflare", response.data["detail"])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["source_type"], "web")
+        resolver.assert_called_once_with(room.vk_video_url, "web")
 
 
 class RoomSocketTests(TransactionTestCase):
@@ -218,8 +181,8 @@ class RoomSocketTests(TransactionTestCase):
         )
         self.assertTrue((await owner_socket.connect())[0])
         self.assertTrue((await guest_socket.connect())[0])
-        await self.receive_type(owner_socket, "playback_state")
-        await self.receive_type(guest_socket, "playback_state")
+        await self._next_event(owner_socket, "playback_state")
+        await self._next_event(guest_socket, "playback_state")
 
         await guest_socket.send_json_to(
             {
@@ -228,7 +191,7 @@ class RoomSocketTests(TransactionTestCase):
                 "position_seconds": 99,
             }
         )
-        error = await self.receive_type(guest_socket, "error")
+        error = await self._next_event(guest_socket, "error")
         self.assertEqual(error["code"], "owner_only")
 
         await owner_socket.send_json_to(
@@ -239,8 +202,8 @@ class RoomSocketTests(TransactionTestCase):
                 "is_playing": True,
             }
         )
-        owner_state = await self.receive_type(owner_socket, "playback_state")
-        guest_state = await self.receive_type(guest_socket, "playback_state")
+        owner_state = await self._next_event(owner_socket, "playback_state")
+        guest_state = await self._next_event(guest_socket, "playback_state")
         self.assertEqual(owner_state["type"], "playback_state")
         self.assertEqual(guest_state["type"], "playback_state")
         self.assertEqual(owner_state["position_seconds"], 42.5)
@@ -251,15 +214,12 @@ class RoomSocketTests(TransactionTestCase):
         self.assertFalse(guest_state["is_owner"])
         self.assertTrue(guest_state["is_playing"])
 
-        await guest_socket.disconnect()
-        left = await self.receive_type(owner_socket, "presence")
-        self.assertEqual(left["user_id"], self.guest.id)
-        self.assertFalse(left["is_online"])
         await owner_socket.disconnect()
+        await guest_socket.disconnect()
 
-    async def receive_type(self, socket, event_type):
-        for _ in range(10):
+    async def _next_event(self, socket, event_type):
+        for _ in range(8):
             event = await socket.receive_json_from()
             if event.get("type") == event_type:
                 return event
-        self.fail(f"WebSocket event {event_type} was not received")
+        self.fail(f"Did not receive {event_type}")

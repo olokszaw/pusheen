@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/models/room.dart';
+import 'media_source.dart';
 
 class ApiClient {
   static const _sessionCheckTimeout = Duration(seconds: 10);
@@ -52,10 +53,12 @@ class ApiClient {
     userId = savedUserId;
     username = savedUsername;
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/profile/'),
-        headers: headers,
-      ).timeout(_sessionCheckTimeout);
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/api/profile/'),
+            headers: headers,
+          )
+          .timeout(_sessionCheckTimeout);
       final data = _decodeMap(response);
       userId = data['user_id'] as int;
       username = data['username'] as String;
@@ -93,11 +96,13 @@ class ApiClient {
           '${List.generate(8, (_) => random.nextInt(1 << 16).toRadixString(36).padLeft(4, '0')).join()}';
       await preferences.setString('pulse_client_id', clientId);
     }
-    final response = await http.post(
-      Uri.parse('$baseUrl/api/auth/demo-login/'),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({'username': name.trim(), 'client_id': clientId}),
-    ).timeout(_loginTimeout);
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/api/auth/demo-login/'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({'username': name.trim(), 'client_id': clientId}),
+        )
+        .timeout(_loginTimeout);
     final data = _decodeMap(response);
     token = data['token'] as String;
     userId = data['user_id'] as int;
@@ -131,6 +136,7 @@ class ApiClient {
     required String description,
     required String theme,
     required String videoUrl,
+    required MediaSourceType sourceType,
     required bool isPrivate,
     required bool allowGuestsControl,
   }) async {
@@ -142,6 +148,8 @@ class ApiClient {
         'description': description,
         'theme': theme,
         'vk_video_url': videoUrl,
+        'media_url': videoUrl,
+        'source_type': sourceType.apiValue,
         'is_private': isPrivate,
         'allow_guests_control': allowGuestsControl,
       }),
