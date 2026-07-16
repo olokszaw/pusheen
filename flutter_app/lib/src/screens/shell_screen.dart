@@ -115,10 +115,19 @@ class _ShellScreenState extends State<ShellScreen> {
     return Scaffold(
       body: GlowScaffold(
           child: SafeArea(child: IndexedStack(index: index, children: pages))),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: index,
-        onDestinationSelected: (value) => setState(() => index = value),
-        destinations: const [
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+          child: GlassCard(
+            padding: EdgeInsets.zero,
+            borderRadius: const BorderRadius.all(Radius.circular(24)),
+            child: NavigationBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              selectedIndex: index,
+              onDestinationSelected: (value) => setState(() => index = value),
+              destinations: const [
           NavigationDestination(
               icon: Icon(Icons.home_rounded), label: 'Главная'),
           NavigationDestination(
@@ -129,7 +138,10 @@ class _ShellScreenState extends State<ShellScreen> {
               icon: Icon(Icons.video_library_rounded), label: 'Комнаты'),
           NavigationDestination(
               icon: Icon(Icons.person_rounded), label: 'Профиль'),
-        ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

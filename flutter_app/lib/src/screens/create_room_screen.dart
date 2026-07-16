@@ -16,10 +16,8 @@ class CreateRoomScreen extends StatefulWidget {
 }
 
 class _CreateRoomScreenState extends State<CreateRoomScreen> {
-  final title = TextEditingController(text: 'Вечер кино');
-  final description = TextEditingController();
+  final title = TextEditingController();
   final videoUrl = TextEditingController();
-  String theme = 'movie';
   bool isPrivate = false;
   bool allowGuests = false;
   bool loading = false;
@@ -27,7 +25,6 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
   @override
   void dispose() {
     title.dispose();
-    description.dispose();
     videoUrl.dispose();
     super.dispose();
   }
@@ -44,8 +41,8 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
     try {
       final room = await widget.api.createRoom(
         title: title.text.trim(),
-        description: description.text.trim(),
-        theme: theme,
+        description: '',
+        theme: 'movie',
         videoUrl: videoUrl.text.trim(),
         isPrivate: isPrivate,
         allowGuestsControl: allowGuests,
@@ -88,26 +85,7 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
               decoration: const InputDecoration(
                   labelText: 'Название комнаты',
                   prefixIcon: Icon(Icons.edit_outlined))),
-          const SizedBox(height: 12),
-          TextField(
-              controller: description,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                  labelText: 'Описание',
-                  prefixIcon: Icon(Icons.subject_rounded))),
         ])),
-        const SizedBox(height: 16),
-        const Text('Тема комнаты',
-            style: TextStyle(fontWeight: FontWeight.w800)),
-        const SizedBox(height: 9),
-        Wrap(spacing: 7, runSpacing: 7, children: [
-          _themeChip('movie', Icons.movie_rounded, 'Кино'),
-          _themeChip('memes', Icons.sentiment_very_satisfied_rounded, 'Мемы'),
-          _themeChip('games', Icons.sports_esports_rounded, 'Игры'),
-          _themeChip('music', Icons.music_note_rounded, 'Музыка'),
-          _themeChip('series', Icons.live_tv_rounded, 'Сериалы'),
-          _themeChip('horror', Icons.nightlight_round, 'Ужасы'),
-        ]),
         const SizedBox(height: 16),
         GlassCard(
             child: Column(children: [
@@ -149,14 +127,5 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
     return widget.embedded
         ? body
         : Scaffold(body: GlowScaffold(child: SafeArea(child: body)));
-  }
-
-  Widget _themeChip(String value, IconData icon, String label) {
-    return ChoiceChip(
-      avatar: Icon(icon, size: 17),
-      label: Text(label),
-      selected: theme == value,
-      onSelected: (_) => setState(() => theme = value),
-    );
   }
 }

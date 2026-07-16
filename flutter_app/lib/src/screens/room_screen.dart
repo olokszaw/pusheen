@@ -1301,6 +1301,7 @@ class _RoomScreenState extends State<RoomScreen> {
 
     final target = await showDialog<double>(
       context: context,
+      barrierColor: Colors.black.withOpacity(.38),
       builder: (dialogContext) => Dialog(
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.symmetric(horizontal: 28),
@@ -1313,6 +1314,12 @@ class _RoomScreenState extends State<RoomScreen> {
                 'Перейти к таймкоду',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
               ),
+            ),
+            const SizedBox(height: 6),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Выбери минуты и секунды',
+                  style: TextStyle(color: Colors.white70)),
             ),
             const SizedBox(height: 18),
             Row(children: [
