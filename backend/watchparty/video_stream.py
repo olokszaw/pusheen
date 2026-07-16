@@ -12,6 +12,10 @@ def resolve_vk_stream(page_url, preferred_quality=None):
         # requests to curl-cffi and presents the same TLS/browser fingerprint
         # as Chrome, while all playback authorization still stays on VK.
         "impersonate": ImpersonateTarget(client="chrome"),
+        # The Windows VPS has TLS inspection with a private root certificate.
+        # yt-dlp otherwise cannot read public VK metadata and the room returns
+        # 502. This affects only the server-to-VK metadata request.
+        "nocheckcertificate": True,
     }
     with YoutubeDL(options) as downloader:
         info = downloader.extract_info(page_url, download=False)
@@ -35,10 +39,26 @@ def resolve_vk_stream(page_url, preferred_quality=None):
             "DRM и раздельные аудио/видеопотоки не поддерживаются."
         )
 
+    # AVPlayer can accept an MP4 container whose audio codec is supported while
+    # silently failing to render an AV1/VP9 video track.  That looks exactly
+    # like "sound but no picture" on an iPhone.  Prefer the cross-platform
+    # H.264 + AAC progressive variants before comparing their resolutions.
+    def is_apple_compatible(item):
+        video_codec = str(item.get("vcodec") or "").lower()
+        audio_codec = str(item.get("acodec") or "").lower()
+        h264 = video_codec.startswith(("avc1", "avc3", "h264"))
+        aac = not audio_codec or audio_codec.startswith(("mp4a", "aac"))
+        return h264 and aac
+
+    compatible = [item for item in progressive if is_apple_compatible(item)]
+    codec_candidates = compatible or progressive
+
     # 1080p is enough for a watch party and avoids accidentally choosing
     # oversized variants when VK exposes higher resolutions.
-    suitable = [item for item in progressive if (item.get("height") or 0) <= 1080]
-    candidates = suitable or progressive
+    suitable = [
+        item for item in codec_candidates if (item.get("height") or 0) <= 1080
+    ]
+    candidates = suitable or codec_candidates
     requested_height = None
     if preferred_quality:
         try:

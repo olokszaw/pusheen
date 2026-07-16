@@ -11,7 +11,8 @@ class ApiClient {
   static const _userIdKey = 'pulse_user_id';
   static const _usernameKey = 'pulse_username';
   static const _avatarKey = 'pulse_avatar';
-  static const _defaultBaseUrl = 'http://127.0.0.1:8000';
+  static const _defaultBaseUrl =
+      'https://trio-anderson-istanbul-definition.trycloudflare.com';
   static const _configuredBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: _defaultBaseUrl,

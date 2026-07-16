@@ -59,6 +59,9 @@ class _RoomScreenState extends State<RoomScreen> {
   bool vkEmbedMode = false;
   bool browserPageLoading = false;
   bool browserVideoReady = false;
+  bool? browserActuallyPlaying;
+  bool applyingRemoteState = false;
+  DateTime? lastRemoteSeekAt;
   String? browserPageHost;
   DateTime browserIgnoreEventsUntil = DateTime.fromMillisecondsSinceEpoch(0);
   double duration = 1;
@@ -70,7 +73,7 @@ class _RoomScreenState extends State<RoomScreen> {
     isOwner = widget.api.userId == widget.room.ownerId;
     initializePlayer();
     loadMessages().whenComplete(connect);
-    syncTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    syncTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (browserMode) {
         requestBrowserState();
         return;
@@ -441,6 +444,7 @@ class _RoomScreenState extends State<RoomScreen> {
       final nextPosition = (data['position'] as num?)?.toDouble() ?? position;
       final nextDuration = (data['duration'] as num?)?.toDouble() ?? duration;
       final nextPlaying = data['playing'] == true;
+      browserActuallyPlaying = nextPlaying;
       final event = data['event']?.toString() ?? 'tick';
       final readinessChanged = !browserVideoReady;
       browserVideoReady = true;
@@ -581,7 +585,9 @@ class _RoomScreenState extends State<RoomScreen> {
         if (!ignoreBrowserEcho) {
           unawaited(applyRemoteState(
             state,
-            forceSeek: command == 'seek' || command == 'pause',
+            forceSeek: command == 'state' ||
+                command == 'seek' ||
+                command == 'pause',
           ));
         }
       case 'chat_message':
@@ -646,33 +652,47 @@ class _RoomScreenState extends State<RoomScreen> {
     PlaybackState state, {
     bool forceSeek = false,
   }) async {
-    if (browserMode) {
-      if (isOwner) return;
-      if (!browserVideoReady) {
-        // Retry when video becomes ready
+    if (applyingRemoteState) return;
+    applyingRemoteState = true;
+    try {
+      final now = DateTime.now();
+      final canCorrectDrift = forceSeek ||
+          lastRemoteSeekAt == null ||
+          now.difference(lastRemoteSeekAt!) >= const Duration(seconds: 4);
+      if (browserMode) {
+        if (isOwner || !browserVideoReady) return;
+        final target = state.positionAt(now).clamp(0, duration).toDouble();
+        final shouldSeek =
+            forceSeek || (canCorrectDrift && (position - target).abs() > 1.25);
+        if (shouldSeek) lastRemoteSeekAt = now;
+        await controlBrowserPlayer(
+          seek: shouldSeek ? target : null,
+          shouldPlay: browserActuallyPlaying == state.isPlaying
+              ? null
+              : state.isPlaying,
+        );
         return;
       }
-      final target =
-          state.positionAt(DateTime.now()).clamp(0, duration).toDouble();
-      final shouldSeek = forceSeek || (position - target).abs() > .35;
-      await controlBrowserPlayer(
-        seek: shouldSeek ? target : null,
-        shouldPlay: state.isPlaying,
-      );
-      return;
-    }
-    final controller = player;
-    if (controller == null || !controller.value.isInitialized) return;
-    if (isOwner && isSeeking) return;
-    final target = state.positionAt(DateTime.now()).clamp(0, duration);
-    final current = controller.value.position.inMilliseconds / 1000;
-    if (forceSeek || (current - target).abs() > .35) {
-      await controller.seekTo(Duration(milliseconds: (target * 1000).round()));
-    }
-    if (state.isPlaying && !controller.value.isPlaying) {
-      await controller.play();
-    } else if (!state.isPlaying && controller.value.isPlaying) {
-      await controller.pause();
+      final controller = player;
+      if (controller == null || !controller.value.isInitialized) return;
+      if (isOwner && isSeeking) return;
+      final target = state.positionAt(now).clamp(0, duration);
+      final current = controller.value.position.inMilliseconds / 1000;
+      final shouldSeek =
+          forceSeek || (canCorrectDrift && (current - target).abs() > 1.25);
+      if (shouldSeek) {
+        lastRemoteSeekAt = now;
+        await controller.seekTo(
+          Duration(milliseconds: (target * 1000).round()),
+        );
+      }
+      if (state.isPlaying && !controller.value.isPlaying) {
+        await controller.play();
+      } else if (!state.isPlaying && controller.value.isPlaying) {
+        await controller.pause();
+      }
+    } finally {
+      applyingRemoteState = false;
     }
   }
 
