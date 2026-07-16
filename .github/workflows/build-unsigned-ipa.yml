@@ -30,6 +30,10 @@ jobs:
         working-directory: flutter_app
         run: flutter pub get
 
+      - name: Generate Pusheen app icons
+        working-directory: flutter_app
+        run: dart run flutter_launcher_icons
+
       - name: Build unsigned iOS app
         working-directory: flutter_app
         run: >-
