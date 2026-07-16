@@ -15,7 +15,6 @@ dependencies:
   webview_flutter_wkwebview: ^3.22.0
   video_player: ^2.9.2
   shared_preferences: ^2.3.3
-  image_picker: ^1.1.2
 
 dev_dependencies:
   flutter_test:

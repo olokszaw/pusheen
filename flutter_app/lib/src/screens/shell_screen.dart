@@ -1,13 +1,9 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../watch_party/api_client.dart';
 import '../models/room.dart';
 import '../theme.dart';
 import '../widgets/glass.dart';
-import '../widgets/user_avatar.dart';
 import 'create_room_screen.dart';
 import 'room_screen.dart';
 
@@ -70,8 +66,7 @@ class _ShellScreenState extends State<ShellScreen> {
         content: TextField(
             controller: controller,
             autofocus: true,
-            textCapitalization: TextCapitalization.characters,
-            decoration: const InputDecoration(labelText: 'Код комнаты')),
+            textCapitalization: TextCapitalization.characters),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context),
@@ -380,36 +375,6 @@ class _ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<_ProfilePage> {
-  bool avatarLoading = false;
-
-  Future<void> chooseAvatar() async {
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 512,
-      maxHeight: 512,
-      imageQuality: 72,
-    );
-    if (picked == null || !mounted) return;
-    setState(() => avatarLoading = true);
-    try {
-      final bytes = await picked.readAsBytes();
-      final mime = switch (picked.mimeType) {
-        'image/png' => 'image/png',
-        'image/webp' => 'image/webp',
-        _ => 'image/jpeg',
-      };
-      await widget.api.updateAvatar('data:$mime;base64,${base64Encode(bytes)}');
-      if (mounted) setState(() {});
-    } on Object catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Не удалось сохранить аватар: $error')),
-      );
-    } finally {
-      if (mounted) setState(() => avatarLoading = false);
-    }
-  }
-
   Future<void> logout() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -476,33 +441,9 @@ class _ProfilePageState extends State<_ProfilePage> {
   Widget build(BuildContext context) =>
       ListView(padding: const EdgeInsets.all(18), children: [
         const SizedBox(height: 12),
-        Center(
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: avatarLoading ? null : chooseAvatar,
-            child: Stack(clipBehavior: Clip.none, children: [
-              UserAvatar(
-                dataUrl: widget.api.avatar,
-                name: widget.api.username ?? '',
-                size: 88,
-              ),
-              Positioned(
-                right: -2,
-                bottom: -2,
-                child: CircleAvatar(
-                  radius: 16,
-                  backgroundColor: const Color(0xFFBFA1FF),
-                  child: avatarLoading
-                      ? const SizedBox.square(
-                          dimension: 15,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.photo_camera_rounded, size: 17),
-                ),
-              ),
-            ]),
-          ),
-        ),
+        const Center(
+            child: CircleAvatar(
+                radius: 44, child: Icon(Icons.person_rounded, size: 42))),
         const SizedBox(height: 12),
         Center(
             child: Text(widget.api.username ?? 'Пользователь',
@@ -515,11 +456,6 @@ class _ProfilePageState extends State<_ProfilePage> {
         const SizedBox(height: 24),
         GlassCard(
             child: Column(children: [
-          ListTile(
-              leading: const Icon(Icons.account_circle_outlined),
-              title: const Text('Изменить аватар'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: avatarLoading ? null : chooseAvatar),
           ListTile(
               leading: const Icon(Icons.edit_rounded),
               title: const Text('Изменить ник'),

@@ -18,8 +18,6 @@
 	<string>Pulse</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Pulse подключается к серверу комнаты в локальной сети для синхронного просмотра.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Pulse использует выбранное изображение как аватар профиля.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

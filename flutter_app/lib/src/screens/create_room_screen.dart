@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../watch_party/api_client.dart';
 import '../models/room.dart';
 import '../widgets/glass.dart';
-import 'video_browser_screen.dart';
 
 class CreateRoomScreen extends StatefulWidget {
   final ApiClient api;
@@ -67,15 +66,6 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
   void message(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 
-  Future<void> browseVideo() async {
-    final selected = await Navigator.push<String>(
-      context,
-      MaterialPageRoute(builder: (_) => const VideoBrowserScreen()),
-    );
-    if (selected == null || !mounted) return;
-    setState(() => videoUrl.text = selected);
-  }
-
   @override
   Widget build(BuildContext context) {
     final body = ListView(
@@ -125,17 +115,9 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
               controller: videoUrl,
               keyboardType: TextInputType.url,
               decoration: const InputDecoration(
-                  labelText: 'Ссылка на страницу видео',
+                  labelText: 'Ссылка VK Видео',
+                  hintText: 'https://vkvideo.ru/video-123_456',
                   prefixIcon: Icon(Icons.link_rounded))),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: browseVideo,
-              icon: const Icon(Icons.travel_explore_rounded),
-              label: const Text('Найти через Google'),
-            ),
-          ),
         ])),
         const SizedBox(height: 12),
         GlassCard(

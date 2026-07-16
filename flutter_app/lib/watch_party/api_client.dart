@@ -10,7 +10,8 @@ class ApiClient {
   static const _tokenKey = 'pulse_auth_token';
   static const _userIdKey = 'pulse_user_id';
   static const _usernameKey = 'pulse_username';
-  static const _avatarKey = 'pulse_avatar';
+  // Temporary Cloudflare tunnel. If it changes, rebuild with
+  // --dart-define=API_BASE_URL=https://new-address.trycloudflare.com
   static const _defaultBaseUrl =
       'https://trio-anderson-istanbul-definition.trycloudflare.com';
   static const _configuredBaseUrl = String.fromEnvironment(
@@ -22,7 +23,6 @@ class ApiClient {
   String? token;
   int? userId;
   String? username;
-  String avatar = '';
 
   ApiClient({String? baseUrl})
       : baseUrl = (baseUrl ?? _configuredBaseUrl).trim().isEmpty
@@ -43,35 +43,25 @@ class ApiClient {
     final savedToken = preferences.getString(_tokenKey);
     final savedUserId = preferences.getInt(_userIdKey);
     final savedUsername = preferences.getString(_usernameKey);
-    final savedAvatar = preferences.getString(_avatarKey) ?? '';
     if (savedToken == null || savedUserId == null || savedUsername == null) {
       return false;
     }
     token = savedToken;
     userId = savedUserId;
     username = savedUsername;
-    avatar = savedAvatar;
     try {
       final response = await http.get(
         Uri.parse('$baseUrl/api/profile/'),
         headers: headers,
       );
-      final profile = _decodeMap(response);
-      userId = profile['user_id'] as int;
-      username = profile['username'] as String;
-      avatar = profile['avatar'] as String? ?? '';
+      final data = _decodeMap(response);
+      userId = data['user_id'] as int;
+      username = data['username'] as String;
       await saveSession();
       return true;
-    } on ApiException catch (error) {
-      if (error.statusCode == 401 || error.statusCode == 403) {
-        await logout();
-        return false;
-      }
-      rethrow;
-    } catch (_) {
-      // Keep a valid-looking local session when the server is temporarily
-      // unreachable. Normal API calls will show the connectivity error.
-      return true;
+    } on Object {
+      await logout();
+      return false;
     }
   }
 
@@ -80,19 +70,16 @@ class ApiClient {
     await preferences.setString(_tokenKey, token!);
     await preferences.setInt(_userIdKey, userId!);
     await preferences.setString(_usernameKey, username!);
-    await preferences.setString(_avatarKey, avatar);
   }
 
   Future<void> logout() async {
     token = null;
     userId = null;
     username = null;
-    avatar = '';
     final preferences = await SharedPreferences.getInstance();
     await preferences.remove(_tokenKey);
     await preferences.remove(_userIdKey);
     await preferences.remove(_usernameKey);
-    await preferences.remove(_avatarKey);
   }
 
   Future<void> login(String name) async {
@@ -113,7 +100,6 @@ class ApiClient {
     token = data['token'] as String;
     userId = data['user_id'] as int;
     username = data['username'] as String;
-    avatar = data['avatar'] as String? ?? '';
     await saveSession();
   }
 
@@ -126,18 +112,6 @@ class ApiClient {
     final data = _decodeMap(response);
     userId = data['user_id'] as int;
     username = data['username'] as String;
-    avatar = data['avatar'] as String? ?? avatar;
-    await saveSession();
-  }
-
-  Future<void> updateAvatar(String value) async {
-    final response = await http.patch(
-      Uri.parse('$baseUrl/api/profile/'),
-      headers: headers,
-      body: jsonEncode({'avatar': value}),
-    );
-    final data = _decodeMap(response);
-    avatar = data['avatar'] as String? ?? '';
     await saveSession();
   }
 
@@ -193,12 +167,9 @@ class ApiClient {
         .toList();
   }
 
-  Future<VideoStreamModel> roomStream(int roomId, {String? quality}) async {
-    final uri = Uri.parse('$baseUrl/api/rooms/$roomId/stream/').replace(
-      queryParameters: quality == null ? null : {'quality': quality},
-    );
+  Future<VideoStreamModel> roomStream(int roomId) async {
     final response = await http.get(
-      uri,
+      Uri.parse('$baseUrl/api/rooms/$roomId/stream/'),
       headers: headers,
     );
     return VideoStreamModel.fromJson(_decodeMap(response));

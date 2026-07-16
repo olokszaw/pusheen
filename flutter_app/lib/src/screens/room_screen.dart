@@ -11,10 +11,8 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 import '../../watch_party/api_client.dart';
 import '../../watch_party/playback_state.dart';
 import '../../watch_party/room_socket.dart';
-import '../../watch_party/vk_video.dart';
 import '../models/room.dart';
 import '../widgets/glass.dart';
-import '../widgets/user_avatar.dart';
 
 class RoomScreen extends StatefulWidget {
   final ApiClient api;
@@ -51,17 +49,11 @@ class _RoomScreenState extends State<RoomScreen> {
   VideoStreamModel? stream;
   PlaybackState? latestState;
   Timer? syncTimer;
-  Timer? chatScrollRetry;
   bool playerLoading = true;
-  bool qualityLoading = false;
   String? playerError;
   bool browserMode = false;
-  bool vkEmbedMode = false;
   bool browserPageLoading = false;
   bool browserVideoReady = false;
-  bool? browserActuallyPlaying;
-  bool applyingRemoteState = false;
-  DateTime? lastRemoteSeekAt;
   String? browserPageHost;
   DateTime browserIgnoreEventsUntil = DateTime.fromMillisecondsSinceEpoch(0);
   double duration = 1;
@@ -73,7 +65,7 @@ class _RoomScreenState extends State<RoomScreen> {
     isOwner = widget.api.userId == widget.room.ownerId;
     initializePlayer();
     loadMessages().whenComplete(connect);
-    syncTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+    syncTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (browserMode) {
         requestBrowserState();
         return;
@@ -100,9 +92,7 @@ class _RoomScreenState extends State<RoomScreen> {
       setState(() {
         messages
           ..clear()
-          ..addAll(history.map(
-            (item) => _ChatLine(item.author, item.text, avatar: item.avatar),
-          ));
+          ..addAll(history.map((item) => _ChatLine(item.author, item.text)));
       });
       scrollChatToBottom(animate: false);
     } on Object {
@@ -145,59 +135,7 @@ class _RoomScreenState extends State<RoomScreen> {
     }
   }
 
-  Future<void> changeQuality(String quality) async {
-    if (!isOwner ||
-        browserMode ||
-        qualityLoading ||
-        stream?.quality == quality) {
-      return;
-    }
-    setState(() => qualityLoading = true);
-    try {
-      final resolved = await widget.api.roomStream(
-        widget.room.id,
-        quality: quality,
-      );
-      final controller =
-          VideoPlayerController.networkUrl(Uri.parse(resolved.url));
-      await controller.initialize();
-      final target = position.clamp(
-        0,
-        controller.value.duration.inMilliseconds / 1000,
-      );
-      await controller.seekTo(
-        Duration(milliseconds: (target * 1000).round()),
-      );
-      if (isPlaying) await controller.play();
-      controller.addListener(updatePlayerPosition);
-      if (!mounted) {
-        controller.dispose();
-        return;
-      }
-      final previous = player;
-      previous?.removeListener(updatePlayerPosition);
-      setState(() {
-        player = controller;
-        stream = resolved;
-        duration = controller.value.duration.inMilliseconds / 1000;
-        if (duration <= 0) {
-          duration = resolved.durationSeconds.clamp(1, 86400);
-        }
-      });
-      await previous?.dispose();
-    } on Object catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Не удалось сменить качество: $error')),
-      );
-    } finally {
-      if (mounted) setState(() => qualityLoading = false);
-    }
-  }
-
   Future<void> initializeBrowserPlayer() async {
-    final vkVideo = VkVideo.parse(videoUrl);
-    final browserUrl = vkVideo?.embedUrl ?? videoUrl;
     late final PlatformWebViewControllerCreationParams params;
     if (WebViewPlatform.instance is WebKitWebViewPlatform) {
       params = WebKitWebViewControllerCreationParams(
@@ -235,16 +173,15 @@ class _RoomScreenState extends State<RoomScreen> {
       ));
     setState(() {
       browserMode = true;
-      vkEmbedMode = vkVideo != null;
       browserPlayer = controller;
       playerLoading = false;
       playerError = null;
       stream = null;
       duration = 1;
       position = 0;
-      setDisplayedPosition(0, allowBackward: true);
+      displayedPosition.value = 0;
     });
-    await controller.loadRequest(Uri.parse(browserUrl));
+    await controller.loadRequest(Uri.parse(videoUrl));
   }
 
   NavigationDecision handleBrowserNavigation(NavigationRequest request) {
@@ -252,13 +189,6 @@ class _RoomScreenState extends State<RoomScreen> {
     final uri = Uri.tryParse(request.url);
     if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
       return NavigationDecision.prevent;
-    }
-    if (vkEmbedMode) {
-      final isVkEmbed = (uri.host == 'vk.com' || uri.host == 'www.vk.com') &&
-          uri.path == '/video_ext.php';
-      return isVkEmbed
-          ? NavigationDecision.navigate
-          : NavigationDecision.prevent;
     }
     final trusted = browserPageHost;
     if (!browserVideoReady || trusted == null || trusted.isEmpty) {
@@ -271,12 +201,6 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   Future<void> installBrowserPlayerBridge() async {
-    await browserPlayer?.runJavaScript(
-      'window.__pulseVkEmbed = ${vkEmbedMode ? 'true' : 'false'};',
-    );
-    await browserPlayer?.runJavaScript(
-      'window.__pulseRoomOwner = ${isOwner ? 'true' : 'false'};',
-    );
     await browserPlayer?.runJavaScript(r'''
       (() => {
         if (window.__pulseBridgeInstalled) return;
@@ -320,15 +244,7 @@ class _RoomScreenState extends State<RoomScreen> {
         }, true);
 
         const findVideo = () => {
-          const videos = [];
-          const visit = root => {
-            if (!root || !root.querySelectorAll) return;
-            videos.push(...root.querySelectorAll('video'));
-            root.querySelectorAll('*').forEach(element => {
-              if (element.shadowRoot) visit(element.shadowRoot);
-            });
-          };
-          visit(document);
+          const videos = Array.from(document.querySelectorAll('video'));
           return videos.sort((a, b) =>
             (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight)
           )[0] || null;
@@ -375,34 +291,28 @@ class _RoomScreenState extends State<RoomScreen> {
               name => video.addEventListener(name, () => emit(name))
             );
           }
-          // VK's own controls stay visible for the room owner. For a guest,
-          // keep the actual video above VK's overlays while Flutter blocks
-          // pointer input. Otherwise iOS can play audio behind a frozen
-          // poster and the participant sees no picture.
-          if (!window.__pulseVkEmbed || !window.__pulseRoomOwner) {
-            document.documentElement.style.width = '100%';
-            document.documentElement.style.height = '100%';
-            document.documentElement.style.margin = '0';
-            document.documentElement.style.overflow = 'hidden';
-            document.body.style.width = '100%';
-            document.body.style.height = '100%';
-            document.body.style.margin = '0';
-            document.body.style.overflow = 'hidden';
-            document.body.style.background = '#000';
-            const viewWidth = document.documentElement.clientWidth || window.innerWidth;
-            const viewHeight = document.documentElement.clientHeight || window.innerHeight;
-            video.style.position = 'fixed';
-            video.style.inset = '0';
-            // Do not use vw/vh here. On iOS they can keep the pre-keyboard
-            // viewport size after Flutter shrinks the platform view.
-            video.style.width = `${viewWidth}px`;
-            video.style.height = `${viewHeight}px`;
-            video.style.maxWidth = 'none';
-            video.style.maxHeight = 'none';
-            video.style.objectFit = 'contain';
-            video.style.zIndex = '2147483647';
-            video.style.background = '#000';
-          }
+          document.documentElement.style.width = '100%';
+          document.documentElement.style.height = '100%';
+          document.documentElement.style.margin = '0';
+          document.documentElement.style.overflow = 'hidden';
+          document.body.style.width = '100%';
+          document.body.style.height = '100%';
+          document.body.style.margin = '0';
+          document.body.style.overflow = 'hidden';
+          document.body.style.background = '#000';
+          const viewWidth = document.documentElement.clientWidth || window.innerWidth;
+          const viewHeight = document.documentElement.clientHeight || window.innerHeight;
+          video.style.position = 'fixed';
+          video.style.inset = '0';
+          // Do not use vw/vh here. On iOS they can keep the pre-keyboard
+          // viewport size after Flutter shrinks the platform view.
+          video.style.width = `${viewWidth}px`;
+          video.style.height = `${viewHeight}px`;
+          video.style.maxWidth = 'none';
+          video.style.maxHeight = 'none';
+          video.style.objectFit = 'contain';
+          video.style.zIndex = '2147483647';
+          video.style.background = '#000';
           PulsePlayer.postMessage(JSON.stringify({
             ready: true,
             event: eventName,
@@ -423,7 +333,6 @@ class _RoomScreenState extends State<RoomScreen> {
           new ResizeObserver(window.__pulseFitVideo).observe(document.documentElement);
         }
         emit('ready');
-        window.__pulsePollTimer = window.setInterval(() => emit('tick'), 500);
       })();
     ''');
   }
@@ -444,21 +353,17 @@ class _RoomScreenState extends State<RoomScreen> {
       final nextPosition = (data['position'] as num?)?.toDouble() ?? position;
       final nextDuration = (data['duration'] as num?)?.toDouble() ?? duration;
       final nextPlaying = data['playing'] == true;
-      browserActuallyPlaying = nextPlaying;
       final event = data['event']?.toString() ?? 'tick';
       final readinessChanged = !browserVideoReady;
       browserVideoReady = true;
       position = nextPosition.clamp(0, nextDuration > 0 ? nextDuration : 86400);
-      setDisplayedPosition(position);
+      displayedPosition.value = position;
       if (nextDuration > 0) duration = nextDuration;
       if (readinessChanged || isPlaying != nextPlaying) {
         setState(() => isPlaying = nextPlaying);
       }
       if (readinessChanged && !isOwner && latestState != null) {
         unawaited(applyRemoteState(latestState!, forceSeek: true));
-      } else if (!isOwner && latestState != null) {
-        // Continuously sync participant position even when video is ready
-        unawaited(applyRemoteState(latestState!));
       }
       if (!isOwner || !connected || isSeeking) return;
       final isOwnControlEcho = DateTime.now().isBefore(
@@ -533,7 +438,7 @@ class _RoomScreenState extends State<RoomScreen> {
     final next = controller.value.position.inMilliseconds / 1000;
     if ((next - position).abs() >= .2) {
       position = next.clamp(0, duration);
-      setDisplayedPosition(position);
+      displayedPosition.value = position;
     }
     if (isPlaying != controller.value.isPlaying) {
       setState(() => isPlaying = controller.value.isPlaying);
@@ -557,7 +462,6 @@ class _RoomScreenState extends State<RoomScreen> {
     switch (event['type']) {
       case 'playback_state':
         final state = playbackFromEvent(event);
-        final command = event['command'] as String? ?? 'state';
         latestState = state;
         final ownerFromServer = event['is_owner'] as bool? ?? false;
         final ignoreBrowserEcho = browserMode && ownerFromServer;
@@ -567,38 +471,23 @@ class _RoomScreenState extends State<RoomScreen> {
           if (!ignoreBrowserEcho) isPlaying = state.isPlaying;
           if (!ignoreBrowserEcho && !isSeeking) {
             position = state.positionAt(DateTime.now()).clamp(0, 86400);
-            setDisplayedPosition(
-              position,
-              allowBackward:
-                  command == 'seek' || command == 'pause' || command == 'state',
-            );
+            displayedPosition.value = position;
           }
           updatedAt = state.serverUpdatedAt;
           if (state.vkVideoUrl.isNotEmpty) videoUrl = state.vkVideoUrl;
         });
-        final browser = browserPlayer;
-        if (browserMode && browser != null) {
-          unawaited(browser.runJavaScript(
-            'window.__pulseRoomOwner = ${ownerFromServer ? 'true' : 'false'};',
-          ));
-        }
+        final command = event['command'] as String? ?? 'state';
         if (!ignoreBrowserEcho) {
           unawaited(applyRemoteState(
             state,
-            forceSeek: command == 'state' ||
-                command == 'seek' ||
-                command == 'pause',
+            forceSeek: command == 'seek' || command == 'pause',
           ));
         }
       case 'chat_message':
-        final author = event['author'] as String? ?? 'Участник';
-        final followLatest =
-            author == widget.api.username || shouldFollowLatestMessage;
+        final followLatest = shouldFollowLatestMessage;
         setState(() => messages.add(_ChatLine(
-              author,
-              event['text'] as String? ?? '',
-              avatar: event['avatar'] as String? ?? '',
-            )));
+            event['author'] as String? ?? 'Участник',
+            event['text'] as String? ?? '')));
         if (followLatest) scrollChatToBottom();
       case 'presence':
         handlePresence(event);
@@ -612,7 +501,6 @@ class _RoomScreenState extends State<RoomScreen> {
     final followLatest = shouldFollowLatestMessage;
     final userId = event['user_id'] as int;
     final username = event['username'] as String? ?? 'Участник';
-    final avatar = event['avatar'] as String? ?? '';
     final memberIsOwner = event['is_owner'] as bool? ?? false;
     final isOnline = event['is_online'] as bool? ?? false;
     final changed = event['changed'] as bool? ?? false;
@@ -621,7 +509,6 @@ class _RoomScreenState extends State<RoomScreen> {
       if (index >= 0) {
         members[index] = members[index].copyWith(
           username: username,
-          avatar: avatar,
           isOnline: isOnline,
         );
       } else {
@@ -630,7 +517,6 @@ class _RoomScreenState extends State<RoomScreen> {
           RoomMemberModel(
             userId: userId,
             username: username,
-            avatar: avatar,
             isOwner: memberIsOwner,
             isOnline: isOnline,
           ),
@@ -652,47 +538,29 @@ class _RoomScreenState extends State<RoomScreen> {
     PlaybackState state, {
     bool forceSeek = false,
   }) async {
-    if (applyingRemoteState) return;
-    applyingRemoteState = true;
-    try {
-      final now = DateTime.now();
-      final canCorrectDrift = forceSeek ||
-          lastRemoteSeekAt == null ||
-          now.difference(lastRemoteSeekAt!) >= const Duration(seconds: 4);
-      if (browserMode) {
-        if (isOwner || !browserVideoReady) return;
-        final target = state.positionAt(now).clamp(0, duration).toDouble();
-        final shouldSeek =
-            forceSeek || (canCorrectDrift && (position - target).abs() > 1.25);
-        if (shouldSeek) lastRemoteSeekAt = now;
-        await controlBrowserPlayer(
-          seek: shouldSeek ? target : null,
-          shouldPlay: browserActuallyPlaying == state.isPlaying
-              ? null
-              : state.isPlaying,
-        );
-        return;
-      }
-      final controller = player;
-      if (controller == null || !controller.value.isInitialized) return;
-      if (isOwner && isSeeking) return;
-      final target = state.positionAt(now).clamp(0, duration);
-      final current = controller.value.position.inMilliseconds / 1000;
-      final shouldSeek =
-          forceSeek || (canCorrectDrift && (current - target).abs() > 1.25);
-      if (shouldSeek) {
-        lastRemoteSeekAt = now;
-        await controller.seekTo(
-          Duration(milliseconds: (target * 1000).round()),
-        );
-      }
-      if (state.isPlaying && !controller.value.isPlaying) {
-        await controller.play();
-      } else if (!state.isPlaying && controller.value.isPlaying) {
-        await controller.pause();
-      }
-    } finally {
-      applyingRemoteState = false;
+    if (browserMode) {
+      if (!browserVideoReady || isOwner) return;
+      final target =
+          state.positionAt(DateTime.now()).clamp(0, duration).toDouble();
+      final shouldSeek = forceSeek || (position - target).abs() > .35;
+      await controlBrowserPlayer(
+        seek: shouldSeek ? target : null,
+        shouldPlay: state.isPlaying,
+      );
+      return;
+    }
+    final controller = player;
+    if (controller == null || !controller.value.isInitialized) return;
+    if (isOwner && isSeeking) return;
+    final target = state.positionAt(DateTime.now()).clamp(0, duration);
+    final current = controller.value.position.inMilliseconds / 1000;
+    if (forceSeek || (current - target).abs() > .35) {
+      await controller.seekTo(Duration(milliseconds: (target * 1000).round()));
+    }
+    if (state.isPlaying && !controller.value.isPlaying) {
+      await controller.play();
+    } else if (!state.isPlaying && controller.value.isPlaying) {
+      await controller.pause();
     }
   }
 
@@ -714,7 +582,7 @@ class _RoomScreenState extends State<RoomScreen> {
     if (!isOwner) return;
     final safeTarget = target.clamp(0, duration).toDouble();
     position = safeTarget;
-    setDisplayedPosition(safeTarget, allowBackward: true);
+    displayedPosition.value = safeTarget;
     if (browserMode) {
       await controlBrowserPlayer(seek: safeTarget);
     } else {
@@ -729,13 +597,13 @@ class _RoomScreenState extends State<RoomScreen> {
     if (!isOwner) return;
     isSeeking = true;
     position = value.clamp(0, duration);
-    setDisplayedPosition(position, allowBackward: true);
+    displayedPosition.value = position;
   }
 
   void updateSeeking(double value) {
     if (!isOwner) return;
     position = value.clamp(0, duration);
-    setDisplayedPosition(position, allowBackward: true);
+    displayedPosition.value = position;
   }
 
   Future<void> finishSeeking(double value) async {
@@ -748,7 +616,7 @@ class _RoomScreenState extends State<RoomScreen> {
     }
     if (!mounted) return;
     position = target;
-    setDisplayedPosition(target, allowBackward: true);
+    displayedPosition.value = target;
     isSeeking = false;
     playback('seek', at: target);
   }
@@ -809,7 +677,6 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   void scrollChatToBottom({bool animate = true}) {
-    chatScrollRetry?.cancel();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !chatScroll.hasClients) return;
       final target = chatScroll.position.maxScrollExtent;
@@ -822,25 +689,7 @@ class _RoomScreenState extends State<RoomScreen> {
       } else {
         chatScroll.jumpTo(target);
       }
-      chatScrollRetry = Timer(const Duration(milliseconds: 90), () {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted || !chatScroll.hasClients) return;
-          chatScroll.jumpTo(chatScroll.position.maxScrollExtent);
-        });
-      });
     });
-  }
-
-  void setDisplayedPosition(double value, {bool allowBackward = false}) {
-    final safe = value.isFinite ? value.clamp(0, 86400).toDouble() : 0.0;
-    final previous = displayedPosition.value;
-    if (!allowBackward &&
-        isPlaying &&
-        safe < previous &&
-        previous - safe < 1.25) {
-      return;
-    }
-    displayedPosition.value = safe;
   }
 
   void insertEmoji(String emoji) {
@@ -864,7 +713,6 @@ class _RoomScreenState extends State<RoomScreen> {
     subscription?.cancel();
     socket?.close();
     syncTimer?.cancel();
-    chatScrollRetry?.cancel();
     player?.removeListener(updatePlayerPosition);
     player?.dispose();
     chatInput.dispose();
@@ -891,8 +739,7 @@ class _RoomScreenState extends State<RoomScreen> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 920),
                 child: LayoutBuilder(builder: (context, constraints) {
-                  final playerControlsHeight =
-                      vkEmbedMode ? 0.0 : (keyboardOpen ? 68.0 : 84.0);
+                  final playerControlsHeight = keyboardOpen ? 68.0 : 84.0;
                   final desiredPlayerHeight =
                       constraints.maxWidth * 9 / 16 + playerControlsHeight;
                   final rawPlayerCap = keyboardOpen
@@ -986,15 +833,6 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   Widget buildPlayerCard({bool compact = false}) {
-    if (vkEmbedMode) {
-      return GlassCard(
-        padding: EdgeInsets.zero,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(22),
-          child: buildManagedPlayer(),
-        ),
-      );
-    }
     final buttonConstraints =
         compact ? const BoxConstraints.tightFor(width: 38, height: 34) : null;
     return GlassCard(
@@ -1085,57 +923,11 @@ class _RoomScreenState extends State<RoomScreen> {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  if (!browserMode &&
-                      isOwner &&
-                      (stream?.availableQualities.length ?? 0) > 1)
-                    PopupMenuButton<String>(
-                      tooltip: 'Качество видео',
-                      enabled: !qualityLoading,
-                      onSelected: changeQuality,
-                      itemBuilder: (context) => [
-                        for (final quality in stream!.availableQualities)
-                          PopupMenuItem(
-                            value: quality,
-                            child: Row(children: [
-                              if (quality == stream!.quality)
-                                const Icon(Icons.check_rounded, size: 17)
-                              else
-                                const SizedBox(width: 17),
-                              const SizedBox(width: 8),
-                              Text(quality),
-                            ]),
-                          ),
-                      ],
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        if (qualityLoading)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 4),
-                            child: SizedBox.square(
-                              dimension: 10,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 1.5),
-                            ),
-                          ),
-                        Text(
-                          stream?.quality ?? 'MP4',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            color: Color(0xFFC9B5FF),
-                          ),
-                        ),
-                        const Icon(Icons.arrow_drop_down_rounded, size: 16),
-                      ]),
-                    )
-                  else
-                    Text(
-                      browserMode
-                          ? (vkEmbedMode ? 'VK' : 'WEB')
-                          : (stream?.quality ?? 'MP4'),
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFFC9B5FF),
-                      ),
-                    ),
+                  Text(
+                    browserMode ? 'WEB' : (stream?.quality ?? 'MP4'),
+                    style:
+                        const TextStyle(fontSize: 10, color: Color(0xFFC9B5FF)),
+                  ),
                 ]),
               ),
             ]),
@@ -1234,51 +1026,31 @@ class _RoomScreenState extends State<RoomScreen> {
     final ownMessage = message.author == widget.api.username;
     return Align(
       alignment: ownMessage ? Alignment.centerRight : Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 5),
-        child: Row(
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 560),
+        margin: const EdgeInsets.only(bottom: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: ownMessage
+              ? const Color(0xFF7650C9).withValues(alpha: .34)
+              : Colors.white.withValues(alpha: .075),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: ownMessage
+                ? const Color(0xFFCDB8FF).withValues(alpha: .35)
+                : Colors.white.withValues(alpha: .10),
+          ),
+        ),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (!ownMessage) ...[
-              UserAvatar(
-                  dataUrl: message.avatar, name: message.author, size: 27),
-              const SizedBox(width: 6),
-            ],
-            Flexible(
-              child: Container(
-                constraints: const BoxConstraints(maxWidth: 520),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                decoration: BoxDecoration(
-                  color: ownMessage
-                      ? const Color(0xFF7650C9).withValues(alpha: .34)
-                      : Colors.white.withValues(alpha: .075),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: ownMessage
-                        ? const Color(0xFFCDB8FF).withValues(alpha: .35)
-                        : Colors.white.withValues(alpha: .10),
-                  ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(message.author,
-                        style: const TextStyle(
-                            fontSize: 9, color: Color(0xFFC9B5FF))),
-                    const SizedBox(height: 1),
-                    Text(message.text, style: const TextStyle(fontSize: 13)),
-                  ],
-                ),
-              ),
+            Text(
+              message.author,
+              style: const TextStyle(fontSize: 9, color: Color(0xFFC9B5FF)),
             ),
-            if (ownMessage) ...[
-              const SizedBox(width: 6),
-              UserAvatar(
-                  dataUrl: message.avatar, name: message.author, size: 27),
-            ],
+            const SizedBox(height: 1),
+            Text(message.text, style: const TextStyle(fontSize: 13)),
           ],
         ),
       ),
@@ -1465,7 +1237,7 @@ class _RoomScreenState extends State<RoomScreen> {
       return Stack(children: [
         Positioned.fill(
           child: AbsorbPointer(
-            absorbing: !isOwner,
+            absorbing: !isOwner && browserVideoReady,
             child: WebViewWidget(controller: browserPlayer!),
           ),
         ),
@@ -1476,7 +1248,7 @@ class _RoomScreenState extends State<RoomScreen> {
             right: 0,
             child: LinearProgressIndicator(minHeight: 2),
           ),
-        if (!vkEmbedMode && !browserPageLoading && !browserVideoReady)
+        if (!browserPageLoading && !browserVideoReady)
           Positioned(
             left: 10,
             right: 10,
@@ -1514,7 +1286,7 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   String formatTime(double value) {
-    final seconds = value.floor();
+    final seconds = value.round();
     final minutes = seconds ~/ 60;
     return '${minutes.toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
   }
@@ -1628,20 +1400,11 @@ class _RoomScreenState extends State<RoomScreen> {
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800))),
           for (final member in members)
             ListTile(
-              leading: Stack(clipBehavior: Clip.none, children: [
-                UserAvatar(
-                  dataUrl: member.avatar,
-                  name: member.username,
-                  size: 40,
-                ),
-                if (member.isOwner)
-                  const Positioned(
-                    right: -4,
-                    bottom: -4,
-                    child: Icon(Icons.workspace_premium_rounded,
-                        size: 17, color: Color(0xFFFFD56A)),
-                  ),
-              ]),
+              leading: CircleAvatar(
+                child: Icon(member.isOwner
+                    ? Icons.workspace_premium_rounded
+                    : Icons.person_rounded),
+              ),
               title: Text(member.username),
               subtitle: Text(
                 '${member.isOwner ? 'Создатель' : 'Участник'} · '
@@ -1671,6 +1434,5 @@ class _RoomScreenState extends State<RoomScreen> {
 class _ChatLine {
   final String author;
   final String text;
-  final String avatar;
-  const _ChatLine(this.author, this.text, {this.avatar = ''});
+  const _ChatLine(this.author, this.text);
 }

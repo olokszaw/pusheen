@@ -42,14 +42,12 @@ class RoomModel {
 class RoomMemberModel {
   final int userId;
   final String username;
-  final String avatar;
   final bool isOwner;
   final bool isOnline;
 
   const RoomMemberModel({
     required this.userId,
     required this.username,
-    this.avatar = '',
     required this.isOwner,
     required this.isOnline,
   });
@@ -58,17 +56,15 @@ class RoomMemberModel {
     return RoomMemberModel(
       userId: json['user_id'] as int,
       username: json['username'] as String,
-      avatar: json['avatar'] as String? ?? '',
       isOwner: json['is_owner'] as bool? ?? false,
       isOnline: json['is_online'] as bool? ?? false,
     );
   }
 
-  RoomMemberModel copyWith({String? username, String? avatar, bool? isOnline}) {
+  RoomMemberModel copyWith({String? username, bool? isOnline}) {
     return RoomMemberModel(
       userId: userId,
       username: username ?? this.username,
-      avatar: avatar ?? this.avatar,
       isOwner: isOwner,
       isOnline: isOnline ?? this.isOnline,
     );
@@ -78,13 +74,11 @@ class RoomMemberModel {
 class ChatMessageModel {
   final int id;
   final String author;
-  final String avatar;
   final String text;
 
   const ChatMessageModel({
     required this.id,
     required this.author,
-    this.avatar = '',
     required this.text,
   });
 
@@ -92,7 +86,6 @@ class ChatMessageModel {
     return ChatMessageModel(
       id: json['id'] as int,
       author: json['author'] as String,
-      avatar: json['avatar'] as String? ?? '',
       text: json['text'] as String,
     );
   }
@@ -103,14 +96,12 @@ class VideoStreamModel {
   final String title;
   final double durationSeconds;
   final String quality;
-  final List<String> availableQualities;
 
   const VideoStreamModel({
     required this.url,
     required this.title,
     required this.durationSeconds,
     required this.quality,
-    this.availableQualities = const [],
   });
 
   factory VideoStreamModel.fromJson(Map<String, dynamic> json) {
@@ -119,9 +110,6 @@ class VideoStreamModel {
       title: json['title'] as String? ?? 'VK Видео',
       durationSeconds: (json['duration_seconds'] as num? ?? 0).toDouble(),
       quality: json['quality'] as String? ?? 'MP4',
-      availableQualities: (json['available_qualities'] as List<dynamic>? ?? [])
-          .map((item) => item.toString())
-          .toList(),
     );
   }
 }
