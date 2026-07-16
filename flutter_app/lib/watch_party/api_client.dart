@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../src/models/room.dart';
 
 class ApiClient {
+  static const _sessionCheckTimeout = Duration(seconds: 10);
+  static const _loginTimeout = Duration(seconds: 15);
   static const _tokenKey = 'pulse_auth_token';
   static const _userIdKey = 'pulse_user_id';
   static const _usernameKey = 'pulse_username';
@@ -53,7 +55,7 @@ class ApiClient {
       final response = await http.get(
         Uri.parse('$baseUrl/api/profile/'),
         headers: headers,
-      );
+      ).timeout(_sessionCheckTimeout);
       final data = _decodeMap(response);
       userId = data['user_id'] as int;
       username = data['username'] as String;
@@ -95,7 +97,7 @@ class ApiClient {
       Uri.parse('$baseUrl/api/auth/demo-login/'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode({'username': name.trim(), 'client_id': clientId}),
-    );
+    ).timeout(_loginTimeout);
     final data = _decodeMap(response);
     token = data['token'] as String;
     userId = data['user_id'] as int;
