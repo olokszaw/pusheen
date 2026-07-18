@@ -147,8 +147,8 @@ class _CompactNavigation extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 9),
           child: GlassCard(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 7),
-            borderRadius: const BorderRadius.all(Radius.circular(22)),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+            borderRadius: const BorderRadius.all(Radius.circular(25)),
             child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -159,9 +159,9 @@ class _CompactNavigation extends StatelessWidget {
                         borderRadius: BorderRadius.circular(17),
                         onTap: () => onChanged(i),
                         child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 240),
+                          duration: const Duration(milliseconds: 190),
                           curve: Curves.easeOutCubic,
-                          height: 42,
+                          height: 50,
                           padding: EdgeInsets.symmetric(
                               horizontal: i == index ? 12 : 8),
                           decoration: BoxDecoration(
@@ -182,13 +182,13 @@ class _CompactNavigation extends StatelessWidget {
                                 TweenAnimationBuilder<double>(
                                   tween: Tween(
                                       begin: .9, end: i == index ? 1.08 : .92),
-                                  duration: const Duration(milliseconds: 220),
+                                  duration: const Duration(milliseconds: 180),
                                   builder: (_, scale, child) => Transform.scale(
                                       scale: scale, child: child),
                                   child: Icon(items[i].$1, size: 21),
                                 ),
                                 AnimatedSize(
-                                  duration: const Duration(milliseconds: 220),
+                                  duration: const Duration(milliseconds: 180),
                                   curve: Curves.easeOutCubic,
                                   child: i == index
                                       ? Padding(
@@ -294,7 +294,7 @@ class _HomePage extends StatelessWidget {
               const GlassCard(child: Text('Комнат пока нет. Создай первую.'))
             else
               SizedBox(
-                  height: 205,
+                  height: 216,
                   child: ListView.separated(
                       scrollDirection: Axis.horizontal,
                       itemCount: rooms.length,
@@ -320,16 +320,36 @@ class _RoomCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              height: 105,
-              decoration: const BoxDecoration(
-                borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-                gradient: LinearGradient(
-                    colors: [Color(0xFF324E83), Color(0xFFE1689E)]),
+            ClipRRect(
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(22)),
+              child: SizedBox(
+                height: 112,
+                width: double.infinity,
+                child: Stack(fit: StackFit.expand, children: [
+                  if (room.thumbnailUrl.isNotEmpty)
+                    Image.network(room.thumbnailUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const _RoomArtwork())
+                  else
+                    const _RoomArtwork(),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: .38)
+                        ],
+                      ),
+                    ),
+                  ),
+                  const Center(
+                      child: Icon(Icons.play_circle_fill_rounded,
+                          size: 40, color: Colors.white)),
+                ]),
               ),
-              child: const Center(
-                  child: Icon(Icons.play_circle_fill_rounded,
-                      size: 42, color: Colors.white)),
             ),
             Padding(
               padding: const EdgeInsets.all(11),
@@ -389,8 +409,18 @@ class _RoomsPage extends StatelessWidget {
                   onTap: () => onOpen(room),
                   child: ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading:
-                        const CircleAvatar(child: Icon(Icons.movie_rounded)),
+                    leading: ClipRRect(
+                      borderRadius: BorderRadius.circular(13),
+                      child: SizedBox.square(
+                        dimension: 48,
+                        child: room.thumbnailUrl.isEmpty
+                            ? const _RoomArtwork()
+                            : Image.network(room.thumbnailUrl,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) =>
+                                    const _RoomArtwork()),
+                      ),
+                    ),
                     title: Text(room.title),
                     subtitle: Text(
                         'Код ${room.inviteCode} · ${room.membersCount} участников'),
@@ -403,6 +433,22 @@ class _RoomsPage extends StatelessWidget {
       ),
     );
   }
+}
+
+class _RoomArtwork extends StatelessWidget {
+  const _RoomArtwork();
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(colors: [
+            const Color(0xFF324E83).withValues(alpha: .72),
+            const Color(0xFFE1689E).withValues(alpha: .62),
+          ]),
+        ),
+        child: const Center(
+            child: Icon(Icons.movie_filter_rounded,
+                size: 30, color: Colors.white70)),
+      );
 }
 
 class _SearchPage extends StatelessWidget {

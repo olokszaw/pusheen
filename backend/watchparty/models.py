@@ -18,6 +18,7 @@ class Room(models.Model):
     max_members = models.PositiveSmallIntegerField(default=12, validators=[MinValueValidator(2), MaxValueValidator(100)])
     allow_guests_control = models.BooleanField(default=False)
     vk_video_url = models.URLField(blank=True)
+    thumbnail_url = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
 

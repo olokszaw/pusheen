@@ -18,22 +18,18 @@ class CreateRoomScreen extends StatefulWidget {
 }
 
 class _CreateRoomScreenState extends State<CreateRoomScreen> {
-  final title = TextEditingController();
   final videoUrl = TextEditingController();
   bool isPrivate = false;
-  bool allowGuests = false;
   bool loading = false;
   MediaSourceType sourceType = MediaSourceType.vk;
 
   @override
   void dispose() {
-    title.dispose();
     videoUrl.dispose();
     super.dispose();
   }
 
   Future<void> submit() async {
-    if (title.text.trim().isEmpty) return message('Введи название комнаты');
     final uri = Uri.tryParse(videoUrl.text.trim());
     if (uri == null ||
         !uri.hasAuthority ||
@@ -43,13 +39,9 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
     setState(() => loading = true);
     try {
       final room = await widget.api.createRoom(
-        title: title.text.trim(),
-        description: '',
-        theme: 'movie',
         videoUrl: videoUrl.text.trim(),
         sourceType: sourceType,
         isPrivate: isPrivate,
-        allowGuestsControl: allowGuests,
       );
       if (!mounted) return;
       if (widget.embedded && widget.onCreated != null) {
@@ -95,22 +87,12 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
         const SizedBox(height: 18),
         GlassCard(
             child: Column(children: [
-          TextField(
-              controller: title,
-              decoration: const InputDecoration(
-                  labelText: 'Название комнаты',
-                  prefixIcon: Icon(Icons.edit_outlined))),
-        ])),
-        const SizedBox(height: 16),
-        GlassCard(
-            child: Column(children: [
           Row(children: [
             Expanded(
-              child: ChoiceChip(
+              child: _ProviderButton(
                 selected: sourceType == MediaSourceType.vk,
-                avatar: const Icon(Icons.ondemand_video_rounded, size: 18),
-                label: const Text('VK Видео'),
-                onSelected: (_) => setState(() {
+                logo: const _VkLogo(),
+                onTap: () => setState(() {
                   sourceType = MediaSourceType.vk;
                   videoUrl.clear();
                 }),
@@ -118,11 +100,10 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: ChoiceChip(
+              child: _ProviderButton(
                 selected: sourceType == MediaSourceType.web,
-                avatar: const Icon(Icons.language_rounded, size: 18),
-                label: const Text('Сайт / Google'),
-                onSelected: (_) => setState(() {
+                logo: const _GoogleLogo(),
+                onTap: () => setState(() {
                   sourceType = MediaSourceType.web;
                   videoUrl.clear();
                 }),
@@ -133,11 +114,9 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
           TextField(
               controller: videoUrl,
               keyboardType: TextInputType.url,
-              decoration: InputDecoration(
-                  labelText: sourceType == MediaSourceType.vk
-                      ? 'Ссылка VK Видео'
-                      : 'Ссылка на страницу фильма',
-                  prefixIcon: const Icon(Icons.link_rounded))),
+              decoration: const InputDecoration(
+                  hintText: 'Вставь ссылку на видео',
+                  prefixIcon: Icon(Icons.link_rounded))),
           if (sourceType == MediaSourceType.web) ...[
             const SizedBox(height: 10),
             SizedBox(
@@ -147,12 +126,6 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
                 icon: const Icon(Icons.search_rounded),
                 label: const Text('Найти через Google'),
               ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Открой страницу фильма и выбери её. Основной видеопоток будет запущен отдельно от сайта.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 11, color: Colors.white60),
             ),
           ],
         ])),
@@ -167,24 +140,116 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
                   Icon(isPrivate ? Icons.lock_rounded : Icons.public_rounded),
               title:
                   Text(isPrivate ? 'Приватная комната' : 'Публичная комната')),
-          SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: allowGuests,
-              onChanged: (value) => setState(() => allowGuests = value),
-              secondary: const Icon(Icons.tune_rounded),
-              title: const Text('Разрешить гостям управлять')),
         ])),
         const SizedBox(height: 14),
-        SizedBox(
-            height: 54,
-            child: FilledButton.icon(
-                onPressed: loading ? null : submit,
-                icon: const Icon(Icons.add_rounded),
-                label: Text(loading ? 'Создаём…' : 'Создать комнату'))),
+        _GlassCreateButton(
+          loading: loading,
+          onTap: loading ? null : submit,
+        ),
       ],
     );
     return widget.embedded
         ? body
         : Scaffold(body: GlowScaffold(child: SafeArea(child: body)));
   }
+}
+
+class _ProviderButton extends StatelessWidget {
+  final bool selected;
+  final Widget logo;
+  final VoidCallback onTap;
+  const _ProviderButton(
+      {required this.selected, required this.logo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          height: 66,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: selected ? .13 : .045),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: selected
+                  ? const Color(0xFFCDB8FF).withValues(alpha: .55)
+                  : Colors.white.withValues(alpha: .09),
+            ),
+          ),
+          child: AnimatedScale(
+              scale: selected ? 1.08 : .94,
+              duration: const Duration(milliseconds: 180),
+              child: Center(child: logo)),
+        ),
+      );
+}
+
+class _VkLogo extends StatelessWidget {
+  const _VkLogo();
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 45,
+        height: 45,
+        decoration: BoxDecoration(
+          color: const Color(0xFF2787F5).withValues(alpha: .86),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        alignment: Alignment.center,
+        child: const Text('VK',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.w900)),
+      );
+}
+
+class _GoogleLogo extends StatelessWidget {
+  const _GoogleLogo();
+  @override
+  Widget build(BuildContext context) => ShaderMask(
+        shaderCallback: (rect) => const LinearGradient(colors: [
+          Color(0xFF4285F4),
+          Color(0xFF34A853),
+          Color(0xFFFBBC05),
+          Color(0xFFEA4335),
+        ]).createShader(rect),
+        child: const Text('G',
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 42,
+                fontWeight: FontWeight.w900)),
+      );
+}
+
+class _GlassCreateButton extends StatelessWidget {
+  final bool loading;
+  final VoidCallback? onTap;
+  const _GlassCreateButton({required this.loading, required this.onTap});
+  @override
+  Widget build(BuildContext context) => Opacity(
+        opacity: onTap == null ? .55 : 1,
+        child: GlassCard(
+          padding: EdgeInsets.zero,
+          borderRadius: const BorderRadius.all(Radius.circular(22)),
+          onTap: onTap,
+          child: SizedBox(
+            height: 54,
+            child: Center(
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (loading)
+                  const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                else
+                  const Icon(Icons.add_rounded),
+                const SizedBox(width: 8),
+                Text(loading ? 'Создаём…' : 'Создать комнату',
+                    style: const TextStyle(fontWeight: FontWeight.w800)),
+              ]),
+            ),
+          ),
+        ),
+      );
 }

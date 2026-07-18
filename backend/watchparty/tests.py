@@ -107,7 +107,12 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.data[0]["reactions"][0]["count"], 1)
         self.assertTrue(response.data[0]["reactions"][0]["reacted"])
 
-    def test_create_room_keeps_one_invite_code(self):
+    @patch("watchparty.views.resolve_media_stream")
+    def test_create_room_keeps_one_invite_code(self, resolver):
+        resolver.return_value = {
+            "title": "Название из VK",
+            "thumbnail": "https://cdn.example/cover.jpg",
+        }
         self.authenticate(self.owner_token)
         response = self.client.post(
             "/api/rooms/",
@@ -122,6 +127,8 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.status_code, 201)
         room = Room.objects.get(pk=response.data["id"])
         self.assertEqual(response.data["invite_code"], room.invite_code)
+        self.assertEqual(response.data["title"], "Название из VK")
+        self.assertEqual(response.data["thumbnail_url"], "https://cdn.example/cover.jpg")
         self.assertTrue(RoomMember.objects.filter(room=room, user=self.owner).exists())
         self.assertTrue(PlaybackState.objects.filter(room=room).exists())
 
@@ -174,7 +181,9 @@ class RoomApiTests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    def test_web_media_url_uses_separate_source(self):
+    @patch("watchparty.views.resolve_media_stream")
+    def test_web_media_url_uses_separate_source(self, resolver):
+        resolver.return_value = {"title": "Фильм 42", "thumbnail": ""}
         self.authenticate(self.owner_token)
         response = self.client.post(
             "/api/rooms/",

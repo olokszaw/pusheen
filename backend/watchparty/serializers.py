@@ -40,9 +40,13 @@ class RoomSerializer(serializers.ModelSerializer):
             "id", "owner", "owner_name", "title", "description", "theme",
             "is_private", "invite_code", "max_members", "allow_guests_control",
             "vk_video_url", "media_url", "source_type", "members_count",
-            "playback", "created_at",
+            "thumbnail_url", "playback", "created_at",
         )
         read_only_fields = ("owner", "invite_code")
+        extra_kwargs = {
+            "title": {"required": False, "allow_blank": True},
+            "thumbnail_url": {"read_only": True},
+        }
 
     def to_internal_value(self, data):
         mutable = data.copy()

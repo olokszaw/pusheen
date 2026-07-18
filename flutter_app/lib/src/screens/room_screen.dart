@@ -72,6 +72,7 @@ class _RoomScreenState extends State<RoomScreen> {
   IconData? actionOverlayIcon;
   int actionOverlayKey = 0;
   double participantButtonOpacity = .32;
+  bool forceChatBottom = false;
 
   @override
   void initState() {
@@ -559,9 +560,12 @@ class _RoomScreenState extends State<RoomScreen> {
           ));
         }
       case 'chat_message':
-        final followLatest = shouldFollowLatestMessage;
+        final followLatest = forceChatBottom || shouldFollowLatestMessage;
         setState(() => messages.add(_ChatLine.fromJson(event)));
-        if (followLatest) scrollChatToBottom();
+        if (followLatest) {
+          forceChatBottom = false;
+          scrollChatToBottom(animate: false, settleKeyboard: true);
+        }
       case 'message_reaction':
         final messageId = event['message_id'] as int?;
         final emoji = event['emoji'] as String?;
@@ -755,9 +759,9 @@ class _RoomScreenState extends State<RoomScreen> {
   void sendMessage() {
     final text = chatInput.text.trim();
     if (text.isNotEmpty) {
+      forceChatBottom = true;
       socket?.sendChat(text);
       chatInput.clear();
-      scrollChatToBottom();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) chatFocus.requestFocus();
       });
@@ -784,9 +788,9 @@ class _RoomScreenState extends State<RoomScreen> {
     }
     final extension =
         photo.name.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
+    forceChatBottom = true;
     socket?.sendChat('',
         imageDataUrl: 'data:image/$extension;base64,${base64Encode(bytes)}');
-    scrollChatToBottom();
     if (mounted) chatFocus.requestFocus();
   }
 
@@ -838,7 +842,7 @@ class _RoomScreenState extends State<RoomScreen> {
   void handleEdgePointerDown(PointerDownEvent event) {
     final width = MediaQuery.sizeOf(context).width;
     edgeSwipeStartX =
-        event.position.dx >= width - 36 ? event.position.dx : null;
+        event.position.dx >= width - 62 ? event.position.dx : null;
     edgeSwipeDistance = 0;
   }
 
@@ -848,7 +852,7 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   void handleEdgePointerUp(PointerUpEvent event) {
-    final shouldOpen = edgeSwipeStartX != null && edgeSwipeDistance < -56;
+    final shouldOpen = edgeSwipeStartX != null && edgeSwipeDistance < -28;
     edgeSwipeStartX = null;
     edgeSwipeDistance = 0;
     if (shouldOpen) showParticipants();
@@ -860,18 +864,25 @@ class _RoomScreenState extends State<RoomScreen> {
         72;
   }
 
-  void scrollChatToBottom({bool animate = true}) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+  void scrollChatToBottom({bool animate = true, bool settleKeyboard = false}) {
+    void applyScroll() {
       if (!mounted || !chatScroll.hasClients) return;
       final target = chatScroll.position.maxScrollExtent;
       if (animate) {
-        chatScroll.animateTo(
-          target,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-        );
+        chatScroll.animateTo(target,
+            duration: const Duration(milliseconds: 170),
+            curve: Curves.easeOutCubic);
       } else {
         chatScroll.jumpTo(target);
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      applyScroll();
+      if (settleKeyboard) {
+        Future<void>.delayed(const Duration(milliseconds: 70), () {
+          WidgetsBinding.instance.addPostFrameCallback((_) => applyScroll());
+        });
       }
     });
   }
@@ -981,12 +992,12 @@ class _RoomScreenState extends State<RoomScreen> {
         const Spacer(),
         _MiniGlassButton(
           icon: Icons.link_rounded,
-          label: 'Ссылка',
-          onTap: copyVideoLink,
+          onTap: copyRoomLink,
         ),
         const SizedBox(width: 7),
         AnimatedOpacity(
-          duration: const Duration(milliseconds: 500),
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
           opacity: participantButtonOpacity,
           child: _MiniGlassButton(
             icon: Icons.group_rounded,
@@ -1185,22 +1196,27 @@ class _RoomScreenState extends State<RoomScreen> {
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900)),
             )),
         Expanded(
-          child: messages.isEmpty
-              ? const Center(
-                  child: Text('Начни разговор',
-                      style: TextStyle(fontSize: 12, color: Colors.white38)))
-              : Scrollbar(
-                  controller: chatScroll,
-                  child: ListView.builder(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () => FocusScope.of(context).unfocus(),
+            child: messages.isEmpty
+                ? const Center(
+                    child: Text('Начни разговор',
+                        style: TextStyle(fontSize: 12, color: Colors.white38)))
+                : Scrollbar(
                     controller: chatScroll,
-                    padding: const EdgeInsets.only(top: 2, right: 3, bottom: 2),
-                    keyboardDismissBehavior:
-                        ScrollViewKeyboardDismissBehavior.manual,
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) =>
-                        buildChatMessage(messages[index]),
+                    child: ListView.builder(
+                      controller: chatScroll,
+                      padding:
+                          const EdgeInsets.only(top: 2, right: 3, bottom: 2),
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.manual,
+                      itemCount: messages.length,
+                      itemBuilder: (context, index) =>
+                          buildChatMessage(messages[index]),
+                    ),
                   ),
-                ),
+          ),
         ),
         const SizedBox(height: 5),
         Row(key: const ValueKey('chat-composer'), children: [
@@ -1263,7 +1279,9 @@ class _RoomScreenState extends State<RoomScreen> {
       child: GestureDetector(
         onLongPress: () => showReactionMenu(message),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 560),
+          constraints: BoxConstraints(
+              maxWidth:
+                  (MediaQuery.sizeOf(context).width * .72).clamp(210.0, 430.0)),
           margin: const EdgeInsets.only(bottom: 6),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           decoration: BoxDecoration(
@@ -1292,15 +1310,13 @@ class _RoomScreenState extends State<RoomScreen> {
                   _MiniAvatar(
                       dataUrl: message.avatarDataUrl,
                       label: message.nickname,
-                      radius: 9),
-                  const SizedBox(width: 5),
+                      radius: 13),
+                  const SizedBox(width: 7),
                   _FluentText(message.nickname,
                       style: const TextStyle(
-                          fontSize: 9, color: Color(0xFFC9B5FF))),
-                  const SizedBox(width: 4),
-                  Text('@${message.author}',
-                      style:
-                          const TextStyle(fontSize: 8, color: Colors.white30)),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFC9B5FF))),
                 ]),
                 if (message.imageDataUrl.isNotEmpty) ...[
                   const SizedBox(height: 5),
@@ -1557,8 +1573,13 @@ class _RoomScreenState extends State<RoomScreen> {
 
   String formatTime(double value) {
     final seconds = value.round();
-    final minutes = seconds ~/ 60;
-    return '${minutes.toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}';
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final tail = (seconds % 60).toString().padLeft(2, '0');
+    if (hours > 0) {
+      return '$hours:${minutes.toString().padLeft(2, '0')}:$tail';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:$tail';
   }
 
   Future<void> showTimecodeEditor() async {
@@ -1654,11 +1675,13 @@ class _RoomScreenState extends State<RoomScreen> {
         SnackBar(content: Text('Код ${widget.room.inviteCode} скопирован')));
   }
 
-  void copyVideoLink() {
-    Clipboard.setData(ClipboardData(text: videoUrl));
+  void copyRoomLink() {
+    final link = widget.api.roomInviteUrl(widget.room.inviteCode);
+    Clipboard.setData(ClipboardData(text: link));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Ссылка на видео скопирована'),
+      SnackBar(
+          content:
+              Text('Ссылка комнаты скопирована · ${widget.room.inviteCode}'),
           duration: Duration(seconds: 1)),
     );
   }
@@ -1680,7 +1703,7 @@ class _RoomScreenState extends State<RoomScreen> {
       barrierDismissible: true,
       barrierLabel: 'Участники',
       barrierColor: Colors.black.withValues(alpha: .3),
-      transitionDuration: const Duration(milliseconds: 280),
+      transitionDuration: const Duration(milliseconds: 190),
       pageBuilder: (_, __, ___) => Align(
         alignment: Alignment.centerRight,
         child: SafeArea(
@@ -1772,7 +1795,7 @@ class _RoomScreenState extends State<RoomScreen> {
       ),
       transitionBuilder: (_, animation, __, child) => SlideTransition(
           position: Tween(begin: const Offset(1, 0), end: Offset.zero).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+              CurvedAnimation(parent: animation, curve: Curves.easeOutQuart)),
           child: FadeTransition(opacity: animation, child: child)),
     );
     if (mounted) setState(() => participantButtonOpacity = .28);
@@ -2054,29 +2077,20 @@ class _FluentReactionPickerState extends State<_FluentReactionPicker> {
 
 class _MiniGlassButton extends StatelessWidget {
   final IconData icon;
-  final String? label;
   final VoidCallback onTap;
-  const _MiniGlassButton({required this.icon, required this.onTap, this.label});
+  const _MiniGlassButton({required this.icon, required this.onTap});
   @override
   Widget build(BuildContext context) => InkWell(
         borderRadius: BorderRadius.circular(13),
         onTap: onTap,
         child: Container(
           height: 32,
-          padding: EdgeInsets.symmetric(horizontal: label == null ? 8 : 10),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
               color: Colors.white.withValues(alpha: .065),
               borderRadius: BorderRadius.circular(13),
               border: Border.all(color: Colors.white.withValues(alpha: .1))),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 17),
-            if (label != null) ...[
-              const SizedBox(width: 5),
-              Text(label!,
-                  style: const TextStyle(
-                      fontSize: 10, fontWeight: FontWeight.w700))
-            ]
-          ]),
+          child: Icon(icon, size: 17),
         ),
       );
 }
@@ -2153,7 +2167,7 @@ class _ChatImage extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
               child: ConstrainedBox(
                   constraints:
-                      const BoxConstraints(maxHeight: 210, maxWidth: 320),
+                      const BoxConstraints(maxHeight: 145, maxWidth: 230),
                   child: Image.memory(bytes, fit: BoxFit.cover)))),
     );
   }
@@ -2171,14 +2185,15 @@ class _OnlineIndicatorState extends State<_OnlineIndicator> {
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(milliseconds: 1200), () {
+    Timer(const Duration(milliseconds: 900), () {
       if (mounted) setState(() => showLabel = false);
     });
   }
 
   @override
   Widget build(BuildContext context) => AnimatedSize(
-      duration: const Duration(milliseconds: 250),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(
             width: 7,

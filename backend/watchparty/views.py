@@ -4,6 +4,8 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.http import HttpResponse
+from django.utils.html import escape
 from rest_framework import generics, status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
@@ -33,6 +35,22 @@ def valid_username(value):
 def auth_payload(user):
     token, _ = Token.objects.get_or_create(user=user)
     return {"token": token.key, **public_profile(user)}
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def room_invite_page(request, invite_code):
+    room = get_object_or_404(Room, invite_code=invite_code.upper())
+    code = escape(room.invite_code)
+    title = escape(room.title)
+    return HttpResponse(
+        f"""<!doctype html><html lang='ru'><meta name='viewport' content='width=device-width,initial-scale=1'>
+        <title>{title} · Pusheen</title><style>
+        body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#080816;color:#f6f0ff;font:16px system-ui}}
+        main{{width:min(420px,82vw);padding:28px;border:1px solid #ffffff22;border-radius:26px;background:#ffffff12;backdrop-filter:blur(22px);text-align:center}}
+        b{{font-size:24px}} code{{display:block;margin:18px;font-size:28px;letter-spacing:5px;color:#d1b5ff}}
+        </style><main><b>{title}</b><code>{code}</code><p>Открой Pusheen и войди в комнату по этому коду.</p></main></html>"""
+    )
 
 
 @api_view(["GET"])
@@ -148,9 +166,37 @@ class RoomListCreateView(generics.ListCreateAPIView):
 
     @transaction.atomic
     def perform_create(self, serializer):
-        room = serializer.save(owner=self.request.user)
+        media_url = serializer.validated_data.get("vk_video_url", "")
+        fallback_title = "Совместный просмотр"
+        room = serializer.save(
+            owner=self.request.user,
+            title=serializer.validated_data.get("title") or fallback_title,
+            description="",
+            theme="movie",
+            allow_guests_control=False,
+        )
         RoomMember.objects.create(room=room, user=self.request.user)
         PlaybackState.objects.create(room=room)
+        if media_url:
+            try:
+                metadata = resolve_media_stream(
+                    media_url, detect_media_source(media_url)
+                )
+                resolved_title = str(metadata.get("title") or "").strip()[:80]
+                thumbnail = str(metadata.get("thumbnail") or "").strip()
+                changed = []
+                if resolved_title:
+                    room.title = resolved_title
+                    changed.append("title")
+                if thumbnail:
+                    room.thumbnail_url = thumbnail
+                    changed.append("thumbnail_url")
+                if changed:
+                    room.save(update_fields=changed)
+            except Exception:
+                # Room creation must still succeed if a provider temporarily
+                # refuses metadata; room_stream will retry later.
+                pass
 
 
 class RoomDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -200,6 +246,17 @@ def room_stream(request, room_id):
                 status=502,
             )
         cache.set(cache_key, stream, timeout=20 * 60)
+    changed = []
+    resolved_title = str(stream.get("title") or "").strip()[:80]
+    thumbnail = str(stream.get("thumbnail") or "").strip()
+    if resolved_title and room.title != resolved_title:
+        room.title = resolved_title
+        changed.append("title")
+    if thumbnail and room.thumbnail_url != thumbnail:
+        room.thumbnail_url = thumbnail
+        changed.append("thumbnail_url")
+    if changed:
+        room.save(update_fields=changed)
     return Response(stream)
 
 

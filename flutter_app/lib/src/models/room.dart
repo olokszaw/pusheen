@@ -12,6 +12,7 @@ class RoomModel {
   final MediaSourceType sourceType;
   final int membersCount;
   final bool isPrivate;
+  final String thumbnailUrl;
 
   const RoomModel({
     required this.id,
@@ -25,6 +26,7 @@ class RoomModel {
     required this.sourceType,
     required this.membersCount,
     required this.isPrivate,
+    required this.thumbnailUrl,
   });
 
   factory RoomModel.fromJson(Map<String, dynamic> json) {
@@ -46,6 +48,7 @@ class RoomModel {
       ),
       membersCount: json['members_count'] as int? ?? 1,
       isPrivate: json['is_private'] as bool? ?? false,
+      thumbnailUrl: json['thumbnail_url'] as String? ?? '',
     );
   }
 }
@@ -155,6 +158,7 @@ class VideoStreamModel {
   final String quality;
   final Map<String, String> headers;
   final MediaSourceType sourceType;
+  final String thumbnailUrl;
 
   const VideoStreamModel({
     required this.url,
@@ -163,6 +167,7 @@ class VideoStreamModel {
     required this.quality,
     required this.headers,
     required this.sourceType,
+    required this.thumbnailUrl,
   });
 
   factory VideoStreamModel.fromJson(Map<String, dynamic> json) {
@@ -174,6 +179,7 @@ class VideoStreamModel {
       headers: (json['headers'] as Map<String, dynamic>? ?? const {})
           .map((key, value) => MapEntry(key, value.toString())),
       sourceType: MediaSourceType.fromApi(json['source_type'] as String?),
+      thumbnailUrl: json['thumbnail'] as String? ?? '',
     );
   }
 }

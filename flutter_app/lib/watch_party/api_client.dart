@@ -214,30 +214,26 @@ class ApiClient {
   }
 
   Future<RoomModel> createRoom({
-    required String title,
-    required String description,
-    required String theme,
     required String videoUrl,
     required MediaSourceType sourceType,
     required bool isPrivate,
-    required bool allowGuestsControl,
   }) async {
     final response = await http.post(
       Uri.parse('$baseUrl/api/rooms/'),
       headers: headers,
       body: jsonEncode({
-        'title': title,
-        'description': description,
-        'theme': theme,
+        'title': '',
         'vk_video_url': videoUrl,
         'media_url': videoUrl,
         'source_type': sourceType.apiValue,
         'is_private': isPrivate,
-        'allow_guests_control': allowGuestsControl,
       }),
     );
     return RoomModel.fromJson(_decodeMap(response));
   }
+
+  String roomInviteUrl(String inviteCode) =>
+      '$baseUrl/join/${Uri.encodeComponent(inviteCode.toUpperCase())}';
 
   Future<RoomModel> joinRoom(String code) async {
     final response = await http.post(
