@@ -286,8 +286,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                                 ),
                                 child: createAccount && usernameHasValue
                                     ? Padding(
-                                        key: ValueKey(
-                                            'preview-$normalizedUsername'),
+                                        key: const ValueKey('profile-preview'),
                                         padding: const EdgeInsets.only(top: 8),
                                         child: _ProfilePreview(
                                           nickname: nickname.text,
@@ -483,14 +482,14 @@ class _ProfilePreview extends StatelessWidget {
                 ? Colors.redAccent
                 : Colors.white38;
     final statusText = !valid
-        ? 'Начни с английской буквы'
+        ? 'Start with A–Z · 3–30 chars'
         : checking
-            ? 'Проверяем…'
+            ? 'Checking…'
             : available == true
-                ? 'Username свободен'
+                ? 'Username available'
                 : available == false
-                    ? 'Username занят'
-                    : 'Проверка недоступна';
+                    ? 'Username taken'
+                    : 'Check unavailable';
     final displayName =
         nickname.trim().isEmpty ? 'Твой nickname' : nickname.trim();
 
