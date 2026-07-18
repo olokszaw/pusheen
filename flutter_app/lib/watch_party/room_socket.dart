@@ -31,8 +31,18 @@ class RoomSocket {
     }));
   }
 
-  void sendChat(String text) =>
-      _channel.sink.add(jsonEncode({'type': 'chat_message', 'text': text}));
+  void sendChat(String text, {String imageDataUrl = ''}) =>
+      _channel.sink.add(jsonEncode({
+        'type': 'chat_message',
+        'text': text,
+        'image_data_url': imageDataUrl
+      }));
+  void toggleReaction(int messageId, String emoji) =>
+      _channel.sink.add(jsonEncode({
+        'type': 'message_reaction',
+        'message_id': messageId,
+        'emoji': emoji
+      }));
   void requestState() =>
       _channel.sink.add(jsonEncode({'type': 'request_state'}));
   Future<void> close() => _channel.sink.close();

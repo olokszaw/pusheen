@@ -53,12 +53,16 @@ class RoomModel {
 class RoomMemberModel {
   final int userId;
   final String username;
+  final String nickname;
+  final String avatarDataUrl;
   final bool isOwner;
   final bool isOnline;
 
   const RoomMemberModel({
     required this.userId,
     required this.username,
+    required this.nickname,
+    required this.avatarDataUrl,
     required this.isOwner,
     required this.isOnline,
   });
@@ -67,15 +71,23 @@ class RoomMemberModel {
     return RoomMemberModel(
       userId: json['user_id'] as int,
       username: json['username'] as String,
+      nickname: json['nickname'] as String? ?? json['username'] as String,
+      avatarDataUrl: json['avatar_data_url'] as String? ?? '',
       isOwner: json['is_owner'] as bool? ?? false,
       isOnline: json['is_online'] as bool? ?? false,
     );
   }
 
-  RoomMemberModel copyWith({String? username, bool? isOnline}) {
+  RoomMemberModel copyWith(
+      {String? username,
+      String? nickname,
+      String? avatarDataUrl,
+      bool? isOnline}) {
     return RoomMemberModel(
       userId: userId,
       username: username ?? this.username,
+      nickname: nickname ?? this.nickname,
+      avatarDataUrl: avatarDataUrl ?? this.avatarDataUrl,
       isOwner: isOwner,
       isOnline: isOnline ?? this.isOnline,
     );
@@ -84,22 +96,56 @@ class RoomMemberModel {
 
 class ChatMessageModel {
   final int id;
+  final int authorId;
   final String author;
+  final String nickname;
+  final String avatarDataUrl;
   final String text;
+  final String imageDataUrl;
+  final List<MessageReactionModel> reactions;
 
   const ChatMessageModel({
     required this.id,
+    required this.authorId,
     required this.author,
+    required this.nickname,
+    required this.avatarDataUrl,
     required this.text,
+    required this.imageDataUrl,
+    required this.reactions,
   });
 
   factory ChatMessageModel.fromJson(Map<String, dynamic> json) {
     return ChatMessageModel(
       id: json['id'] as int,
+      authorId: json['author_id'] as int? ?? 0,
       author: json['author'] as String,
+      nickname: json['nickname'] as String? ?? json['author'] as String,
+      avatarDataUrl: json['avatar_data_url'] as String? ?? '',
       text: json['text'] as String,
+      imageDataUrl: json['image_data_url'] as String? ?? '',
+      reactions: (json['reactions'] as List<dynamic>? ?? const [])
+          .map((item) =>
+              MessageReactionModel.fromJson(item as Map<String, dynamic>))
+          .toList(),
     );
   }
+}
+
+class MessageReactionModel {
+  final String emoji;
+  final int count;
+  final bool reacted;
+
+  const MessageReactionModel(
+      {required this.emoji, required this.count, required this.reacted});
+
+  factory MessageReactionModel.fromJson(Map<String, dynamic> json) =>
+      MessageReactionModel(
+        emoji: json['emoji'] as String,
+        count: json['count'] as int? ?? 0,
+        reacted: json['reacted'] as bool? ?? false,
+      );
 }
 
 class VideoStreamModel {

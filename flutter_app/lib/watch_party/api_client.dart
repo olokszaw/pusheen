@@ -13,6 +13,8 @@ class ApiClient {
   static const _tokenKey = 'pulse_auth_token';
   static const _userIdKey = 'pulse_user_id';
   static const _usernameKey = 'pulse_username';
+  static const _nicknameKey = 'pulse_nickname';
+  static const _avatarKey = 'pulse_avatar';
   // Temporary Cloudflare tunnel. If it changes, rebuild with
   // --dart-define=API_BASE_URL=https://new-address.trycloudflare.com
   static const _defaultBaseUrl =
@@ -26,6 +28,8 @@ class ApiClient {
   String? token;
   int? userId;
   String? username;
+  String? nickname;
+  String? avatarDataUrl;
 
   ApiClient({String? baseUrl})
       : baseUrl = (baseUrl ?? _configuredBaseUrl).trim().isEmpty
@@ -46,12 +50,15 @@ class ApiClient {
     final savedToken = preferences.getString(_tokenKey);
     final savedUserId = preferences.getInt(_userIdKey);
     final savedUsername = preferences.getString(_usernameKey);
+    final savedNickname = preferences.getString(_nicknameKey);
     if (savedToken == null || savedUserId == null || savedUsername == null) {
       return false;
     }
     token = savedToken;
     userId = savedUserId;
     username = savedUsername;
+    nickname = savedNickname ?? savedUsername;
+    avatarDataUrl = preferences.getString(_avatarKey) ?? '';
     try {
       final response = await http
           .get(
@@ -62,6 +69,8 @@ class ApiClient {
       final data = _decodeMap(response);
       userId = data['user_id'] as int;
       username = data['username'] as String;
+      nickname = data['nickname'] as String? ?? username;
+      avatarDataUrl = data['avatar_data_url'] as String? ?? '';
       await saveSession();
       return true;
     } on Object {
@@ -75,16 +84,22 @@ class ApiClient {
     await preferences.setString(_tokenKey, token!);
     await preferences.setInt(_userIdKey, userId!);
     await preferences.setString(_usernameKey, username!);
+    await preferences.setString(_nicknameKey, nickname ?? username!);
+    await preferences.setString(_avatarKey, avatarDataUrl ?? '');
   }
 
   Future<void> logout() async {
     token = null;
     userId = null;
     username = null;
+    nickname = null;
+    avatarDataUrl = null;
     final preferences = await SharedPreferences.getInstance();
     await preferences.remove(_tokenKey);
     await preferences.remove(_userIdKey);
     await preferences.remove(_usernameKey);
+    await preferences.remove(_nicknameKey);
+    await preferences.remove(_avatarKey);
   }
 
   Future<void> login(String name) async {
@@ -107,7 +122,55 @@ class ApiClient {
     token = data['token'] as String;
     userId = data['user_id'] as int;
     username = data['username'] as String;
+    nickname = data['nickname'] as String? ?? username;
+    avatarDataUrl = data['avatar_data_url'] as String? ?? '';
     await saveSession();
+  }
+
+  Future<bool> usernameAvailable(String value) async {
+    final response = await http.get(Uri.parse(
+        '$baseUrl/api/auth/username-available/?username=${Uri.encodeQueryComponent(value.trim())}'));
+    return _decodeMap(response)['available'] as bool? ?? false;
+  }
+
+  Future<void> register(
+      {required String nickname,
+      required String username,
+      required String password}) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/api/auth/register/'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'nickname': nickname.trim(),
+            'username': username.trim(),
+            'password': password
+          }),
+        )
+        .timeout(_loginTimeout);
+    _applyAuth(_decodeMap(response));
+    await saveSession();
+  }
+
+  Future<void> accountLogin(
+      {required String username, required String password}) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/api/auth/login/'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({'username': username.trim(), 'password': password}),
+        )
+        .timeout(_loginTimeout);
+    _applyAuth(_decodeMap(response));
+    await saveSession();
+  }
+
+  void _applyAuth(Map<String, dynamic> data) {
+    token = data['token'] as String;
+    userId = data['user_id'] as int;
+    username = data['username'] as String;
+    nickname = data['nickname'] as String? ?? username;
+    avatarDataUrl = data['avatar_data_url'] as String? ?? '';
   }
 
   Future<void> updateUsername(String value) async {
@@ -119,6 +182,23 @@ class ApiClient {
     final data = _decodeMap(response);
     userId = data['user_id'] as int;
     username = data['username'] as String;
+    await saveSession();
+  }
+
+  Future<void> updateProfile({String? nickname, String? avatarDataUrl}) async {
+    final response = await http.patch(
+      Uri.parse('$baseUrl/api/profile/'),
+      headers: headers,
+      body: jsonEncode({
+        if (nickname != null) 'nickname': nickname.trim(),
+        if (avatarDataUrl != null) 'avatar_data_url': avatarDataUrl
+      }),
+    );
+    final data = _decodeMap(response);
+    userId = data['user_id'] as int;
+    username = data['username'] as String;
+    this.nickname = data['nickname'] as String? ?? username;
+    this.avatarDataUrl = data['avatar_data_url'] as String? ?? '';
     await saveSession();
   }
 

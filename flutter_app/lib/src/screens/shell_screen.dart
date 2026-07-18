@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../watch_party/api_client.dart';
 import '../models/room.dart';
@@ -115,36 +119,95 @@ class _ShellScreenState extends State<ShellScreen> {
     return Scaffold(
       body: GlowScaffold(
           child: SafeArea(child: IndexedStack(index: index, children: pages))),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-          child: GlassCard(
-            padding: EdgeInsets.zero,
-            borderRadius: const BorderRadius.all(Radius.circular(24)),
-            child: NavigationBar(
-              backgroundColor: Colors.transparent,
-              elevation: 0,
-              selectedIndex: index,
-              onDestinationSelected: (value) => setState(() => index = value),
-              destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.home_rounded), label: 'Главная'),
-          NavigationDestination(
-              icon: Icon(Icons.search_rounded), label: 'Поиск'),
-          NavigationDestination(
-              icon: Icon(Icons.add_circle_outline_rounded), label: 'Создать'),
-          NavigationDestination(
-              icon: Icon(Icons.video_library_rounded), label: 'Комнаты'),
-          NavigationDestination(
-              icon: Icon(Icons.person_rounded), label: 'Профиль'),
-              ],
-            ),
-          ),
-        ),
+      bottomNavigationBar: _CompactNavigation(
+        index: index,
+        onChanged: (value) => setState(() => index = value),
       ),
     );
   }
+}
+
+class _CompactNavigation extends StatelessWidget {
+  final int index;
+  final ValueChanged<int> onChanged;
+  const _CompactNavigation({required this.index, required this.onChanged});
+
+  static const items = [
+    (Icons.home_rounded, 'Главная'),
+    (Icons.search_rounded, 'Поиск'),
+    (Icons.add_rounded, 'Создать'),
+    (Icons.video_library_rounded, 'Комнаты'),
+    (Icons.person_rounded, 'Профиль'),
+  ];
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 9),
+          child: GlassCard(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 7),
+            borderRadius: const BorderRadius.all(Radius.circular(22)),
+            child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  for (var i = 0; i < items.length; i++)
+                    Flexible(
+                      flex: i == index ? 3 : 1,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(17),
+                        onTap: () => onChanged(i),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 240),
+                          curve: Curves.easeOutCubic,
+                          height: 42,
+                          padding: EdgeInsets.symmetric(
+                              horizontal: i == index ? 12 : 8),
+                          decoration: BoxDecoration(
+                            color: i == index
+                                ? pulsePurple.withValues(alpha: .28)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(17),
+                            border: Border.all(
+                                color: i == index
+                                    ? const Color(0xFFCDB8FF)
+                                        .withValues(alpha: .22)
+                                    : Colors.transparent),
+                          ),
+                          child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TweenAnimationBuilder<double>(
+                                  tween: Tween(
+                                      begin: .9, end: i == index ? 1.08 : .92),
+                                  duration: const Duration(milliseconds: 220),
+                                  builder: (_, scale, child) => Transform.scale(
+                                      scale: scale, child: child),
+                                  child: Icon(items[i].$1, size: 21),
+                                ),
+                                AnimatedSize(
+                                  duration: const Duration(milliseconds: 220),
+                                  curve: Curves.easeOutCubic,
+                                  child: i == index
+                                      ? Padding(
+                                          padding:
+                                              const EdgeInsets.only(left: 7),
+                                          child: Text(items[i].$2,
+                                              maxLines: 1,
+                                              style: const TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w800)))
+                                      : const SizedBox.shrink(),
+                                ),
+                              ]),
+                        ),
+                      ),
+                    ),
+                ]),
+          ),
+        ),
+      );
 }
 
 class _HomePage extends StatelessWidget {
@@ -181,7 +244,7 @@ class _HomePage extends StatelessWidget {
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                    Text('Привет, ${api.username ?? 'друг'}!',
+                    Text('Привет, ${api.nickname ?? api.username ?? 'друг'}!',
                         style: const TextStyle(fontWeight: FontWeight.w800)),
                     const Text('В сети',
                         style:
@@ -413,7 +476,7 @@ class _ProfilePageState extends State<_ProfilePage> {
   }
 
   Future<void> editUsername() async {
-    final controller = TextEditingController(text: widget.api.username);
+    final controller = TextEditingController(text: widget.api.nickname);
     final value = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -437,9 +500,9 @@ class _ProfilePageState extends State<_ProfilePage> {
       ),
     );
     controller.dispose();
-    if (value == null || value.trim() == widget.api.username) return;
+    if (value == null || value.trim() == widget.api.nickname) return;
     try {
-      await widget.api.updateUsername(value);
+      await widget.api.updateProfile(nickname: value);
       if (mounted) setState(() {});
     } on Object catch (error) {
       if (!mounted) return;
@@ -449,21 +512,57 @@ class _ProfilePageState extends State<_ProfilePage> {
     }
   }
 
+  Future<void> editAvatar() async {
+    final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 76,
+        maxWidth: 900,
+        maxHeight: 900);
+    if (image == null) return;
+    final bytes = await image.readAsBytes();
+    if (bytes.length > 2 * 1024 * 1024) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Изображение слишком большое')));
+      return;
+    }
+    final value = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+    await widget.api.updateProfile(avatarDataUrl: value);
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) =>
       ListView(padding: const EdgeInsets.all(18), children: [
         const SizedBox(height: 12),
-        const Center(
-            child: CircleAvatar(
-                radius: 44, child: Icon(Icons.person_rounded, size: 42))),
+        Center(
+            child: GestureDetector(
+                onTap: editAvatar,
+                child: Stack(clipBehavior: Clip.none, children: [
+                  CircleAvatar(
+                      radius: 44,
+                      backgroundImage: _profileImage(widget.api.avatarDataUrl),
+                      child: (widget.api.avatarDataUrl ?? '').isEmpty
+                          ? const Icon(Icons.person_rounded, size: 42)
+                          : null),
+                  Positioned(
+                      right: -3,
+                      bottom: -3,
+                      child: CircleAvatar(
+                          radius: 15,
+                          backgroundColor: pulsePurple,
+                          child: const Icon(Icons.photo_camera_outlined,
+                              size: 15))),
+                ]))),
         const SizedBox(height: 12),
         Center(
-            child: Text(widget.api.username ?? 'Пользователь',
+            child: Text(widget.api.nickname ?? 'Пользователь',
                 style: const TextStyle(
                     fontSize: 22, fontWeight: FontWeight.w800))),
         const SizedBox(height: 4),
         Center(
-            child: Text('Внутренний ID: ${widget.api.userId ?? '—'}',
+            child: Text(
+                '@${widget.api.username ?? 'username'} · ID ${widget.api.userId ?? '—'}',
                 style: const TextStyle(fontSize: 12, color: Colors.white54))),
         const SizedBox(height: 24),
         GlassCard(
@@ -471,7 +570,7 @@ class _ProfilePageState extends State<_ProfilePage> {
           ListTile(
               leading: const Icon(Icons.edit_rounded),
               title: const Text('Изменить ник'),
-              subtitle: Text(widget.api.username ?? ''),
+              subtitle: Text(widget.api.nickname ?? ''),
               trailing: const Icon(Icons.chevron_right),
               onTap: editUsername),
           ListTile(
@@ -499,4 +598,14 @@ class _ProfilePageState extends State<_ProfilePage> {
           ),
         ]))
       ]);
+
+  ImageProvider? _profileImage(String? dataUrl) {
+    if (dataUrl == null || !dataUrl.contains(',')) return null;
+    try {
+      return MemoryImage(
+          Uint8List.fromList(base64Decode(dataUrl.split(',').last)));
+    } on Object {
+      return null;
+    }
+  }
 }
