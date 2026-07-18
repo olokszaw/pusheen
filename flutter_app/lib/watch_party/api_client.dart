@@ -128,8 +128,10 @@ class ApiClient {
   }
 
   Future<bool> usernameAvailable(String value) async {
-    final response = await http.get(Uri.parse(
-        '$baseUrl/api/auth/username-available/?username=${Uri.encodeQueryComponent(value.trim())}'));
+    final response = await http.get(
+        Uri.parse(
+            '$baseUrl/api/auth/username-available/?username=${Uri.encodeQueryComponent(value.trim())}'),
+        headers: headers);
     return _decodeMap(response)['available'] as bool? ?? false;
   }
 

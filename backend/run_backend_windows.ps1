@@ -1,20 +1,25 @@
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-if (-not (Test-Path ".env")) {
-    throw "Missing .env. Run .\install_windows.ps1 first."
-}
-
-foreach ($line in Get-Content ".env") {
-    $trimmed = $line.Trim()
-    if (-not $trimmed -or $trimmed.StartsWith("#")) { continue }
-    $parts = $trimmed.Split("=", 2)
-    if ($parts.Count -eq 2) {
-        [Environment]::SetEnvironmentVariable($parts[0], $parts[1], "Process")
+# Run this in one PowerShell window on the server.
+$venvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $venvPython) {
+    & $venvPython manage.py migrate
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Database migrations failed. Backend was not started.'
     }
+    & $venvPython -m daphne -b 127.0.0.1 -p 8000 config.asgi:application
+} elseif ($pythonCommand) {
+    & $pythonCommand.Source manage.py migrate
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Database migrations failed. Backend was not started.'
+    }
+    & $pythonCommand.Source -m daphne -b 127.0.0.1 -p 8000 config.asgi:application
+} else {
+    py manage.py migrate
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Database migrations failed. Backend was not started.'
+    }
+    py -m daphne -b 127.0.0.1 -p 8000 config.asgi:application
 }
-
-$python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
-& $python manage.py migrate --noinput
-if ($LASTEXITCODE -ne 0) { throw "Database migration failed." }
-& .\.venv\Scripts\daphne.exe -b 127.0.0.1 -p 8000 config.asgi:application

@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Pusheen</string>
+	<string>Pulse</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Pusheen</string>
+	<string>Pulse</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Pulse подключается к серверу комнаты в локальной сети для синхронного просмотра.</string>
 	<key>NSAppTransportSecurity</key>

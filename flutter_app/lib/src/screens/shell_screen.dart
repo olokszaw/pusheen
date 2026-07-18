@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -531,6 +532,26 @@ class _ProfilePageState extends State<_ProfilePage> {
     if (mounted) setState(() {});
   }
 
+  Future<void> editUniqueUsername() async {
+    final changed = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (_, __, ___) => _UsernameEditorDialog(api: widget.api),
+      transitionBuilder: (_, animation, __, child) => FadeTransition(
+        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+        child: ScaleTransition(
+          scale: Tween(begin: .94, end: 1.0).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutBack)),
+          child: child,
+        ),
+      ),
+    );
+    if (changed == true && mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) =>
       ListView(padding: const EdgeInsets.all(18), children: [
@@ -561,9 +582,18 @@ class _ProfilePageState extends State<_ProfilePage> {
                     fontSize: 22, fontWeight: FontWeight.w800))),
         const SizedBox(height: 4),
         Center(
-            child: Text(
-                '@${widget.api.username ?? 'username'} · ID ${widget.api.userId ?? '—'}',
-                style: const TextStyle(fontSize: 12, color: Colors.white54))),
+            child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: editUniqueUsername,
+                child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    child: Text('@${widget.api.username ?? 'username'}',
+                        style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.white60,
+                            decoration: TextDecoration.underline,
+                            decorationColor: Colors.white24))))),
         const SizedBox(height: 24),
         GlassCard(
             child: Column(children: [
@@ -573,6 +603,12 @@ class _ProfilePageState extends State<_ProfilePage> {
               subtitle: Text(widget.api.nickname ?? ''),
               trailing: const Icon(Icons.chevron_right),
               onTap: editUsername),
+          ListTile(
+              leading: const Icon(Icons.alternate_email_rounded),
+              title: const Text('Изменить username'),
+              subtitle: Text('@${widget.api.username ?? ''}'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: editUniqueUsername),
           ListTile(
               leading: const Icon(Icons.palette_outlined),
               title: const Text('Тема интерфейса'),
@@ -607,5 +643,184 @@ class _ProfilePageState extends State<_ProfilePage> {
     } on Object {
       return null;
     }
+  }
+}
+
+class _UsernameEditorDialog extends StatefulWidget {
+  final ApiClient api;
+  const _UsernameEditorDialog({required this.api});
+
+  @override
+  State<_UsernameEditorDialog> createState() => _UsernameEditorDialogState();
+}
+
+class _UsernameEditorDialogState extends State<_UsernameEditorDialog> {
+  static final _pattern = RegExp(r'^[A-Za-z][A-Za-z0-9_]{2,29}$');
+  late final TextEditingController controller;
+  Timer? debounce;
+  bool checking = false;
+  bool? available;
+  String checkedValue = '';
+
+  String get value => controller.text.trim();
+  bool get valid => _pattern.hasMatch(value);
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: widget.api.username ?? '');
+    controller.addListener(_scheduleCheck);
+    _scheduleCheck();
+  }
+
+  void _scheduleCheck() {
+    debounce?.cancel();
+    final candidate = value;
+    setState(() {
+      checking = valid;
+      available = valid ? null : false;
+    });
+    if (!valid) return;
+    debounce = Timer(const Duration(milliseconds: 320), () async {
+      try {
+        final result = await widget.api.usernameAvailable(candidate);
+        if (!mounted || value != candidate) return;
+        setState(() {
+          checkedValue = candidate;
+          available = result;
+          checking = false;
+        });
+      } on Object {
+        if (mounted && value == candidate) {
+          setState(() {
+            available = false;
+            checking = false;
+          });
+        }
+      }
+    });
+  }
+
+  Future<void> save() async {
+    if (!valid || available != true || checkedValue != value) return;
+    setState(() => checking = true);
+    try {
+      await widget.api.updateUsername(value);
+      if (mounted) Navigator.pop(context, true);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        available = false;
+        checking = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось изменить username: $error')));
+    }
+  }
+
+  @override
+  void dispose() {
+    debounce?.cancel();
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = !valid
+        ? Colors.amberAccent
+        : available == false
+            ? Colors.redAccent
+            : available == true
+                ? const Color(0xFF69E6B2)
+                : Colors.white54;
+    final status = !valid
+        ? 'Start with A–Z · 3–30 chars'
+        : checking || available == null
+            ? 'Checking…'
+            : available!
+                ? 'Username available'
+                : 'Username taken';
+    return SafeArea(
+      child: Center(
+        child: Material(
+          color: Colors.transparent,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 430),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: GlassCard(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Row(children: [
+                    Icon(Icons.alternate_email_rounded,
+                        color: Color(0xFFD1B5FF)),
+                    SizedBox(width: 10),
+                    Text('Change username',
+                        style: TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.w800)),
+                  ]),
+                  const SizedBox(height: 18),
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    maxLength: 30,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    keyboardType: TextInputType.text,
+                    decoration: InputDecoration(
+                      prefixText: '@',
+                      labelText: 'Username',
+                      counterText: '',
+                      suffixIcon: checking
+                          ? const Padding(
+                              padding: EdgeInsets.all(14),
+                              child: SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2)))
+                          : Icon(
+                              available == true
+                                  ? Icons.check_circle_rounded
+                                  : available == false
+                                      ? Icons.error_outline_rounded
+                                      : Icons.alternate_email_rounded,
+                              color: statusColor),
+                    ),
+                    onSubmitted: (_) => save(),
+                  ),
+                  const SizedBox(height: 8),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 160),
+                    child: Align(
+                      key: ValueKey(status),
+                      alignment: Alignment.centerLeft,
+                      child: Text(status,
+                          style: TextStyle(fontSize: 12, color: statusColor)),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(children: [
+                    Expanded(
+                        child: TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Cancel'))),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: valid && available == true && !checking
+                            ? save
+                            : null,
+                        child: const Text('Save'),
+                      ),
+                    ),
+                  ])
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

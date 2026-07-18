@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.db import transaction
-from .models import ChatMessage, ClientIdentity, PlaybackState, Room, RoomMember
+from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomMember
 
 
 class RoomConsumer(AsyncJsonWebsocketConsumer):
@@ -17,17 +17,15 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json({"type": "playback_state", **await self.current_state()})
         presence = await self.mark_connected()
         await self.channel_layer.group_send(
-            self.group_name,
-            {"type": "room.presence", "payload": presence},
+            self.group_name, {"type": "room.presence", "payload": presence}
         )
 
     async def disconnect(self, _code):
-        if hasattr(self, "room_id") and self.scope.get("user") and self.scope["user"].is_authenticated:
+        if hasattr(self, "room_id") and self.scope["user"].is_authenticated:
             presence = await self.mark_disconnected()
             if presence:
                 await self.channel_layer.group_send(
-                    self.group_name,
-                    {"type": "room.presence", "payload": presence},
+                    self.group_name, {"type": "room.presence", "payload": presence}
                 )
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
@@ -38,7 +36,9 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         elif event == "playback_command":
             await self.apply_playback_command(content)
         elif event == "chat_message":
-            await self.broadcast_chat(content.get("text", ""))
+            await self.broadcast_chat(content.get("text", ""), content.get("image_data_url", ""))
+        elif event == "message_reaction":
+            await self.toggle_reaction(content.get("message_id"), content.get("emoji", ""))
 
     async def apply_playback_command(self, content):
         # Client input is never trusted: only the creator can change global playback.
@@ -67,26 +67,37 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             }
         )
 
-    async def broadcast_chat(self, text):
+    async def broadcast_chat(self, text, image_data_url):
         text = text.strip()[:500]
-        if text:
-            message = await self.save_chat(text)
-            await self.channel_layer.group_send(self.group_name, {
-                "type": "room.chat",
-                "id": message["id"],
-                "author": self.scope["user"].username,
-                "avatar": message["avatar"],
-                "text": text,
-            })
+        image_data_url = image_data_url.strip()
+        if len(image_data_url) > 2_800_000:
+            await self.send_json({"type": "error", "detail": "Изображение слишком большое"})
+            return
+        if text or image_data_url:
+            message = await self.save_chat(text, image_data_url)
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "room.chat", "payload": message},
+            )
 
     async def room_chat(self, event):
-        await self.send_json({
-            "type": "chat_message",
-            "id": event["id"],
-            "author": event["author"],
-            "avatar": event.get("avatar", ""),
-            "text": event["text"],
-        })
+        await self.send_json({"type": "chat_message", **event["payload"]})
+
+    async def toggle_reaction(self, message_id, emoji):
+        emoji = emoji.strip()[:32]
+        if not emoji or not message_id:
+            return
+        payload = await self.save_reaction(int(message_id), emoji)
+        if payload:
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "room.reaction", "payload": payload},
+            )
+
+    async def room_reaction(self, event):
+        payload = dict(event["payload"])
+        payload["reacted"] = self.scope["user"].id in payload.pop("user_ids")
+        await self.send_json({"type": "message_reaction", **payload})
 
     async def room_presence(self, event):
         await self.send_json({"type": "presence", **event["payload"]})
@@ -118,32 +129,64 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         return {"room_id": room.id, "command": action, "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
 
     @database_sync_to_async
-    def save_chat(self, text):
+    def save_chat(self, text, image_data_url):
         message = ChatMessage.objects.create(
             room_id=self.room_id,
             user=self.scope["user"],
             text=text,
+            image_data_url=image_data_url,
         )
-        identity = ClientIdentity.objects.filter(user=self.scope["user"]).first()
+        profile = getattr(self.scope["user"], "watch_profile", None)
+        identity = getattr(self.scope["user"], "client_identity", None)
         return {
             "id": message.id,
-            "avatar": identity.avatar_data_url if identity else "",
+            "author_id": self.scope["user"].id,
+            "author": self.scope["user"].username,
+            "nickname": profile.nickname if profile else self.scope["user"].username,
+            "avatar_data_url": profile.avatar_data_url if profile and profile.avatar_data_url else getattr(identity, "avatar_data_url", ""),
+            "text": text,
+            "image_data_url": image_data_url,
+            "reactions": [],
+            "created_at": message.created_at.isoformat(),
+        }
+
+    @database_sync_to_async
+    def save_reaction(self, message_id, emoji):
+        try:
+            message = ChatMessage.objects.get(id=message_id, room_id=self.room_id)
+        except ChatMessage.DoesNotExist:
+            return None
+        reaction, created = MessageReaction.objects.get_or_create(
+            message=message,
+            user=self.scope["user"],
+            emoji=emoji,
+        )
+        if not created:
+            reaction.delete()
+        reactions = list(MessageReaction.objects.filter(message=message, emoji=emoji))
+        return {
+            "message_id": message.id,
+            "emoji": emoji,
+            "count": len(reactions),
+            "user_ids": [item.user_id for item in reactions],
         }
 
     @database_sync_to_async
     def mark_connected(self):
         with transaction.atomic():
-            member = RoomMember.objects.select_for_update().select_related("user", "user__client_identity", "room").get(
-                room_id=self.room_id,
-                user=self.scope["user"],
+            member = RoomMember.objects.select_for_update().select_related("user", "room").get(
+                room_id=self.room_id, user=self.scope["user"]
             )
             was_offline = member.active_connections == 0
             member.active_connections += 1
             member.save(update_fields=["active_connections"])
+            profile = getattr(member.user, "watch_profile", None)
+            identity = getattr(member.user, "client_identity", None)
             return {
                 "user_id": member.user_id,
                 "username": member.user.username,
-                "avatar": getattr(member.user, "client_identity", None).avatar_data_url if getattr(member.user, "client_identity", None) else "",
+                "nickname": profile.nickname if profile else member.user.username,
+                "avatar_data_url": profile.avatar_data_url if profile and profile.avatar_data_url else getattr(identity, "avatar_data_url", ""),
                 "is_owner": member.room.owner_id == member.user_id,
                 "is_online": True,
                 "changed": was_offline,
@@ -153,18 +196,20 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     def mark_disconnected(self):
         with transaction.atomic():
             try:
-                member = RoomMember.objects.select_for_update().select_related("user", "user__client_identity", "room").get(
-                    room_id=self.room_id,
-                    user=self.scope["user"],
+                member = RoomMember.objects.select_for_update().select_related("user", "room").get(
+                    room_id=self.room_id, user=self.scope["user"]
                 )
             except RoomMember.DoesNotExist:
                 return None
             member.active_connections = max(0, member.active_connections - 1)
             member.save(update_fields=["active_connections"])
+            profile = getattr(member.user, "watch_profile", None)
+            identity = getattr(member.user, "client_identity", None)
             return {
                 "user_id": member.user_id,
                 "username": member.user.username,
-                "avatar": getattr(member.user, "client_identity", None).avatar_data_url if getattr(member.user, "client_identity", None) else "",
+                "nickname": profile.nickname if profile else member.user.username,
+                "avatar_data_url": profile.avatar_data_url if profile and profile.avatar_data_url else getattr(identity, "avatar_data_url", ""),
                 "is_owner": member.room.owner_id == member.user_id,
                 "is_online": member.active_connections > 0,
                 "changed": member.active_connections == 0,

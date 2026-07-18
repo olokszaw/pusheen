@@ -7,7 +7,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from config.asgi import application
-from .models import PlaybackState, Room, RoomMember
+from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomMember, UserProfile
 
 
 class RoomApiTests(APITestCase):
@@ -20,6 +20,92 @@ class RoomApiTests(APITestCase):
 
     def authenticate(self, token):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+    def test_registration_separates_unique_username_and_repeatable_nickname(self):
+        first = self.client.post(
+            "/api/auth/register/",
+            {"nickname": "Луна", "username": "moon_one", "password": "secret12"},
+            format="json",
+        )
+        second = self.client.post(
+            "/api/auth/register/",
+            {"nickname": "Луна", "username": "moon_two", "password": "secret12"},
+            format="json",
+        )
+        duplicate = self.client.post(
+            "/api/auth/register/",
+            {"nickname": "Другая", "username": "moon_one", "password": "secret12"},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(UserProfile.objects.filter(nickname="Луна").count(), 2)
+
+    def test_username_must_start_with_english_letter(self):
+        invalid_usernames = ["1mpala", "_impala", "импала", "a-b"]
+        for username in invalid_usernames:
+            response = self.client.post(
+                "/api/auth/register/",
+                {
+                    "nickname": "Impala",
+                    "username": username,
+                    "password": "secret12",
+                },
+                format="json",
+            )
+            self.assertEqual(response.status_code, 400, username)
+
+        response = self.client.post(
+            "/api/auth/register/",
+            {
+                "nickname": "Impala",
+                "username": "imp4la_one",
+                "password": "secret12",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+    def test_authenticated_user_can_change_unique_username(self):
+        self.authenticate(self.owner_token)
+        own_name = self.client.get(
+            "/api/auth/username-available/?username=owner"
+        )
+        changed = self.client.patch(
+            "/api/profile/", {"username": "owner_new"}, format="json"
+        )
+        duplicate = self.client.patch(
+            "/api/profile/", {"username": "guest"}, format="json"
+        )
+        invalid = self.client.patch(
+            "/api/profile/", {"username": "1owner"}, format="json"
+        )
+        self.assertTrue(own_name.data["available"])
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(changed.data["username"], "owner_new")
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_message_history_contains_photo_profile_and_reactions(self):
+        profile = UserProfile.objects.create(user=self.owner, nickname="Создатель")
+        profile.avatar_data_url = "data:image/png;base64,AA=="
+        profile.save()
+        room = Room.objects.create(owner=self.owner, title="Чат")
+        RoomMember.objects.create(room=room, user=self.owner)
+        message = ChatMessage.objects.create(
+            room=room,
+            user=self.owner,
+            image_data_url="data:image/png;base64,AA==",
+        )
+        MessageReaction.objects.create(message=message, user=self.owner, emoji="🔥")
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/rooms/{room.id}/messages/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data[0]["nickname"], "Создатель")
+        self.assertTrue(response.data[0]["image_data_url"])
+        self.assertEqual(response.data[0]["reactions"][0]["count"], 1)
+        self.assertTrue(response.data[0]["reactions"][0]["reacted"])
 
     def test_create_room_keeps_one_invite_code(self):
         self.authenticate(self.owner_token)

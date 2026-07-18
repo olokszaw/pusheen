@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fluentui_emoji_icon/fluentui_emoji_icon.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:unicode_emojis/unicode_emojis.dart';
 import 'package:video_player/video_player.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
@@ -825,38 +827,10 @@ class _RoomScreenState extends State<RoomScreen> {
     if (message.systemEvent) return;
     final emoji = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: .3),
-      builder: (_) => SafeArea(
-        child: Center(
-          heightFactor: 1,
-          child: GlassCard(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            borderRadius: const BorderRadius.all(Radius.circular(24)),
-            child: Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final item in const [
-                '😂',
-                '😍',
-                '😮',
-                '😭',
-                '🔥',
-                '👏',
-                '❤️',
-                '👍',
-                '🍿',
-                '🚀'
-              ])
-                InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () => Navigator.pop(context, item),
-                  child: Padding(
-                      padding: const EdgeInsets.all(7),
-                      child: _FluentEmoji(item, size: 27)),
-                ),
-            ]),
-          ),
-        ),
-      ),
+      builder: (_) => const _FluentReactionPicker(),
     );
     if (emoji != null) toggleReaction(message, emoji);
   }
@@ -1277,7 +1251,7 @@ class _RoomScreenState extends State<RoomScreen> {
               color: Colors.white.withValues(alpha: .045),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: Colors.white.withValues(alpha: .07))),
-          child: Text(message.text,
+          child: _FluentText(message.text,
               style: const TextStyle(fontSize: 10, color: Colors.white54)),
         ),
       );
@@ -1320,7 +1294,7 @@ class _RoomScreenState extends State<RoomScreen> {
                       label: message.nickname,
                       radius: 9),
                   const SizedBox(width: 5),
-                  Text(message.nickname,
+                  _FluentText(message.nickname,
                       style: const TextStyle(
                           fontSize: 9, color: Color(0xFFC9B5FF))),
                   const SizedBox(width: 4),
@@ -1897,6 +1871,28 @@ const _fluentEmojiMap = <String, FluentData>{
   '🚀': Fluents.flRocket,
 };
 
+final List<dynamic> _fluentEmojiCatalog = <dynamic>[
+  ...UnicodeEmojis.allEmojis,
+  for (final item in UnicodeEmojis.allEmojis) ...?item.skinVariations,
+];
+
+final Set<String> _allEmojiStrings =
+    _fluentEmojiCatalog.map((item) => item.emoji as String).toSet();
+
+String _emojiUnicodeSlug(String emoji) =>
+    emoji.runes.map((rune) => rune.toRadixString(16).toLowerCase()).join('-');
+
+String _animatedFluentPackage(String emoji) {
+  final first = emoji.runes.isEmpty ? 0 : emoji.runes.first;
+  if (first < 0x1F469) return '@lobehub/fluent-emoji-anim-1';
+  if (first < 0x1F620) return '@lobehub/fluent-emoji-anim-2';
+  if (first < 0x1F9A0) return '@lobehub/fluent-emoji-anim-3';
+  return '@lobehub/fluent-emoji-anim-4';
+}
+
+String _fluentAssetUrl(String package, String emoji, String extension) =>
+    'https://unpkg.com/$package@latest/assets/${_emojiUnicodeSlug(emoji)}.$extension';
+
 class _FluentEmoji extends StatelessWidget {
   final String emoji;
   final double size;
@@ -1904,9 +1900,32 @@ class _FluentEmoji extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fluent = _fluentEmojiMap[emoji];
-    return fluent == null
-        ? Text(emoji, style: TextStyle(fontSize: size))
-        : FluentUiEmojiIcon(fl: fluent, w: size, h: size);
+    final animatedUrl =
+        _fluentAssetUrl(_animatedFluentPackage(emoji), emoji, 'webp');
+    final staticUrl = _fluentAssetUrl('@lobehub/fluent-emoji-3d', emoji, 'svg');
+    return Semantics(
+      label: emoji,
+      child: SizedBox.square(
+        dimension: size,
+        child: Image.network(
+          animatedUrl,
+          width: size,
+          height: size,
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium,
+          errorBuilder: (_, __, ___) => SvgPicture.network(
+            staticUrl,
+            width: size,
+            height: size,
+            fit: BoxFit.contain,
+            placeholderBuilder: (_) => fluent == null
+                ? Text(emoji, style: TextStyle(fontSize: size * .82))
+                : FluentUiEmojiIcon(fl: fluent, w: size, h: size),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1916,34 +1935,120 @@ class _FluentText extends StatelessWidget {
   const _FluentText(this.text, {this.style});
   @override
   Widget build(BuildContext context) {
-    final keys = _fluentEmojiMap.keys.toList()
-      ..sort((a, b) => b.length.compareTo(a.length));
     final spans = <InlineSpan>[];
-    var rest = text;
-    while (rest.isNotEmpty) {
-      String? found;
-      var index = rest.length;
-      for (final key in keys) {
-        final candidate = rest.indexOf(key);
-        if (candidate >= 0 && candidate < index) {
-          index = candidate;
-          found = key;
-        }
-      }
-      if (found == null) {
-        spans.add(TextSpan(text: rest));
-        break;
-      }
-      if (index > 0) spans.add(TextSpan(text: rest.substring(0, index)));
-      spans.add(WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
-          child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 1),
-              child:
-                  _FluentEmoji(found, size: (style?.fontSize ?? 14) * 1.25))));
-      rest = rest.substring(index + found.length);
+    final plain = StringBuffer();
+    void flushPlain() {
+      if (plain.isEmpty) return;
+      spans.add(TextSpan(text: plain.toString()));
+      plain.clear();
     }
+
+    for (final grapheme in text.characters) {
+      if (!_allEmojiStrings.contains(grapheme)) {
+        plain.write(grapheme);
+        continue;
+      }
+      flushPlain();
+      spans.add(WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 1),
+          child: _FluentEmoji(grapheme, size: (style?.fontSize ?? 14) * 1.35),
+        ),
+      ));
+    }
+    flushPlain();
     return Text.rich(TextSpan(style: style, children: spans));
+  }
+}
+
+class _FluentReactionPicker extends StatefulWidget {
+  const _FluentReactionPicker();
+
+  @override
+  State<_FluentReactionPicker> createState() => _FluentReactionPickerState();
+}
+
+class _FluentReactionPickerState extends State<_FluentReactionPicker> {
+  final search = TextEditingController();
+  late List<dynamic> visible;
+
+  @override
+  void initState() {
+    super.initState();
+    visible = _fluentEmojiCatalog;
+    search.addListener(_filter);
+  }
+
+  void _filter() {
+    final query = search.text.trim();
+    setState(() {
+      visible = query.isEmpty
+          ? _fluentEmojiCatalog
+          : UnicodeEmojis.search(query).toList(growable: false);
+    });
+  }
+
+  @override
+  void dispose() {
+    search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final height = MediaQuery.sizeOf(context).height * .72;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+        child: GlassCard(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: SizedBox(
+            height: height,
+            child: Column(children: [
+              Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(20)),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: search,
+                decoration: const InputDecoration(
+                  hintText: 'Search all Fluent Emoji',
+                  prefixIcon: Icon(Icons.search_rounded),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: GridView.builder(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 58,
+                    mainAxisSpacing: 4,
+                    crossAxisSpacing: 4,
+                  ),
+                  itemCount: visible.length,
+                  itemBuilder: (_, index) {
+                    final emoji = visible[index].emoji as String;
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(15),
+                      onTap: () => Navigator.pop(context, emoji),
+                      child: Center(child: _FluentEmoji(emoji, size: 36)),
+                    );
+                  },
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
   }
 }
 
