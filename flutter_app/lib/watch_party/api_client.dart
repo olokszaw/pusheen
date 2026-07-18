@@ -277,7 +277,21 @@ class ApiClient {
   }
 
   dynamic _decode(http.Response response) {
-    final dynamic value = jsonDecode(utf8.decode(response.bodyBytes));
+    final body = utf8.decode(response.bodyBytes).trim();
+    dynamic value;
+    try {
+      value = jsonDecode(body);
+    } on FormatException {
+      final normalizedBody = body.toLowerCase();
+      final isHtml = normalizedBody.startsWith('<!doctype html') ||
+          normalizedBody.startsWith('<html');
+      final message = isHtml
+          ? response.statusCode == 404
+              ? 'Сервер ещё не обновлён: нужный API-адрес не найден.'
+              : 'Сервер вернул веб-страницу вместо ответа приложения.'
+          : 'Сервер вернул некорректный ответ.';
+      throw ApiException(response.statusCode, message);
+    }
     if (response.statusCode >= 400) {
       final detail = value is Map
           ? value['detail']?.toString() ?? value.toString()
