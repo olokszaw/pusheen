@@ -204,6 +204,38 @@ class ApiClient {
     await saveSession();
   }
 
+  Future<List<FriendProfile>> friends({String? username}) async {
+    final suffix = username == null || username.trim().isEmpty
+        ? ''
+        : '?username=${Uri.encodeQueryComponent(username.trim())}';
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/friends/$suffix'),
+      headers: headers,
+    );
+    final data = _decode(response) as List<dynamic>;
+    return data
+        .map((item) => FriendProfile.fromJson(item as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  Future<FriendProfile> addFriend(String username) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/friends/'),
+      headers: headers,
+      body: jsonEncode({'username': username.trim()}),
+    );
+    return FriendProfile.fromJson(_decodeMap(response));
+  }
+
+  Future<void> removeFriend(String username) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/api/friends/'),
+      headers: headers,
+      body: jsonEncode({'username': username.trim()}),
+    );
+    if (response.statusCode != 204) _decodeMap(response);
+  }
+
   Future<List<RoomModel>> rooms() async {
     final response =
         await http.get(Uri.parse('$baseUrl/api/rooms/'), headers: headers);
@@ -301,6 +333,30 @@ class ApiClient {
 
   Map<String, dynamic> _decodeMap(http.Response response) =>
       _decode(response) as Map<String, dynamic>;
+}
+
+class FriendProfile {
+  final int userId;
+  final String username;
+  final String nickname;
+  final String avatarDataUrl;
+  final bool isFriend;
+
+  const FriendProfile({
+    required this.userId,
+    required this.username,
+    required this.nickname,
+    required this.avatarDataUrl,
+    required this.isFriend,
+  });
+
+  factory FriendProfile.fromJson(Map<String, dynamic> json) => FriendProfile(
+        userId: json['user_id'] as int,
+        username: json['username'] as String,
+        nickname: json['nickname'] as String? ?? json['username'] as String,
+        avatarDataUrl: json['avatar_data_url'] as String? ?? '',
+        isFriend: json['is_friend'] as bool? ?? false,
+      );
 }
 
 class ApiException implements Exception {

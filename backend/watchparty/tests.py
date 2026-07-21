@@ -87,6 +87,22 @@ class RoomApiTests(APITestCase):
         self.assertEqual(duplicate.status_code, 409)
         self.assertEqual(invalid.status_code, 400)
 
+    def test_user_can_find_and_add_friend_by_username(self):
+        UserProfile.objects.create(user=self.owner, nickname="Создатель")
+        UserProfile.objects.create(user=self.guest, nickname="Гость")
+        self.authenticate(self.owner_token)
+        search = self.client.get("/api/friends/?username=gue")
+        added = self.client.post(
+            "/api/friends/", {"username": "guest"}, format="json"
+        )
+        friends = self.client.get("/api/friends/")
+        self.assertEqual(search.status_code, 200)
+        self.assertEqual(search.data[0]["username"], "guest")
+        self.assertFalse(search.data[0]["is_friend"])
+        self.assertEqual(added.status_code, 201)
+        self.assertTrue(added.data["is_friend"])
+        self.assertEqual(friends.data[0]["username"], "guest")
+
     def test_message_history_contains_photo_profile_and_reactions(self):
         profile = UserProfile.objects.create(user=self.owner, nickname="Создатель")
         profile.avatar_data_url = "data:image/png;base64,AA=="

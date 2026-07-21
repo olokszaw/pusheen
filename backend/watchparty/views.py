@@ -13,7 +13,15 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .media_sources import detect_media_source
-from .models import ChatMessage, ClientIdentity, PlaybackState, Room, RoomMember, UserProfile
+from .models import (
+    ChatMessage,
+    ClientIdentity,
+    FriendLink,
+    PlaybackState,
+    Room,
+    RoomMember,
+    UserProfile,
+)
 from .permissions import IsRoomOwner
 from .serializers import (
     ChatMessageSerializer,
@@ -154,6 +162,46 @@ def profile(request):
             profile_obj.avatar_data_url = avatar
         profile_obj.save()
     return Response(public_profile(request.user))
+
+
+@api_view(["GET", "POST", "DELETE"])
+def friends(request):
+    """Search profiles and add/remove confirmed friends by @username."""
+    users = get_user_model()
+    if request.method == "GET":
+        query = request.query_params.get("username", "").strip()
+        if query:
+            candidates = (
+                users.objects.filter(username__istartswith=query)
+                .exclude(pk=request.user.pk)
+                .select_related("watch_profile")[:20]
+            )
+            existing = set(
+                FriendLink.objects.filter(user=request.user).values_list("friend_id", flat=True)
+            )
+            return Response([
+                {**public_profile(candidate), "is_friend": candidate.id in existing}
+                for candidate in candidates
+            ])
+        friend_ids = FriendLink.objects.filter(user=request.user).values_list("friend_id", flat=True)
+        result = users.objects.filter(pk__in=friend_ids).select_related("watch_profile")
+        return Response([{**public_profile(user), "is_friend": True} for user in result])
+
+    username = request.data.get("username", "").strip()
+    friend = users.objects.filter(username__iexact=username).first()
+    if not friend:
+        return Response({"detail": "Пользователь не найден"}, status=status.HTTP_404_NOT_FOUND)
+    if friend.pk == request.user.pk:
+        return Response({"detail": "Нельзя добавить самого себя"}, status=status.HTTP_400_BAD_REQUEST)
+    if request.method == "POST":
+        with transaction.atomic():
+            FriendLink.objects.get_or_create(user=request.user, friend=friend)
+            FriendLink.objects.get_or_create(user=friend, friend=request.user)
+        return Response({**public_profile(friend), "is_friend": True}, status=status.HTTP_201_CREATED)
+
+    FriendLink.objects.filter(user=request.user, friend=friend).delete()
+    FriendLink.objects.filter(user=friend, friend=request.user).delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class RoomListCreateView(generics.ListCreateAPIView):

@@ -189,19 +189,15 @@ class _ProviderButton extends StatelessWidget {
 class _VkLogo extends StatelessWidget {
   const _VkLogo();
   @override
-  Widget build(BuildContext context) => Container(
-        width: 45,
-        height: 45,
-        decoration: BoxDecoration(
-          color: const Color(0xFF2787F5).withValues(alpha: .86),
-          borderRadius: BorderRadius.circular(14),
+  Widget build(BuildContext context) => const Text(
+        'VK',
+        style: TextStyle(
+          color: Color(0xFFEDE4FF),
+          fontSize: 25,
+          height: 1,
+          fontWeight: FontWeight.w900,
+          letterSpacing: -2,
         ),
-        alignment: Alignment.center,
-        child: const Text('VK',
-            style: TextStyle(
-                color: Colors.white,
-                fontSize: 17,
-                fontWeight: FontWeight.w900)),
       );
 }
 
@@ -218,7 +214,7 @@ class _GoogleLogo extends StatelessWidget {
         child: const Text('G',
             style: TextStyle(
                 color: Colors.white,
-                fontSize: 42,
+                fontSize: 35,
                 fontWeight: FontWeight.w900)),
       );
 }

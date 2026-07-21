@@ -104,7 +104,7 @@ class _ShellScreenState extends State<ShellScreen> {
           onCreate: createRoom,
           onJoin: joinByCode,
           onOpen: openRoom),
-      _SearchPage(rooms: rooms, onOpen: openRoom),
+      _FriendsPage(api: widget.api),
       CreateRoomScreen(api: widget.api, embedded: true, onCreated: openRoom),
       _RoomsPage(
           rooms: rooms,
@@ -135,7 +135,7 @@ class _CompactNavigation extends StatelessWidget {
 
   static const items = [
     (Icons.home_rounded, 'Главная'),
-    (Icons.search_rounded, 'Поиск'),
+    (Icons.people_alt_rounded, 'Друзья'),
     (Icons.add_rounded, 'Создать'),
     (Icons.video_library_rounded, 'Комнаты'),
     (Icons.person_rounded, 'Профиль'),
@@ -159,8 +159,8 @@ class _CompactNavigation extends StatelessWidget {
                         borderRadius: BorderRadius.circular(17),
                         onTap: () => onChanged(i),
                         child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 190),
-                          curve: Curves.easeOutCubic,
+                          duration: const Duration(milliseconds: 280),
+                          curve: Curves.easeInOutCubicEmphasized,
                           height: 50,
                           padding: EdgeInsets.symmetric(
                               horizontal: i == index ? 12 : 8),
@@ -182,14 +182,14 @@ class _CompactNavigation extends StatelessWidget {
                                 TweenAnimationBuilder<double>(
                                   tween: Tween(
                                       begin: .9, end: i == index ? 1.08 : .92),
-                                  duration: const Duration(milliseconds: 180),
+                                  duration: const Duration(milliseconds: 260),
                                   builder: (_, scale, child) => Transform.scale(
                                       scale: scale, child: child),
                                   child: Icon(items[i].$1, size: 21),
                                 ),
                                 AnimatedSize(
-                                  duration: const Duration(milliseconds: 180),
-                                  curve: Curves.easeOutCubic,
+                                  duration: const Duration(milliseconds: 260),
+                                  curve: Curves.easeInOutCubicEmphasized,
                                   child: i == index
                                       ? Padding(
                                           padding:
@@ -251,9 +251,6 @@ class _HomePage extends StatelessWidget {
                         style:
                             TextStyle(fontSize: 12, color: Color(0xFF8EFFBF)))
                   ])),
-              IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.notifications_none_rounded)),
             ]),
             const SizedBox(height: 22),
             GlassCard(
@@ -451,33 +448,204 @@ class _RoomArtwork extends StatelessWidget {
       );
 }
 
-class _SearchPage extends StatelessWidget {
-  final List<RoomModel> rooms;
-  final ValueChanged<RoomModel> onOpen;
-  const _SearchPage({required this.rooms, required this.onOpen});
+class _FriendsPage extends StatefulWidget {
+  final ApiClient api;
+  const _FriendsPage({required this.api});
+
+  @override
+  State<_FriendsPage> createState() => _FriendsPageState();
+}
+
+class _FriendsPageState extends State<_FriendsPage> {
+  final search = TextEditingController();
+  Timer? debounce;
+  bool expanded = false;
+  bool loading = true;
+  List<FriendProfile> results = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFriends();
+    search.addListener(_scheduleSearch);
+  }
+
+  Future<void> _loadFriends() async {
+    try {
+      final friends = await widget.api.friends();
+      if (mounted) setState(() => results = friends);
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  void _scheduleSearch() {
+    debounce?.cancel();
+    final value = search.text.trim();
+    debounce = Timer(const Duration(milliseconds: 260), () async {
+      if (!mounted) return;
+      if (value.isEmpty) return _loadFriends();
+      if (value.length < 2) return;
+      setState(() => loading = true);
+      try {
+        final found = await widget.api.friends(username: value);
+        if (mounted && value == search.text.trim()) {
+          setState(() => results = found);
+        }
+      } finally {
+        if (mounted && value == search.text.trim()) {
+          setState(() => loading = false);
+        }
+      }
+    });
+  }
+
+  Future<void> _toggleFriend(FriendProfile profile) async {
+    try {
+      if (profile.isFriend) {
+        await widget.api.removeFriend(profile.username);
+      } else {
+        await widget.api.addFriend(profile.username);
+      }
+      _scheduleSearch();
+      if (search.text.trim().isEmpty) await _loadFriends();
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    debounce?.cancel();
+    search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => ListView(
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 108),
+        children: [
+          Row(children: [
+            const Expanded(
+              child: Text('Друзья',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+            ),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeInOutCubicEmphasized,
+              width: expanded ? 220 : 46,
+              height: 46,
+              child: GlassCard(
+                padding: expanded
+                    ? const EdgeInsets.symmetric(horizontal: 4)
+                    : EdgeInsets.zero,
+                borderRadius: BorderRadius.circular(16),
+                child: expanded
+                    ? TextField(
+                        controller: search,
+                        autofocus: true,
+                        decoration: InputDecoration(
+                          hintText: '@username',
+                          isDense: true,
+                          prefixIcon: const Icon(Icons.search_rounded),
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.close_rounded, size: 18),
+                            onPressed: () {
+                              search.clear();
+                              setState(() => expanded = false);
+                            },
+                          ),
+                        ),
+                      )
+                    : IconButton(
+                        tooltip: 'Найти друга',
+                        onPressed: () => setState(() => expanded = true),
+                        icon: const Icon(Icons.person_add_alt_1_rounded),
+                      ),
+              ),
+            )
+          ]),
+          const SizedBox(height: 18),
+          if (loading)
+            const Center(
+                child: Padding(
+              padding: EdgeInsets.all(36),
+              child: CircularProgressIndicator(),
+            ))
+          else if (results.isEmpty)
+            GlassCard(
+              child: Text(expanded && search.text.trim().isNotEmpty
+                  ? 'Пользователей не найдено'
+                  : 'Друзей пока нет. Нажми на иконку справа, чтобы найти человека.'),
+            )
+          else
+            ...results.map((profile) => Padding(
+                  padding: const EdgeInsets.only(bottom: 9),
+                  child: GlassCard(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    child: Row(children: [
+                      _FriendAvatar(
+                          dataUrl: profile.avatarDataUrl,
+                          label: profile.nickname),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(profile.nickname,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800)),
+                              Text('@${profile.username}',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Colors.white54)),
+                            ]),
+                      ),
+                      IconButton(
+                        tooltip: profile.isFriend
+                            ? 'Удалить из друзей'
+                            : 'Добавить в друзья',
+                        onPressed: () => _toggleFriend(profile),
+                        icon: Icon(profile.isFriend
+                            ? Icons.person_remove_alt_1_rounded
+                            : Icons.person_add_alt_1_rounded),
+                        color: profile.isFriend
+                            ? Colors.white70
+                            : const Color(0xFFD3B9FF),
+                      )
+                    ]),
+                  ),
+                )),
+        ],
+      );
+}
+
+class _FriendAvatar extends StatelessWidget {
+  final String dataUrl;
+  final String label;
+  const _FriendAvatar({required this.dataUrl, required this.label});
+
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        const Text('Поиск',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 14),
-        const TextField(
-            decoration: InputDecoration(
-                prefixIcon: Icon(Icons.search), hintText: 'Комнаты и видео')),
-        const SizedBox(height: 20),
-        ...rooms.map(
-          (room) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: GlassCard(
-              onTap: () => onOpen(room),
-              child: Text(room.title,
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ),
-      ],
+    ImageProvider? image;
+    if (dataUrl.contains(',')) {
+      try {
+        image = MemoryImage(base64Decode(dataUrl.split(',').last));
+      } on Object {
+        image = null;
+      }
+    }
+    return CircleAvatar(
+      radius: 22,
+      backgroundImage: image,
+      child: image == null
+          ? Text(label.isEmpty ? '?' : label.characters.first.toUpperCase())
+          : null,
     );
   }
 }
@@ -522,29 +690,11 @@ class _ProfilePageState extends State<_ProfilePage> {
     if (mounted) widget.onLogout();
   }
 
-  Future<void> editUsername() async {
+  Future<void> editNickname() async {
     final controller = TextEditingController(text: widget.api.nickname);
     final value = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Изменить ник'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 30,
-          decoration: const InputDecoration(labelText: 'Новый ник'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Сохранить'),
-          ),
-        ],
-      ),
+      builder: (context) => _NicknameEditorDialog(controller: controller),
     );
     controller.dispose();
     if (value == null || value.trim() == widget.api.nickname) return;
@@ -623,9 +773,20 @@ class _ProfilePageState extends State<_ProfilePage> {
                 ]))),
         const SizedBox(height: 12),
         Center(
-            child: Text(widget.api.nickname ?? 'Пользователь',
-                style: const TextStyle(
-                    fontSize: 22, fontWeight: FontWeight.w800))),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Flexible(
+              child: Text(widget.api.nickname ?? 'Пользователь',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.w800)),
+            ),
+            IconButton(
+                tooltip: 'Изменить ник',
+                visualDensity: VisualDensity.compact,
+                onPressed: editNickname,
+                icon: const Icon(Icons.edit_rounded, size: 17)),
+          ]),
+        ),
         const SizedBox(height: 4),
         Center(
             child: InkWell(
@@ -633,38 +794,27 @@ class _ProfilePageState extends State<_ProfilePage> {
                 onTap: editUniqueUsername,
                 child: Padding(
                     padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    child: Text('@${widget.api.username ?? 'username'}',
-                        style: const TextStyle(
-                            fontSize: 13,
-                            color: Colors.white60,
-                            decoration: TextDecoration.underline,
-                            decorationColor: Colors.white24))))),
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text('@${widget.api.username ?? 'username'}',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.white60,
+                              decoration: TextDecoration.underline,
+                              decorationColor: Colors.white24)),
+                      const SizedBox(width: 2),
+                      const Icon(Icons.edit_rounded,
+                          size: 14, color: Colors.white54),
+                    ])))),
         const SizedBox(height: 24),
         GlassCard(
             child: Column(children: [
-          ListTile(
-              leading: const Icon(Icons.edit_rounded),
-              title: const Text('Изменить ник'),
-              subtitle: Text(widget.api.nickname ?? ''),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: editUsername),
-          ListTile(
-              leading: const Icon(Icons.alternate_email_rounded),
-              title: const Text('Изменить username'),
-              subtitle: Text('@${widget.api.username ?? ''}'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: editUniqueUsername),
           ListTile(
               leading: const Icon(Icons.palette_outlined),
               title: const Text('Тема интерфейса'),
               trailing: IconButton(
                   onPressed: widget.onToggleTheme,
                   icon: const Icon(Icons.brightness_6_rounded))),
-          const ListTile(
-              leading: Icon(Icons.notifications_none),
-              title: Text('Уведомления'),
-              trailing: Icon(Icons.chevron_right)),
           const ListTile(
               leading: Icon(Icons.lock_outline),
               title: Text('Приватность'),
@@ -690,6 +840,64 @@ class _ProfilePageState extends State<_ProfilePage> {
       return null;
     }
   }
+}
+
+class _NicknameEditorDialog extends StatelessWidget {
+  final TextEditingController controller;
+  const _NicknameEditorDialog({required this.controller});
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 390),
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: GlassCard(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Row(children: [
+                    Icon(Icons.edit_rounded, color: Color(0xFFD1B5FF)),
+                    SizedBox(width: 9),
+                    Text('Изменить ник',
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w800)),
+                  ]),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    maxLength: 30,
+                    decoration: const InputDecoration(
+                      labelText: 'Nickname',
+                      counterText: '',
+                    ),
+                    onSubmitted: (value) => Navigator.pop(context, value),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Отмена'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () =>
+                            Navigator.pop(context, controller.text),
+                        child: const Text('Сохранить'),
+                      ),
+                    ),
+                  ])
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 class _UsernameEditorDialog extends StatefulWidget {

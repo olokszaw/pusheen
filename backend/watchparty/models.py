@@ -66,6 +66,28 @@ class UserProfile(models.Model):
         return f"{self.nickname} (@{self.user.username})"
 
 
+class FriendLink(models.Model):
+    """A confirmed, directional row. Adding a friend creates both directions."""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="friend_links"
+    )
+    friend = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="friend_of_links"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "friend"), name="unique_user_friend_link"
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(user=models.F("friend")),
+                name="friend_link_cannot_point_to_self",
+            ),
+        ]
+
+
 class ChatMessage(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="messages")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)

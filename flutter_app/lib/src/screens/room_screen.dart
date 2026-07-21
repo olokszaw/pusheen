@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fluentui_emoji_icon/fluentui_emoji_icon.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:unicode_emojis/unicode_emojis.dart';
 import 'package:video_player/video_player.dart';
@@ -1905,14 +1904,6 @@ final Set<String> _allEmojiStrings =
 String _emojiUnicodeSlug(String emoji) =>
     emoji.runes.map((rune) => rune.toRadixString(16).toLowerCase()).join('-');
 
-String _animatedFluentPackage(String emoji) {
-  final first = emoji.runes.isEmpty ? 0 : emoji.runes.first;
-  if (first < 0x1F469) return '@lobehub/fluent-emoji-anim-1';
-  if (first < 0x1F620) return '@lobehub/fluent-emoji-anim-2';
-  if (first < 0x1F9A0) return '@lobehub/fluent-emoji-anim-3';
-  return '@lobehub/fluent-emoji-anim-4';
-}
-
 String _fluentAssetUrl(String package, String emoji, String extension) =>
     'https://unpkg.com/$package@latest/assets/${_emojiUnicodeSlug(emoji)}.$extension';
 
@@ -1923,29 +1914,29 @@ class _FluentEmoji extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fluent = _fluentEmojiMap[emoji];
-    final animatedUrl =
-        _fluentAssetUrl(_animatedFluentPackage(emoji), emoji, 'webp');
-    final staticUrl = _fluentAssetUrl('@lobehub/fluent-emoji-3d', emoji, 'svg');
+    // The single 3D package contains the whole Fluent set.  The former
+    // animation-package heuristic selected a wrong shard for many emoji,
+    // leaving a half-empty picker and falling back to the device emoji font.
+    final staticUrl =
+        _fluentAssetUrl('@lobehub/fluent-emoji-3d', emoji, 'webp');
     return Semantics(
       label: emoji,
       child: SizedBox.square(
         dimension: size,
         child: Image.network(
-          animatedUrl,
+          staticUrl,
           width: size,
           height: size,
           fit: BoxFit.contain,
           gaplessPlayback: true,
           filterQuality: FilterQuality.medium,
-          errorBuilder: (_, __, ___) => SvgPicture.network(
-            staticUrl,
-            width: size,
-            height: size,
-            fit: BoxFit.contain,
-            placeholderBuilder: (_) => fluent == null
-                ? Text(emoji, style: TextStyle(fontSize: size * .82))
-                : FluentUiEmojiIcon(fl: fluent, w: size, h: size),
-          ),
+          // Never fall back to the platform Unicode glyph: chat must have
+          // one visual emoji language.  The local Fluent icon map covers the
+          // few packaged fallback variants; otherwise retain the exact space
+          // while the CDN retries instead of showing a different emoji.
+          errorBuilder: (_, __, ___) => fluent == null
+              ? SizedBox.square(dimension: size)
+              : FluentUiEmojiIcon(fl: fluent, w: size, h: size),
         ),
       ),
     );
@@ -1995,6 +1986,8 @@ class _FluentReactionPicker extends StatefulWidget {
 class _FluentReactionPickerState extends State<_FluentReactionPicker> {
   final search = TextEditingController();
   late List<dynamic> visible;
+  final pageController = PageController();
+  static const int emojisPerPage = 42;
 
   @override
   void initState() {
@@ -2010,17 +2003,22 @@ class _FluentReactionPickerState extends State<_FluentReactionPicker> {
           ? _fluentEmojiCatalog
           : UnicodeEmojis.search(query).toList(growable: false);
     });
+    if (pageController.hasClients) pageController.jumpToPage(0);
   }
 
   @override
   void dispose() {
     search.dispose();
+    pageController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final height = MediaQuery.sizeOf(context).height * .72;
+    final height =
+        (MediaQuery.sizeOf(context).height * .43).clamp(286.0, 390.0);
+    final pageCount =
+        (visible.length / emojisPerPage).ceil().clamp(1, 9999).toInt();
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
@@ -2048,25 +2046,40 @@ class _FluentReactionPickerState extends State<_FluentReactionPicker> {
               ),
               const SizedBox(height: 8),
               Expanded(
-                child: GridView.builder(
-                  keyboardDismissBehavior:
-                      ScrollViewKeyboardDismissBehavior.onDrag,
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 58,
-                    mainAxisSpacing: 4,
-                    crossAxisSpacing: 4,
-                  ),
-                  itemCount: visible.length,
-                  itemBuilder: (_, index) {
-                    final emoji = visible[index].emoji as String;
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(15),
-                      onTap: () => Navigator.pop(context, emoji),
-                      child: Center(child: _FluentEmoji(emoji, size: 36)),
+                child: PageView.builder(
+                  controller: pageController,
+                  itemCount: pageCount,
+                  itemBuilder: (_, page) {
+                    final start = page * emojisPerPage;
+                    final end = start + emojisPerPage > visible.length
+                        ? visible.length
+                        : start + emojisPerPage;
+                    final pageItems = visible.sublist(start, end);
+                    return GridView.builder(
+                      padding: const EdgeInsets.only(top: 2),
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 7,
+                        mainAxisSpacing: 2,
+                        crossAxisSpacing: 2,
+                      ),
+                      itemCount: pageItems.length,
+                      itemBuilder: (_, index) {
+                        final emoji = pageItems[index].emoji as String;
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(13),
+                          onTap: () => Navigator.pop(context, emoji),
+                          child: Center(child: _FluentEmoji(emoji, size: 31)),
+                        );
+                      },
                     );
                   },
                 ),
               ),
+              const SizedBox(height: 6),
+              Text('Свайпни влево или вправо · $pageCount страниц',
+                  style: const TextStyle(fontSize: 11, color: Colors.white54)),
             ]),
           ),
         ),
