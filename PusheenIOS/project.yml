@@ -1,0 +1,23 @@
+name: Pusheen
+options:
+  bundleIdPrefix: online.izanagi
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    IPHONEOS_DEPLOYMENT_TARGET: 18.0
+targets:
+  Pusheen:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: online.izanagi.pusheen
+        PRODUCT_NAME: Pusheen
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Pusheen
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: Pusheen uses your photo library for chat images and avatars.
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Pusheen uses your photo library for chat images and avatars.

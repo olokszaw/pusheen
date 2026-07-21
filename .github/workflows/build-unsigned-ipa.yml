@@ -20,38 +20,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
-      - name: Install dependencies
-        working-directory: flutter_app
-        run: flutter pub get
+      - name: Generate SwiftUI project
+        working-directory: PusheenIOS
+        run: xcodegen generate
 
-      - name: Generate Pusheen app icons
-        working-directory: flutter_app
-        run: dart run flutter_launcher_icons
-
-      - name: Build unsigned iOS app
-        working-directory: flutter_app
+      - name: Build native SwiftUI app
+        working-directory: PusheenIOS
         run: >-
-          flutter build ios --release --no-codesign
-          --dart-define=API_BASE_URL=$API_BASE_URL
+          xcodebuild -project Pusheen.xcodeproj -scheme Pusheen
+          -configuration Release -sdk iphoneos
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          PUSHEEN_API_BASE_URL=$API_BASE_URL
+          SYMROOT=$PWD/build build
 
       - name: Package IPA for Sideloadly
-        working-directory: flutter_app
+        working-directory: PusheenIOS
         run: |
           rm -rf Payload Pulse-unsigned.ipa
           mkdir Payload
-          cp -R build/ios/iphoneos/Runner.app Payload/
+          cp -R build/Release-iphoneos/Pusheen.app Payload/
           zip -qry Pulse-unsigned.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: Pulse-unsigned-ipa
-          path: flutter_app/Pulse-unsigned.ipa
+          path: PusheenIOS/Pulse-unsigned.ipa
           if-no-files-found: error
           retention-days: 14

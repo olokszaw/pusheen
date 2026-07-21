@@ -1,0 +1,47 @@
+import Foundation
+
+enum APIError: LocalizedError { case invalidURL, server(String); var errorDescription: String? { switch self { case .invalidURL: return "Неверный адрес сервера"; case .server(let text): return text } } }
+
+@MainActor
+final class SessionStore: ObservableObject {
+    @Published var profile: Profile?
+    @Published var token: String?
+    let api = APIClient()
+
+    init() {
+        token = UserDefaults.standard.string(forKey: "pusheen.token")
+        if let token { api.token = token; Task { await restore() } }
+    }
+
+    func restore() async { do { profile = try await api.profile() } catch { logout() } }
+    func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
+    func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
+    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; api.token = auth.token; UserDefaults.standard.set(auth.token, forKey: "pusheen.token") }
+    func logout() { token = nil; profile = nil; api.token = nil; UserDefaults.standard.removeObject(forKey: "pusheen.token") }
+}
+
+final class APIClient {
+    // Set PUSHEEN_API_BASE_URL in the build workflow when the tunnel changes.
+    let baseURL = URL(string: ProcessInfo.processInfo.environment["PUSHEEN_API_BASE_URL"] ?? "https://trio-anderson-istanbul-definition.trycloudflare.com")!
+    var token: String?
+    private let decoder = JSONDecoder()
+
+    private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true) async throws -> Data {
+        guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }
+        var request = URLRequest(url: url); request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if authenticated, let token { request.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
+        if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String ?? "Ошибка сервера"
+            throw APIError.server(detail)
+        }
+        return data
+    }
+    func login(username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/login/", method: "POST", body: ["username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
+    func register(nickname: String, username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/register/", method: "POST", body: ["nickname": nickname, "username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
+    func profile() async throws -> Profile { let data = try await request("/api/profile/"); return try decoder.decode(Profile.self, from: data) }
+    func rooms() async throws -> [Room] { let data = try await request("/api/rooms/"); return try decoder.decode([Room].self, from: data) }
+    func messages(roomID: Int) async throws -> [ChatMessage] { let data = try await request("/api/rooms/\(roomID)/messages/"); return try decoder.decode([ChatMessage].self, from: data) }
+}
