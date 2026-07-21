@@ -94,11 +94,40 @@ struct RoomView: View {
 }
 
 struct VideoPlayerPlaceholder: View {
-    let room: Room; @Binding var showTime: Bool
-    var body: some View { VStack(spacing: 12) { ZStack { AsyncImage(url: URL(string: room.thumbnailURL)) { image in image.resizable().scaledToFill() } placeholder: { Color.black } }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 24)); Image(systemName: "play.fill").font(.system(size: 32)).frame(width: 66, height: 66).liquidCard(Circle()) }
-        Slider(value: .constant(room.playback?.positionSeconds ?? 0), in: 0...max(1, (room.playback?.positionSeconds ?? 0) + 1)).disabled(true)
-        HStack { Button { } label: { Image(systemName: "gobackward.10") }; Button { } label: { Image(systemName: "play.fill") }; Button { } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text("00:00") } }.buttonStyle(.glass)
-    }.padding(12).liquidCard() .sheet(isPresented: $showTime) { TimePickerSheet() }
+    let room: Room
+    @Binding var showTime: Bool
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                AsyncImage(url: URL(string: room.thumbnailURL)) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color.black
+                }
+                .frame(height: 220)
+                .clipShape(RoundedRectangle(cornerRadius: 24))
+                Image(systemName: "play.fill")
+                    .font(.system(size: 32))
+                    .frame(width: 66, height: 66)
+                    .liquidCard(Circle())
+            }
+            Slider(value: .constant(room.playback?.positionSeconds ?? 0),
+                   in: 0...max(1, (room.playback?.positionSeconds ?? 0) + 1))
+                .disabled(true)
+            HStack {
+                Button { } label: { Image(systemName: "gobackward.10") }
+                Button { } label: { Image(systemName: "play.fill") }
+                Button { } label: { Image(systemName: "goforward.10") }
+                Spacer()
+                Button { showTime = true } label: { Text("00:00") }
+            }
+            .buttonStyle(.glass)
+        }
+        .padding(12)
+        .liquidCard()
+        .sheet(isPresented: $showTime) { TimePickerSheet() }
+    }
 }
 
 struct TimePickerSheet: View { @Environment(\.dismiss) private var dismiss; @State private var minute = 0; @State private var second = 0
