@@ -12,9 +12,9 @@ struct AcrylicBackground: View {
     var body: some View {
         ZStack {
             Color(red: 0.025, green: 0.024, blue: 0.075).ignoresSafeArea()
-            Circle().fill(.purple.opacity(.50)).frame(width: 340).blur(radius: 85).offset(x: -170, y: -330)
-            Circle().fill(.pink.opacity(.30)).frame(width: 290).blur(radius: 95).offset(x: 180, y: 390)
-            Circle().fill(.blue.opacity(.27)).frame(width: 240).blur(radius: 90).offset(x: 190, y: 70)
+            Circle().fill(.purple.opacity(0.50)).frame(width: 340).blur(radius: 85).offset(x: -170, y: -330)
+            Circle().fill(.pink.opacity(0.30)).frame(width: 290).blur(radius: 95).offset(x: 180, y: 390)
+            Circle().fill(.blue.opacity(0.27)).frame(width: 240).blur(radius: 90).offset(x: 190, y: 70)
         }
     }
 }
@@ -22,7 +22,7 @@ struct AcrylicBackground: View {
 extension View {
     @ViewBuilder func liquidCard<S: Shape>(_ shape: S = RoundedRectangle(cornerRadius: 26)) -> some View {
         if #available(iOS 26.0, *) { self.glassEffect(.regular.interactive(), in: shape) }
-        else { self.background(.ultraThinMaterial, in: shape).overlay(shape.stroke(.white.opacity(.16))) }
+        else { self.background(.ultraThinMaterial, in: shape).overlay(shape.stroke(.white.opacity(0.16))) }
     }
 }
 
@@ -48,7 +48,7 @@ struct AuthView: View {
                     Button { Task { await submit() } } label: { Label(isRegister ? "Создать" : "Войти", systemImage: "arrow.right").frame(maxWidth: .infinity) }
                         .buttonStyle(.borderedProminent).disabled(loading)
                 }.textFieldStyle(.roundedBorder).padding(18).liquidCard(RoundedRectangle(cornerRadius: 24))
-                Button(isRegister ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Создать") { withAnimation(.spring(response: .38)) { isRegister.toggle(); error = "" } }
+                Button(isRegister ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Создать") { withAnimation(.spring(response: 0.38)) { isRegister.toggle(); error = "" } }
             }.padding(24).frame(maxWidth: 430)
         }
     }
@@ -99,7 +99,6 @@ struct VideoPlayerPlaceholder: View {
         Slider(value: .constant(room.playback?.positionSeconds ?? 0), in: 0...max(1, (room.playback?.positionSeconds ?? 0) + 1)).disabled(true)
         HStack { Button { } label: { Image(systemName: "gobackward.10") }; Button { } label: { Image(systemName: "play.fill") }; Button { } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text("00:00") } }.buttonStyle(.glass)
     }.padding(12).liquidCard() .sheet(isPresented: $showTime) { TimePickerSheet() }
-    }
 }
 
 struct TimePickerSheet: View { @Environment(\.dismiss) private var dismiss; @State private var minute = 0; @State private var second = 0
