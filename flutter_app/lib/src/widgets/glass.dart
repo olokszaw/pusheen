@@ -58,18 +58,20 @@ class GlassCard extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
         child: Container(
           decoration: BoxDecoration(
+            // Keep the background visible: this is acrylic, not an opaque card.
+            // Hover/splash glare is removed from InkWell below instead.
             color: dark
-                ? const Color(0xFF171722).withValues(alpha: .78)
-                : Colors.white.withOpacity(.68),
+                ? const Color(0xFF141421).withValues(alpha: .30)
+                : Colors.white.withValues(alpha: .30),
             borderRadius: borderRadius,
             border: Border.all(
                 color: dark
-                    ? Colors.white.withValues(alpha: .085)
+                    ? Colors.white.withValues(alpha: .20)
                     : const Color(0x225C4A85)),
             boxShadow: [
               BoxShadow(
-                  color: Colors.black.withOpacity(.16),
-                  blurRadius: 18,
+                  color: Colors.black.withValues(alpha: .22),
+                  blurRadius: 24,
                   offset: const Offset(0, 8))
             ],
           ),
@@ -78,6 +80,8 @@ class GlassCard extends StatelessWidget {
             child: InkWell(
               onTap: onTap,
               borderRadius: borderRadius,
+              splashFactory: NoSplash.splashFactory,
+              overlayColor: const WidgetStatePropertyAll(Colors.transparent),
               child: Padding(
                 padding: padding,
                 child: child,

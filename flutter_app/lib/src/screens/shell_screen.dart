@@ -158,6 +158,9 @@ class _CompactNavigation extends StatelessWidget {
                       child: InkWell(
                         borderRadius: BorderRadius.circular(17),
                         onTap: () => onChanged(i),
+                        splashFactory: NoSplash.splashFactory,
+                        overlayColor:
+                            const WidgetStatePropertyAll(Colors.transparent),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 280),
                           curve: Curves.easeInOutCubicEmphasized,
@@ -690,6 +693,27 @@ class _ProfilePageState extends State<_ProfilePage> {
     if (mounted) widget.onLogout();
   }
 
+  Future<void> editIdentity() async {
+    final changed = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (_, __, ___) =>
+          _ProfileIdentityEditorDialog(api: widget.api),
+      transitionBuilder: (_, animation, __, child) => FadeTransition(
+        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+        child: ScaleTransition(
+          scale: Tween(begin: .94, end: 1.0).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutBack)),
+          child: child,
+        ),
+      ),
+    );
+    if (changed == true && mounted) setState(() {});
+  }
+
   Future<void> editNickname() async {
     final controller = TextEditingController(text: widget.api.nickname);
     final value = await showDialog<String>(
@@ -783,29 +807,15 @@ class _ProfilePageState extends State<_ProfilePage> {
             IconButton(
                 tooltip: 'Изменить ник',
                 visualDensity: VisualDensity.compact,
-                onPressed: editNickname,
+                onPressed: editIdentity,
                 icon: const Icon(Icons.edit_rounded, size: 17)),
           ]),
         ),
         const SizedBox(height: 4),
         Center(
-            child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: editUniqueUsername,
-                child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Text('@${widget.api.username ?? 'username'}',
-                          style: const TextStyle(
-                              fontSize: 13,
-                              color: Colors.white60,
-                              decoration: TextDecoration.underline,
-                              decorationColor: Colors.white24)),
-                      const SizedBox(width: 2),
-                      const Icon(Icons.edit_rounded,
-                          size: 14, color: Colors.white54),
-                    ])))),
+          child: Text('@${widget.api.username ?? 'username'}',
+              style: const TextStyle(fontSize: 13, color: Colors.white60)),
+        ),
         const SizedBox(height: 24),
         GlassCard(
             child: Column(children: [
@@ -839,6 +849,225 @@ class _ProfilePageState extends State<_ProfilePage> {
     } on Object {
       return null;
     }
+  }
+}
+
+/// One compact identity editor: the single pencil beside the name opens this
+/// sheet, so nickname and @username are never presented as two separate
+/// profile actions.
+class _ProfileIdentityEditorDialog extends StatefulWidget {
+  final ApiClient api;
+  const _ProfileIdentityEditorDialog({required this.api});
+
+  @override
+  State<_ProfileIdentityEditorDialog> createState() =>
+      _ProfileIdentityEditorDialogState();
+}
+
+class _ProfileIdentityEditorDialogState
+    extends State<_ProfileIdentityEditorDialog> {
+  static final _usernamePattern = RegExp(r'^[A-Za-z][A-Za-z0-9_]{2,29}$');
+  late final TextEditingController nickname;
+  late final TextEditingController username;
+  Timer? _debounce;
+  bool _checking = false;
+  bool? _available;
+  String _checked = '';
+
+  String get _userValue => username.text.trim();
+  bool get _validUsername => _usernamePattern.hasMatch(_userValue);
+  bool get _canSave =>
+      nickname.text.trim().length >= 2 &&
+      _validUsername &&
+      _available == true &&
+      _checked == _userValue &&
+      !_checking;
+
+  @override
+  void initState() {
+    super.initState();
+    nickname = TextEditingController(text: widget.api.nickname ?? '');
+    username = TextEditingController(text: widget.api.username ?? '');
+    username.addListener(_scheduleAvailability);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _scheduleAvailability());
+  }
+
+  void _scheduleAvailability() {
+    _debounce?.cancel();
+    final candidate = _userValue;
+    if (!_validUsername) {
+      setState(() {
+        _checking = false;
+        _available = false;
+        _checked = '';
+      });
+      return;
+    }
+    setState(() {
+      _checking = true;
+      _available = null;
+    });
+    _debounce = Timer(const Duration(milliseconds: 260), () async {
+      try {
+        final result = await widget.api.usernameAvailable(candidate);
+        if (!mounted || candidate != _userValue) return;
+        setState(() {
+          _checked = candidate;
+          _available = result;
+          _checking = false;
+        });
+      } on Object {
+        if (!mounted || candidate != _userValue) return;
+        setState(() {
+          _available = false;
+          _checking = false;
+        });
+      }
+    });
+  }
+
+  Future<void> _save() async {
+    if (!_canSave) return;
+    setState(() => _checking = true);
+    try {
+      if (nickname.text.trim() != (widget.api.nickname ?? '')) {
+        await widget.api.updateProfile(nickname: nickname.text.trim());
+      }
+      if (_userValue != (widget.api.username ?? '')) {
+        await widget.api.updateUsername(_userValue);
+      }
+      if (mounted) Navigator.pop(context, true);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _checking = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось сохранить: $error')));
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    nickname.dispose();
+    username.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stateColor = !_validUsername
+        ? Colors.amberAccent
+        : _available == false
+            ? Colors.redAccent
+            : _available == true
+                ? const Color(0xFF69E6B2)
+                : Colors.white54;
+    final stateText = !_validUsername
+        ? 'A–Z, цифры или _, первая — буква'
+        : _checking || _available == null
+            ? 'Проверяем…'
+            : _available!
+                ? '@$_userValue свободен'
+                : '@$_userValue уже занят';
+    return SafeArea(
+      child: Center(
+        child: Material(
+          color: Colors.transparent,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: GlassCard(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                borderRadius: const BorderRadius.all(Radius.circular(18)),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Row(children: [
+                    CircleAvatar(
+                      radius: 17,
+                      backgroundColor: pulsePurple.withValues(alpha: .42),
+                      child: Text((nickname.text.trim().isEmpty
+                              ? '?'
+                              : nickname.text.trim().characters.first)
+                          .toUpperCase()),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text('Профиль',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w800)),
+                    ),
+                    IconButton(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded, size: 18)),
+                  ]),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: nickname,
+                    maxLength: 30,
+                    textCapitalization: TextCapitalization.sentences,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Nickname',
+                      counterText: '',
+                      prefixIcon: Icon(Icons.person_outline_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: username,
+                    maxLength: 30,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: InputDecoration(
+                      labelText: 'Username',
+                      counterText: '',
+                      prefixText: '@',
+                      prefixIcon: const Icon(Icons.alternate_email_rounded),
+                      suffixIcon: _checking
+                          ? const Padding(
+                              padding: EdgeInsets.all(14),
+                              child: SizedBox.square(
+                                  dimension: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2)))
+                          : Icon(
+                              _available == true
+                                  ? Icons.check_circle_rounded
+                                  : _available == false
+                                      ? Icons.error_outline_rounded
+                                      : Icons.alternate_email_rounded,
+                              color: stateColor),
+                    ),
+                    onSubmitted: (_) => _save(),
+                  ),
+                  const SizedBox(height: 5),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 150),
+                      child: Text(stateText,
+                          key: ValueKey(stateText),
+                          style: TextStyle(fontSize: 11, color: stateColor)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _canSave ? _save : null,
+                      icon: const Icon(Icons.check_rounded, size: 18),
+                      label: const Text('Сохранить'),
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
