@@ -55,7 +55,7 @@ struct AuthView: View {
     private func submit() async {
         error = ""; loading = true; defer { loading = false }
         do { if isRegister { try await session.register(nickname: nickname, username: username, password: password) } else { try await session.login(username: username, password: password) } }
-        catch { error = error.localizedDescription }
+        catch let caughtError { error = caughtError.localizedDescription }
     }
 }
 
@@ -66,7 +66,7 @@ struct HomeView: View {
     var body: some View {
         NavigationStack(path: $path) { ZStack { AcrylicBackground()
             ScrollView { VStack(alignment: .leading, spacing: 18) {
-                HStack { VStack(alignment: .leading) { Text("Pusheen").font(.largeTitle.bold()); Text("Привет, \(session.profile?.nickname ?? "")").foregroundStyle(.secondary) }; Spacer(); Button { session.logout() } label: { Image(systemName: "rectangle.portrait.and.arrow.right") }.buttonStyle(.glass) }
+                HStack { VStack(alignment: .leading) { Text("Pusheen").font(.largeTitle.bold()); Text("Привет, \(session.profile?.nickname ?? "")").foregroundStyle(.secondary) }; Spacer(); Button { session.logout() } label: { Image(systemName: "rectangle.portrait.and.arrow.right").padding(10).liquidCard(Circle()) }.buttonStyle(.plain) }
                 Text("Мои комнаты").font(.title2.bold())
                 ForEach(rooms) { room in NavigationLink(value: room) { RoomCard(room: room) }.buttonStyle(.plain) }
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
@@ -122,7 +122,7 @@ struct VideoPlayerPlaceholder: View {
                 Spacer()
                 Button { showTime = true } label: { Text("00:00") }
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
         }
         .padding(12)
         .liquidCard()
