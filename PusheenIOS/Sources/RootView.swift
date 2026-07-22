@@ -374,10 +374,6 @@ struct NativeChatPane: View {
         guard force || sticksToBottom else { return }
         func pin() { var transaction = Transaction(); transaction.disablesAnimations = true; withTransaction(transaction) { proxy.scrollTo("chat-bottom", anchor: .bottom) } }
         DispatchQueue.main.async { pin() }
-        // The keyboard and a new message alter geometry on the following pass.
-        // Pin again after that layout, without animation, to prevent a jump upward.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { if sticksToBottom { pin() } }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { if sticksToBottom { pin() } }
     }
 }
 
@@ -395,11 +391,23 @@ struct NativeMessageBubble: View {
                 if !message.text.isEmpty { FluentInlineText(message.text) }
                 if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
-            }.padding(10).frame(maxWidth: 260, alignment: .leading).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
+            }.padding(10).frame(width: bubbleWidth, alignment: .leading).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
             }
             if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 36) } else { Spacer(minLength: 20) }
         }
         }
+    }
+    private var bubbleWidth: CGFloat {
+        if !message.imageDataURL.isEmpty { return 230 }
+        let emojiCount = message.text.filter { character in
+            character.unicodeScalars.contains { scalar in
+                (0x1F000...0x1FAFF).contains(Int(scalar.value)) || (0x2600...0x27FF).contains(Int(scalar.value))
+            }
+        }.count
+        let textCount = max(0, message.text.count - emojiCount)
+        let contentWidth = CGFloat(textCount) * 8.2 + CGFloat(emojiCount) * 21 + 24
+        let estimated = max(contentWidth, CGFloat(message.nickname.count) * 7 + 24)
+        return min(260, max(64, estimated))
     }
 }
 

@@ -30,7 +30,9 @@ final class RoomViewModel: ObservableObject {
             let stream = try await api.stream(roomID: room.id)
             messages = try await history; members = try await people
             let item = AVPlayerItem(url: URL(string: stream.url)!)
-            player = AVPlayer(playerItem: item)
+            let roomPlayer = AVPlayer(playerItem: item)
+            roomPlayer.automaticallyWaitsToMinimizeStalling = true
+            player = roomPlayer
             timer = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.35, preferredTimescale: 600), queue: .main) { [weak self] time in
                 guard let self else { return }; self.position = time.seconds.isFinite ? time.seconds : 0
                 let value = self.player?.currentItem?.duration.seconds ?? 0; if value.isFinite && value > 0 { self.duration = value }
@@ -64,7 +66,11 @@ final class RoomViewModel: ObservableObject {
                 player?.seek(to: CMTime(seconds: remote, preferredTimescale: 600))
                 position = remote
             }
-            if !isOwner { isPlaying ? player?.play() : player?.pause() }
+            // Apply the authoritative play/pause state to every client,
+            // including the room creator on the initial socket snapshot.
+            // Seeking is still skipped for the creator to avoid the old
+            // forward/back loop caused by delayed server positions.
+            isPlaying ? player?.play() : player?.pause()
         case "chat_message":
             if let data = try? JSONSerialization.data(withJSONObject: event), let message = try? JSONDecoder().decode(ChatMessage.self, from: data), !messages.contains(where: { $0.id == message.id }) {
                 if let pending = messages.firstIndex(where: { $0.id < 0 && $0.authorId == message.authorId && $0.text == message.text && $0.imageDataURL == message.imageDataURL }) {
