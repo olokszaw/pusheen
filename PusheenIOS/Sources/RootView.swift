@@ -131,23 +131,31 @@ struct RoomView: View {
     let token: String
     @State private var draft = ""
     @State private var showTime = false
+    @State private var showMembers = false
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground()
             VStack(spacing: 12) {
-                if let player = model.player { VideoPlayer(player: player).frame(height: 235).clipShape(RoundedRectangle(cornerRadius: 25)) } else { ProgressView().frame(height: 235) }
+                ZStack(alignment: .topTrailing) {
+                    if let player = model.player { VideoPlayer(player: player).frame(height: 235).clipShape(RoundedRectangle(cornerRadius: 25)) } else { ProgressView().frame(height: 235) }
+                    Button { showMembers = true } label: { Image(systemName: "person.2.fill").frame(width: 36, height: 36).liquidCard(Circle()) }
+                        .buttonStyle(.plain).padding(10).opacity(0.82)
+                }
                 HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
                 Slider(value: Binding(get: { model.position }, set: { model.seek($0) }), in: 0...max(1, model.duration)).disabled(!model.isOwner)
                 ChatPane(messages: model.messages, draft: $draft, send: { text in model.send(text); draft = "" })
             }.padding(14)
-        }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }.sheet(isPresented: $showTime) { TimePickerSheet() }
+        }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
+            .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
+            .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
-    private func time(_ value: Double) -> String { let total = Int(value); return String(format: "%02d:%02d", total / 60, total % 60) }
+    private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
 }
 
 struct ChatPane: View {
     let messages: [ChatMessage]; @Binding var draft: String; let send: (String) -> Void
+    @FocusState private var focused: Bool
     var body: some View { VStack(alignment: .leading, spacing: 8) { Text("Чат").font(.headline); ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 7) { ForEach(messages) { message in HStack(alignment: .top, spacing: 8) { Circle().fill(.purple.opacity(0.7)).frame(width: 28, height: 28).overlay(Text(message.nickname.prefix(1)).font(.caption.bold())); VStack(alignment: .leading, spacing: 2) { Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary); Text(message.text).font(.subheadline) }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 15)); Spacer(minLength: 20) }.id(message.id) } } }.onChange(of: messages.count) { _, _ in if let id = messages.last?.id { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }.frame(maxHeight: 250); HStack { TextField("Сообщение…", text: $draft, axis: .vertical).lineLimit(1...3).onSubmit { send(draft) }; Button { send(draft) } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }.padding(8).liquidCard(Capsule()) }.padding(12).liquidCard() }
 }
 
@@ -190,4 +198,46 @@ struct VideoPlayerPlaceholder: View {
 
 struct TimePickerSheet: View { @Environment(\.dismiss) private var dismiss; @State private var minute = 0; @State private var second = 0
     var body: some View { VStack(spacing: 22) { Text("Перейти к таймкоду").font(.headline); HStack { Picker("Мин", selection: $minute) { ForEach(0..<180, id: \.self) { Text("\($0) мин") } }; Picker("Сек", selection: $second) { ForEach(0..<60, id: \.self) { Text("\($0) сек") } } }.pickerStyle(.wheel); Button("Перейти") { dismiss() }.buttonStyle(.borderedProminent) }.padding().presentationDetents([.height(330)]).presentationBackground(.ultraThinMaterial) }
+}
+
+struct SeekTimePickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var minute: Int
+    @State private var second: Int
+    let select: (Double) -> Void
+    init(initial: Double, select: @escaping (Double) -> Void) {
+        _minute = State(initialValue: Int(initial) / 60)
+        _second = State(initialValue: Int(initial) % 60)
+        self.select = select
+    }
+    var body: some View {
+        VStack(spacing: 22) {
+            Text("Перейти к таймкоду").font(.headline)
+            HStack {
+                Picker("Мин", selection: $minute) { ForEach(0..<600, id: \.self) { Text("\($0) мин") } }
+                Picker("Сек", selection: $second) { ForEach(0..<60, id: \.self) { Text("\($0) сек") } }
+            }.pickerStyle(.wheel)
+            Button("Перейти") { select(Double(minute * 60 + second)); dismiss() }.buttonStyle(.borderedProminent)
+        }.padding().presentationDetents([.height(330)]).presentationBackground(.ultraThinMaterial)
+    }
+}
+
+struct MembersSheet: View {
+    let members: [RoomMember]
+    let currentID: Int?
+    var body: some View {
+        ZStack { AcrylicBackground(); VStack(alignment: .leading, spacing: 12) {
+            Text("Участники").font(.title2.bold())
+            ForEach(members) { member in
+                HStack(spacing: 11) {
+                    Circle().fill(.purple.opacity(0.7)).frame(width: 46, height: 46).overlay(Text(member.nickname.prefix(1)).bold())
+                    VStack(alignment: .leading) {
+                        HStack { Text(member.nickname).bold(); if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
+                        Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(); Circle().fill(member.isOnline ? .green : .gray).frame(width: 8, height: 8)
+                }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 17))
+            }; Spacer()
+        }.padding(20) }.presentationDetents([.medium, .large]).presentationBackground(.clear)
+    }
 }
