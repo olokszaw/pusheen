@@ -161,13 +161,14 @@ struct RoomView: View {
     @State private var chatFocused = false
     @State private var copiedCode = false
     @State private var controlsVisible = false
+    @State private var controlsHideTask: Task<Void, Never>?
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
             VStack(spacing: 12) {
                 Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
-                    .frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).contentShape(Rectangle()).onTapGesture { withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { controlsVisible.toggle() } }.animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused)
+                    .frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).contentShape(Rectangle()).onTapGesture { toggleControls() }.animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused)
                 if controlsVisible {
                     VStack(spacing: 8) {
                         PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
@@ -177,13 +178,23 @@ struct RoomView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
-            }.padding(14).frame(maxHeight: .infinity, alignment: .top)
-        }.gesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").foregroundStyle(.primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты") } }.task { await model.start() }
+            }.padding(.horizontal, 9).padding(.vertical, 12).frame(maxHeight: .infinity, alignment: .top)
+        }.simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").foregroundStyle(.primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты") } }.task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
     private func copyInviteCode() { UIPasteboard.general.string = room.inviteCode; withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) { copiedCode = true }; Task { try? await Task.sleep(for: .seconds(1.6)); await MainActor.run { withAnimation(.easeOut(duration: 0.22)) { copiedCode = false } } } }
+    private func toggleControls() {
+        controlsHideTask?.cancel()
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { controlsVisible.toggle() }
+        guard controlsVisible else { return }
+        controlsHideTask = Task {
+            try? await Task.sleep(for: .seconds(3.2))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { withAnimation(.easeOut(duration: 0.22)) { controlsVisible = false } }
+        }
+    }
 }
 
 struct ChatPane: View {
@@ -316,6 +327,7 @@ struct NativeChatPane: View {
     let react: (Int, String) -> Void
     @FocusState private var inputFocused: Bool
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var sticksToBottom = true
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -324,10 +336,12 @@ struct NativeChatPane: View {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         ForEach(messages) { message in NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions).id(message.id) }
+                        Color.clear.frame(height: 1).id("chat-bottom")
                     }.padding(.vertical, 2)
                 }.contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
-                    .onAppear { scroll(proxy) }
-                    .onChange(of: focused) { _, active in if active { scroll(proxy) } }
+                    .simultaneousGesture(DragGesture(minimumDistance: 6).onChanged { _ in sticksToBottom = false })
+                    .onAppear { scroll(proxy, force: true) }
+                    .onChange(of: focused) { _, active in if active { sticksToBottom = true; scroll(proxy, force: true) } }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
             }.frame(maxHeight: .infinity)
             HStack(spacing: 8) {
@@ -340,9 +354,16 @@ struct NativeChatPane: View {
             }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
         }.padding(12).liquidCard()
     }
-    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text, ""); draft = ""; DispatchQueue.main.async { inputFocused = true; focused = true } }
+    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; sticksToBottom = true; send(text, ""); draft = ""; DispatchQueue.main.async { inputFocused = true; focused = true } }
     private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
-    private func scroll(_ proxy: ScrollViewProxy) { if let id = messages.last?.id { DispatchQueue.main.async { var transaction = Transaction(); transaction.disablesAnimations = true; withTransaction(transaction) { proxy.scrollTo(id, anchor: .bottom) } } } }
+    private func scroll(_ proxy: ScrollViewProxy, force: Bool = false) {
+        guard force || sticksToBottom else { return }
+        func pin() { var transaction = Transaction(); transaction.disablesAnimations = true; withTransaction(transaction) { proxy.scrollTo("chat-bottom", anchor: .bottom) } }
+        DispatchQueue.main.async { pin() }
+        // The keyboard and a new message alter geometry on the following pass.
+        // Pin again after that layout, without animation, to prevent a jump upward.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { if sticksToBottom { pin() } }
+    }
 }
 
 struct NativeMessageBubble: View {
