@@ -37,9 +37,9 @@ struct AcrylicBackground: View {
     var body: some View {
         ZStack {
             Color(red: 0.025, green: 0.024, blue: 0.075).ignoresSafeArea()
-            Circle().fill(.purple.opacity(0.50)).frame(width: 340).blur(radius: 85).offset(x: -170, y: -330)
-            Circle().fill(.pink.opacity(0.30)).frame(width: 290).blur(radius: 95).offset(x: 180, y: 390)
-            Circle().fill(.blue.opacity(0.27)).frame(width: 240).blur(radius: 90).offset(x: 190, y: 70)
+            Circle().fill(Color(red: 0.12, green: 0.48, blue: 0.52).opacity(0.28)).frame(width: 340).blur(radius: 90).offset(x: -175, y: -330)
+            Circle().fill(Color(red: 0.10, green: 0.27, blue: 0.40).opacity(0.32)).frame(width: 300).blur(radius: 100).offset(x: 185, y: 385)
+            Circle().fill(Color(red: 0.26, green: 0.38, blue: 0.62).opacity(0.20)).frame(width: 250).blur(radius: 95).offset(x: 185, y: 70)
         }
     }
 }
@@ -165,7 +165,7 @@ struct RoomView: View {
         ZStack { AcrylicBackground()
             VStack(spacing: 12) {
                 if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 122 : 235).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 122 : 235) }
-                HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); ShareLink(item: api.baseURL.appending(path: "join/\(room.inviteCode)")) { Image(systemName: "link") }.buttonStyle(.plain); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
+                HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { UIPasteboard.general.string = room.inviteCode } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты"); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
                 PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
             }.padding(14)
@@ -289,7 +289,7 @@ struct PlaybackScrubber: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.13)).frame(height: 6)
                 Capsule().fill(LinearGradient(colors: [.pink, .purple, .blue], startPoint: .leading, endPoint: .trailing)).frame(width: max(10, width * ratio), height: 6)
-                Circle().fill(.white).shadow(color: .purple.opacity(0.7), radius: 7).frame(width: 18, height: 18).offset(x: max(0, min(width - 18, width * ratio - 9)))
+                Circle().fill(.white).shadow(color: .cyan.opacity(0.45), radius: 7).frame(width: 18, height: 18).offset(x: max(0, min(width - 18, width * ratio - 9)))
                 if let dragging { Text(scrubTime(dragging)).font(.caption2.monospacedDigit().weight(.bold)).padding(.horizontal, 8).padding(.vertical, 5).liquidCard(Capsule()).offset(x: max(0, min(width - 70, width * ratio - 35)), y: -31).transition(.opacity.combined(with: .scale)) }
             }.frame(height: proxy.size.height).contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { value in guard enabled else { return }; dragging = min(duration, max(0, duration * value.location.x / width)) }.onEnded { _ in if let value = dragging { commit(value) }; dragging = nil })
         }.frame(height: 26).padding(.horizontal, 10).padding(.vertical, 5).liquidCard(Capsule()).opacity(enabled ? 1 : 0.58)
@@ -316,6 +316,8 @@ struct NativeChatPane: View {
                         ForEach(messages) { message in NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions).id(message.id) }
                     }.padding(.vertical, 2)
                 }.contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
+                    .onAppear { scroll(proxy) }
+                    .onChange(of: focused) { _, active in if active { scroll(proxy) } }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
             }.frame(maxHeight: focused ? 360 : 220)
             HStack(spacing: 8) {
@@ -328,7 +330,7 @@ struct NativeChatPane: View {
             }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
         }.padding(12).liquidCard()
     }
-    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text, ""); draft = "" }
+    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text, ""); draft = ""; DispatchQueue.main.async { inputFocused = true; focused = true } }
     private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
     private func scroll(_ proxy: ScrollViewProxy) { if let id = messages.last?.id { DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }
 }
