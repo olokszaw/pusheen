@@ -160,16 +160,21 @@ struct RoomView: View {
     @State private var showMembers = false
     @State private var chatFocused = false
     @State private var copiedCode = false
+    @State private var controlsVisible = false
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
             VStack(spacing: 12) {
-                if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 104 : 210) }
-                HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "doc.on.doc.fill").font(.title3).foregroundStyle(copiedCode ? .green : .primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты"); Button { showTime = true } label: { Text(time(model.position)) } }.padding(8).liquidCard(Capsule())
-                PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
+                ZStack(alignment: .bottom) {
+                    if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() }
+                    if model.isOwner && controlsVisible {
+                        HStack(spacing: 22) { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)) }.font(.subheadline.monospacedDigit()) }.padding(10).liquidCard(Capsule()).padding(8).transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+                }.frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).contentShape(Rectangle()).onTapGesture { if model.isOwner { withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { controlsVisible.toggle() } } }.animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused)
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
             }.padding(14).frame(maxHeight: .infinity, alignment: .top)
+            Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").font(.headline).foregroundStyle(copiedCode ? .green : .primary).contentTransition(.symbolEffect(.replace)).frame(width: 36, height: 36).liquidCard(Circle()) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты").padding(.trailing, 17).padding(.top, 8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         }.gesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
@@ -257,7 +262,7 @@ struct MembersSheet: View {
                 HStack(spacing: 11) {
                     AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 46)
                     VStack(alignment: .leading) {
-                        HStack { Text(member.nickname).bold(); if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
+                        HStack { Text(member.nickname).bold(); if member.isOwner { Image(systemName: "crown.fill").font(.caption).foregroundStyle(.yellow) }; if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
                         Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(); Circle().fill(member.isOnline ? .green : .gray).frame(width: 8, height: 8)
@@ -348,9 +353,9 @@ struct NativeMessageBubble: View {
             if isMine { Spacer(minLength: 44) }
             VStack(alignment: .leading, spacing: 4) {
                 Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary)
-                if !message.text.isEmpty { Text(message.text).font(.subheadline).lineLimit(5) }
+                if !message.text.isEmpty { FluentInlineText(message.text) }
                 if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
-                if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { Text("\(item.emoji) \(item.count)").font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.purple.opacity(0.44) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
+                if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
             }.padding(10).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
             }
             if !isMine { Spacer(minLength: 20) }
@@ -479,6 +484,22 @@ struct ProfileGlassView: View {
         }
     }
     private func updateAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self), let profile = session.profile else { return }; let value = "data:image/jpeg;base64," + data.base64EncodedString(); session.profile = try? await session.api.updateProfile(nickname: profile.nickname, username: profile.username, avatar: value) }
+}
+
+struct FluentEmojiGlyph: View {
+    let emoji: String
+    let size: CGFloat
+    init(_ emoji: String, size: CGFloat = 21) { self.emoji = emoji; self.size = size }
+    private var assetURL: URL? { let slug = emoji.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: "-"); return URL(string: "https://unpkg.com/@lobehub/fluent-emoji-3d@latest/assets/\(slug).webp") }
+    var body: some View { AsyncImage(url: assetURL) { image in image.resizable().scaledToFit() } placeholder: { Text(emoji).font(.system(size: size)) }.frame(width: size, height: size) }
+}
+
+struct FluentInlineText: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    private var characters: [String] { text.map(String.init) }
+    private func isEmoji(_ value: String) -> Bool { value.unicodeScalars.contains { scalar in (0x1F000...0x1FAFF).contains(Int(scalar.value)) || (0x2600...0x27FF).contains(Int(scalar.value)) } }
+    var body: some View { HStack(spacing: 1) { ForEach(Array(characters.enumerated()), id: \.offset) { _, character in if isEmoji(character) { FluentEmojiGlyph(character, size: 20) } else { Text(character).font(.subheadline) } } }.fixedSize(horizontal: false, vertical: true) }
 }
 
 struct JoinRoomSheet: View {
