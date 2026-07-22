@@ -35,3 +35,20 @@ struct ChatMessage: Codable, Identifiable, Hashable {
     let id: Int; let authorId: Int; let nickname: String; let text: String; let imageDataURL: String
     enum CodingKeys: String, CodingKey { case id, nickname, text; case authorId = "author_id"; case imageDataURL = "image_data_url" }
 }
+
+struct RoomMember: Codable, Identifiable, Hashable {
+    let userId: Int; let username: String; let nickname: String; let avatarDataURL: String; let isOwner: Bool; let isOnline: Bool
+    var id: Int { userId }
+    enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isOwner = "is_owner"; case isOnline = "is_online" }
+}
+
+struct VideoStream: Codable, Hashable {
+    let url: String; let title: String; let durationSeconds: Double; let quality: String; let sourceType: String; let thumbnail: String
+    enum CodingKeys: String, CodingKey { case url, title, quality, thumbnail; case durationSeconds = "duration_seconds"; case sourceType = "source_type" }
+}
+
+struct FriendProfile: Codable, Identifiable, Hashable {
+    let userId: Int; let username: String; let nickname: String; let avatarDataURL: String; let isFriend: Bool
+    var id: Int { userId }
+    enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isFriend = "is_friend" }
+}
