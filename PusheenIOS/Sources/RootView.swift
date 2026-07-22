@@ -598,7 +598,44 @@ struct FluentInlineText: View {
     init(_ text: String) { self.text = text }
     private var characters: [String] { text.map(String.init) }
     private func isEmoji(_ value: String) -> Bool { value.unicodeScalars.contains { scalar in (0x1F000...0x1FAFF).contains(Int(scalar.value)) || (0x2600...0x27FF).contains(Int(scalar.value)) } }
-    var body: some View { HStack(spacing: 1) { ForEach(Array(characters.enumerated()), id: \.offset) { _, character in if isEmoji(character) { FluentEmojiGlyph(character, size: 20) } else { Text(character).font(.subheadline) } } }.fixedSize(horizontal: false, vertical: true) }
+    var body: some View {
+        EmojiFlowLayout(spacing: 1) {
+            ForEach(Array(characters.enumerated()), id: \.offset) { _, character in
+                if isEmoji(character) { FluentEmojiGlyph(character, size: 20) }
+                else { Text(character).font(.subheadline) }
+            }
+        }
+        .frame(maxWidth: 238, alignment: .leading)
+    }
+}
+
+/// A wrapping layout keeps long mixed text/emoji messages readable. HStack
+/// cannot line-wrap a UIViewRepresentable emoji, which caused the clipping.
+struct EmojiFlowLayout: Layout {
+    let spacing: CGFloat
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, usedWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > maxWidth { y += lineHeight + spacing; x = 0; lineHeight = 0 }
+            x += size.width
+            lineHeight = max(lineHeight, size.height)
+            usedWidth = max(usedWidth, x)
+            x += spacing
+        }
+        return CGSize(width: min(maxWidth, usedWidth), height: y + lineHeight)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.maxX { y += lineHeight + spacing; x = bounds.minX; lineHeight = 0 }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
 }
 
 struct JoinRoomSheet: View {
