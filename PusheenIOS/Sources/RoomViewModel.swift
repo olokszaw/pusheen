@@ -18,7 +18,10 @@ final class RoomViewModel: ObservableObject {
     private var timer: Any?
 
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token }
-    deinit { if let timer { player?.removeTimeObserver(timer) }; socket.close() }
+    deinit {
+        // `deinit` is nonisolated under Swift 6. The player/socket are released
+        // with the view model; cancelling explicitly here would cross actors.
+    }
 
     func start() async {
         do {
@@ -34,7 +37,7 @@ final class RoomViewModel: ObservableObject {
             }
             socket.onEvent = { [weak self] event in self?.apply(event) }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
-        } catch { error = error.localizedDescription }
+        } catch let caughtError { error = caughtError.localizedDescription }
     }
     func toggle() { guard isOwner else { return }; let next = !isPlaying; if next { player?.play() } else { player?.pause() }; isPlaying = next; socket.playback(action: next ? "play" : "pause", isPlaying: next, position: position) }
     func seek(_ value: Double) { guard isOwner else { return }; player?.seek(to: CMTime(seconds: value, preferredTimescale: 600)); position = value; socket.playback(action: "seek", isPlaying: isPlaying, position: value) }
