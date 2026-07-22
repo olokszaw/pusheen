@@ -5,12 +5,12 @@ import UIKit
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
     var body: some View {
-        Group { if session.profile == nil { AuthView() } else { PusheenTabs() } }
+        Group { if session.profile == nil { LiquidAuthView() } else { PusheenTabs() } }
             .preferredColorScheme(.dark)
     }
 }
 
-struct PusheenTabs: View {
+struct LegacyPusheenTabs: View {
     var body: some View { TabView {
         HomeView().tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }
         FriendsView().tabItem { Label("Друзья", systemImage: "person.2.fill") }
@@ -165,7 +165,7 @@ struct RoomView: View {
                 if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 148 : 235).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 148 : 235) }
                 HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
                 PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
-                NativeChatPane(messages: model.messages, draft: $draft, focused: $chatFocused, send: { text in model.send(text) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text in model.send(text) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
             }.padding(14)
         }.contentShape(Rectangle()).onTapGesture { chatFocused = false }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
@@ -288,13 +288,16 @@ struct PlaybackScrubber: View {
                 Capsule().fill(.white.opacity(0.13)).frame(height: 6)
                 Capsule().fill(LinearGradient(colors: [.pink, .purple, .blue], startPoint: .leading, endPoint: .trailing)).frame(width: max(10, width * ratio), height: 6)
                 Circle().fill(.white).shadow(color: .purple.opacity(0.7), radius: 7).frame(width: 18, height: 18).offset(x: max(0, min(width - 18, width * ratio - 9)))
+                if let dragging { Text(scrubTime(dragging)).font(.caption2.monospacedDigit().weight(.bold)).padding(.horizontal, 8).padding(.vertical, 5).liquidCard(Capsule()).offset(x: max(0, min(width - 70, width * ratio - 35)), y: -31).transition(.opacity.combined(with: .scale)) }
             }.frame(height: proxy.size.height).contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { value in guard enabled else { return }; dragging = min(duration, max(0, duration * value.location.x / width)) }.onEnded { _ in if let value = dragging { commit(value) }; dragging = nil })
         }.frame(height: 26).opacity(enabled ? 1 : 0.58)
     }
+    private func scrubTime(_ seconds: Double) -> String { let total = Int(seconds); return total >= 3600 ? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) : String(format: "%02d:%02d", total / 60, total % 60) }
 }
 
 struct NativeChatPane: View {
     let messages: [ChatMessage]
+    let currentUserID: Int?
     @Binding var draft: String
     @Binding var focused: Bool
     let send: (String) -> Void
@@ -307,7 +310,7 @@ struct NativeChatPane: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(messages) { message in NativeMessageBubble(message: message, react: react, quickReactions: quickReactions).id(message.id) }
+                        ForEach(messages) { message in NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions).id(message.id) }
                     }.padding(.vertical, 2)
                 }.contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
@@ -326,17 +329,97 @@ struct NativeChatPane: View {
 }
 
 struct NativeMessageBubble: View {
-    let message: ChatMessage; let react: (Int, String) -> Void; let quickReactions: [String]
+    let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            Circle().fill(.purple.opacity(0.72)).frame(width: 36, height: 36).overlay(Text(message.nickname.prefix(1)).font(.caption.bold()))
+            if !isMine { Circle().fill(.purple.opacity(0.72)).frame(width: 36, height: 36).overlay(Text(message.nickname.prefix(1)).font(.caption.bold())) }
+            if isMine { Spacer(minLength: 44) }
             VStack(alignment: .leading, spacing: 4) {
                 Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary)
                 if !message.text.isEmpty { Text(message.text).font(.subheadline).lineLimit(5) }
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { Text("\(item.emoji) \(item.count)").font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.purple.opacity(0.44) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
-            }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 16)).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
+            }.padding(10).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
             }
-            Spacer(minLength: 20)
+            if !isMine { Spacer(minLength: 20) }
         }
     }
+}
+
+struct LiquidAuthView: View {
+    @EnvironmentObject private var session: SessionStore
+    @State private var register = false
+    @State private var nickname = ""
+    @State private var username = ""
+    @State private var password = ""
+    @State private var availability: Availability = .idle
+    @State private var error = ""
+    @State private var loading = false
+    enum Availability { case idle, invalid, checking, available, taken }
+    private var usernameValid: Bool { username.range(of: "^[A-Za-z][A-Za-z0-9_]{2,29}$", options: .regularExpression) != nil }
+    var body: some View {
+        ZStack { AcrylicBackground()
+            ScrollView {
+                VStack(spacing: 18) {
+                    Spacer(minLength: 48)
+                    Image(systemName: "play.fill").font(.system(size: 30, weight: .bold)).frame(width: 76, height: 76).liquidCard(RoundedRectangle(cornerRadius: 25))
+                    Text(register ? "Создай профиль" : "Смотри. Чувствуй.\nБудь рядом.").font(.system(size: 34, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
+                    Text(register ? "Твой профиль для совместных просмотров" : "Фильмы и видео вместе с друзьями").font(.subheadline).foregroundStyle(.secondary)
+                    VStack(spacing: 11) {
+                        if register { GlassField(icon: "person.text.rectangle", title: "Nickname", text: $nickname) }
+                        GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { await validate(value) } }
+                        if register && !username.isEmpty { AuthProfilePreview(nickname: nickname, username: username, availability: availability) }
+                        GlassSecureField(title: "Password", text: $password)
+                        if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading) }
+                        Button { Task { await submit() } } label: { HStack { if loading { ProgressView().tint(.white) }; Text(register ? "Создать аккаунт" : "Войти"); Image(systemName: "arrow.right") }.frame(maxWidth: .infinity).padding(.vertical, 4) }
+                            .buttonStyle(.borderedProminent).controlSize(.large).disabled(loading)
+                    }.padding(15).liquidCard(RoundedRectangle(cornerRadius: 30))
+                    Button(register ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Создать") { withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { register.toggle(); error = ""; availability = .idle } }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    Spacer(minLength: 20)
+                }.frame(maxWidth: 440).padding(22)
+            }
+        }
+    }
+    private func validate(_ value: String) async { guard register else { availability = .idle; return }; guard usernameValid else { availability = .invalid; return }; availability = .checking; try? await Task.sleep(for: .milliseconds(250)); guard username == value else { return }; availability = (try? await session.api.usernameAvailable(value)) == true ? .available : .taken }
+    private func submit() async { error = ""; guard !username.isEmpty, !password.isEmpty else { error = "Заполни username и пароль"; return }; if register && (!usernameValid || nickname.trimmingCharacters(in: .whitespacesAndNewlines).count < 2) { error = "Проверь nickname и username"; return }; loading = true; defer { loading = false }; do { if register { try await session.register(nickname: nickname, username: username, password: password) } else { try await session.login(username: username, password: password) } } catch { self.error = error.localizedDescription } }
+}
+
+struct GlassField: View {
+    let icon: String; let title: String; @Binding var text: String
+    var body: some View { HStack(spacing: 11) { Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18); TextField(title, text: $text).textInputAutocapitalization(.never).autocorrectionDisabled() }.padding(14).liquidCard(RoundedRectangle(cornerRadius: 17)) }
+}
+struct GlassSecureField: View {
+    let title: String; @Binding var text: String
+    var body: some View { HStack(spacing: 11) { Image(systemName: "lock").foregroundStyle(.secondary).frame(width: 18); SecureField(title, text: $text) }.padding(14).liquidCard(RoundedRectangle(cornerRadius: 17)) }
+}
+struct AuthProfilePreview: View {
+    let nickname: String; let username: String; let availability: LiquidAuthView.Availability
+    private var label: String { switch availability { case .available: return "Available"; case .taken: return "Taken"; case .invalid: return "Use A–Z, 0–9, _"; case .checking: return "Checking…"; case .idle: return "" } }
+    private var color: Color { switch availability { case .available: return .green; case .taken: return .red; case .invalid: return .orange; default: return .secondary } }
+    var body: some View { HStack(spacing: 10) { Circle().fill(LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing)).frame(width: 43, height: 43).overlay(Text((nickname.isEmpty ? username : nickname).prefix(1)).font(.headline.bold())); VStack(alignment: .leading, spacing: 2) { Text(nickname.isEmpty ? "Your nickname" : nickname).font(.subheadline.bold()); Text("@\(username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(label).font(.caption2.weight(.semibold)).foregroundStyle(color) }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 18)).transition(.opacity.combined(with: .move(edge: .top))).animation(.spring(response: 0.35), value: username) }
+}
+
+struct PusheenTabs: View {
+    var body: some View { TabView { HomeView().tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }; FriendsGlassView().tabItem { Label("Друзья", systemImage: "person.2.fill") }; ProfileGlassView().tabItem { Label("Профиль", systemImage: "person.crop.circle.fill") } }.tint(.purple) }
+}
+
+struct FriendsGlassView: View {
+    @EnvironmentObject private var session: SessionStore
+    @State private var expanded = false; @State private var query = ""; @State private var people: [FriendProfile] = []
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 16) { HStack { Text("Друзья").font(.largeTitle.bold()); Spacer(); Button { withAnimation(.spring(response: 0.35)) { expanded.toggle() }; if expanded { Task { await search() } } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 42, height: 42).liquidCard(Circle()) }.buttonStyle(.plain) }; if expanded { HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Найти по @username", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }.padding(12).liquidCard(Capsule()).transition(.opacity.combined(with: .move(edge: .top))) }; ScrollView { LazyVStack(spacing: 9) { ForEach(people) { person in HStack(spacing: 11) { Circle().fill(.purple.opacity(0.7)).frame(width: 48, height: 48).overlay(Text(person.nickname.prefix(1)).bold()); VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button(person.isFriend ? "Добавлен" : "Добавить") { Task { try? await session.api.addFriend(username: person.username); await search() } }.buttonStyle(.bordered) }.padding(11).liquidCard(RoundedRectangle(cornerRadius: 20)) } } }; Spacer() }.padding(20) } }
+    private func search() async { people = (try? await session.api.friends(query: query)) ?? [] }
+}
+
+struct ProfileGlassView: View {
+    @EnvironmentObject private var session: SessionStore
+    @State private var edit = false
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 12) { Spacer(minLength: 40); Circle().fill(LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing)).frame(width: 112, height: 112).overlay(Text((session.profile?.nickname ?? "?").prefix(1)).font(.system(size: 42, weight: .bold))); HStack(spacing: 8) { VStack(spacing: 3) { Text(session.profile?.nickname ?? "").font(.title2.bold()); Text("@\(session.profile?.username ?? "")").foregroundStyle(.secondary) }; Button { edit = true } label: { Image(systemName: "pencil").font(.caption.weight(.bold)).frame(width: 29, height: 29).liquidCard(Circle()) }.buttonStyle(.plain) }; Spacer(); Button("Выйти") { session.logout() }.buttonStyle(.bordered).tint(.red).padding(.bottom, 28) }.padding(20) }.sheet(isPresented: $edit) { ProfileEditSheet() }
+    }
+}
+
+struct ProfileEditSheet: View {
+    @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var nickname = ""; @State private var username = ""; @State private var available: Bool?; @State private var error = ""
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 13) { Text("Редактировать профиль").font(.title3.bold()); GlassField(icon: "person", title: "Nickname", text: $nickname); GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; if !username.isEmpty { Text(available == true ? "@\(username) available" : "Username unavailable").font(.caption).foregroundStyle(available == true ? .green : .orange) }; if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button("Сохранить") { Task { await save() } }.buttonStyle(.borderedProminent) }.padding(22) }.onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" }.presentationDetents([.height(360)]).presentationBackground(.clear) }
+    private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username); dismiss() } catch { self.error = error.localizedDescription } }
 }
