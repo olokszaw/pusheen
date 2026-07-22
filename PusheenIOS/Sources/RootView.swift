@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import UIKit
+import PhotosUI
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
@@ -143,7 +144,7 @@ struct CreateRoomSheet: View {
     private func create() async { loading = true; error = ""; defer { loading = false }; do { let room = try await session.api.createRoom(videoURL: url.trimmingCharacters(in: .whitespacesAndNewlines), isPrivate: isPrivate); created(room); dismiss() } catch { self.error = error.localizedDescription } }
 }
 
-struct RoomCard: View {
+struct LegacyRoomCard: View {
     let room: Room
     var body: some View { HStack(spacing: 14) { Image(systemName: "play.fill").font(.title2).frame(width: 58, height: 58).liquidCard(Circle()); VStack(alignment: .leading, spacing: 4) { Text(room.title).font(.headline).lineLimit(1); Text("\(room.membersCount) участников · \(room.inviteCode)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary) }.padding(14).liquidCard() }
 }
@@ -165,7 +166,7 @@ struct RoomView: View {
                 if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 148 : 235).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 148 : 235) }
                 HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
                 PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
-                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text in model.send(text) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
             }.padding(14)
         }.contentShape(Rectangle()).onTapGesture { chatFocused = false }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
@@ -300,9 +301,10 @@ struct NativeChatPane: View {
     let currentUserID: Int?
     @Binding var draft: String
     @Binding var focused: Bool
-    let send: (String) -> Void
+    let send: (String, String) -> Void
     let react: (Int, String) -> Void
     @FocusState private var inputFocused: Bool
+    @State private var selectedPhoto: PhotosPickerItem?
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -317,6 +319,8 @@ struct NativeChatPane: View {
                     .onChange(of: focused) { _, value in if value { scroll(proxy) } }
             }.frame(maxHeight: focused ? 310 : 220)
             HStack(spacing: 8) {
+                PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
+                    .onChange(of: selectedPhoto) { _, item in Task { await sendPhoto(item) } }
                 TextField("Сообщение…", text: $draft).focused($inputFocused).submitLabel(.send).onSubmit { submit() }
                     .onChange(of: inputFocused) { _, value in focused = value }
                 Button { submit() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 31, weight: .medium)) }
@@ -324,23 +328,29 @@ struct NativeChatPane: View {
             }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
         }.padding(12).liquidCard()
     }
-    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text); draft = ""; focused = true; inputFocused = true }
+    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text, ""); draft = ""; focused = true; inputFocused = true }
+    private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil; focused = true; inputFocused = true }
     private func scroll(_ proxy: ScrollViewProxy) { if let id = messages.last?.id { DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }
 }
 
 struct NativeMessageBubble: View {
     let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
     var body: some View {
+        if message.isSystem {
+            Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
+        } else {
         HStack(alignment: .top, spacing: 9) {
-            if !isMine { Circle().fill(.purple.opacity(0.72)).frame(width: 36, height: 36).overlay(Text(message.nickname.prefix(1)).font(.caption.bold())) }
+            if !isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 36) }
             if isMine { Spacer(minLength: 44) }
             VStack(alignment: .leading, spacing: 4) {
                 Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary)
                 if !message.text.isEmpty { Text(message.text).font(.subheadline).lineLimit(5) }
+                if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { Text("\(item.emoji) \(item.count)").font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.purple.opacity(0.44) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
             }.padding(10).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
             }
             if !isMine { Spacer(minLength: 20) }
+        }
         }
     }
 }
@@ -396,6 +406,30 @@ struct AuthProfilePreview: View {
     private var label: String { switch availability { case .available: return "Available"; case .taken: return "Taken"; case .invalid: return "Use A–Z, 0–9, _"; case .checking: return "Checking…"; case .idle: return "" } }
     private var color: Color { switch availability { case .available: return .green; case .taken: return .red; case .invalid: return .orange; default: return .secondary } }
     var body: some View { HStack(spacing: 10) { Circle().fill(LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing)).frame(width: 43, height: 43).overlay(Text((nickname.isEmpty ? username : nickname).prefix(1)).font(.headline.bold())); VStack(alignment: .leading, spacing: 2) { Text(nickname.isEmpty ? "Your nickname" : nickname).font(.subheadline.bold()); Text("@\(username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(label).font(.caption2.weight(.semibold)).foregroundStyle(color) }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 18)).transition(.opacity.combined(with: .move(edge: .top))).animation(.spring(response: 0.35), value: username) }
+}
+
+struct DataURLImage: View {
+    let dataURL: String
+    var body: some View {
+        if let comma = dataURL.firstIndex(of: ","), let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])), let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() }
+        else { Color.white.opacity(0.08) }
+    }
+}
+
+struct AvatarView: View {
+    let dataURL: String; let name: String; let size: CGFloat
+    var body: some View { ZStack { Circle().fill(.purple.opacity(0.72)); if !dataURL.isEmpty { DataURLImage(dataURL: dataURL).clipShape(Circle()) } else { Text(name.prefix(1)).font(.caption.bold()) } }.frame(width: size, height: size) }
+}
+
+struct RoomCard: View {
+    let room: Room
+    var body: some View {
+        HStack(spacing: 13) {
+            ZStack { if !room.thumbnailURL.isEmpty { AsyncImage(url: URL(string: room.thumbnailURL)) { image in image.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) } } else { LinearGradient(colors: [.purple.opacity(0.8), .pink.opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing) }; Image(systemName: "play.fill").font(.headline).padding(11).liquidCard(Circle()) }.frame(width: 92, height: 64).clipShape(RoundedRectangle(cornerRadius: 17))
+            VStack(alignment: .leading, spacing: 5) { Text(room.title).font(.headline).lineLimit(2); Text("\(room.membersCount) участников · \(room.inviteCode)").font(.caption).foregroundStyle(.secondary) }
+            Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary)
+        }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 22))
+    }
 }
 
 struct PusheenTabs: View {
