@@ -349,13 +349,33 @@ struct NativeChatPane: View {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
                     .onChange(of: selectedPhoto) { _, item in Task { await sendPhoto(item) } }
                 TextField("Сообщение…", text: $draft).focused($inputFocused).submitLabel(.send).onSubmit { submit() }
-                    .onChange(of: inputFocused) { _, value in focused = value }
+                    .onChange(of: inputFocused) { _, value in
+                        if value {
+                            focused = true
+                        } else {
+                            // SwiftUI may briefly release the first responder
+                            // while the message list is updating. Ignore that
+                            // transient loss so the keyboard/player do not jump.
+                            Task {
+                                try? await Task.sleep(for: .milliseconds(180))
+                                if !inputFocused { focused = false }
+                            }
+                        }
+                    }
                 Button { submit() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 31, weight: .medium)) }
                     .buttonStyle(.plain).disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
         }.padding(12).liquidCard()
     }
-    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; sticksToBottom = true; send(text, ""); draft = ""; DispatchQueue.main.async { inputFocused = true; focused = true } }
+    private func submit() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        sticksToBottom = true
+        send(text, "")
+        draft = ""
+        // Do not reassign FocusState here. The field already owns the keyboard;
+        // setting it again on the next run loop caused the visible reopen/jump.
+    }
     private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
     private func scroll(_ proxy: ScrollViewProxy, force: Bool = false) {
         guard force || sticksToBottom else { return }
