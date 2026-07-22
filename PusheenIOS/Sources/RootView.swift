@@ -172,7 +172,7 @@ struct RoomView: View {
                 if controlsVisible {
                     VStack(spacing: 8) {
                         PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
-                        HStack(spacing: 22) { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Text(time(model.position)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary) }
+                        HStack(spacing: 22) { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 5).liquidCard(Capsule()) }.buttonStyle(.plain) }
                             .padding(10).liquidCard(Capsule()).padding(.horizontal, 3).disabled(!model.isOwner).opacity(model.isOwner ? 1 : 0.42)
                     }
                     .transition(.opacity.combined(with: .move(edge: .top)))
@@ -262,7 +262,7 @@ struct SeekTimePickerSheet: View {
                 Picker("Сек", selection: $second) { ForEach(0..<60, id: \.self) { Text("\($0) сек") } }
             }.pickerStyle(.wheel)
             Button("Перейти") { select(Double(minute * 60 + second)); dismiss() }.buttonStyle(.borderedProminent)
-        }.padding().presentationDetents([.height(330)]).presentationBackground(.ultraThinMaterial)
+        }.padding(.horizontal, 18).padding(.vertical, 14).presentationDetents([.height(286)]).presentationBackground(.ultraThinMaterial).presentationCornerRadius(30)
     }
 }
 
