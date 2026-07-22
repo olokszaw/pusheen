@@ -36,10 +36,10 @@ struct ProfileView: View {
 struct AcrylicBackground: View {
     var body: some View {
         ZStack {
-            Color(red: 0.025, green: 0.024, blue: 0.075).ignoresSafeArea()
-            Circle().fill(.purple.opacity(0.50)).frame(width: 340).blur(radius: 85).offset(x: -170, y: -330)
-            Circle().fill(.pink.opacity(0.30)).frame(width: 290).blur(radius: 95).offset(x: 180, y: 390)
-            Circle().fill(.blue.opacity(0.27)).frame(width: 240).blur(radius: 90).offset(x: 190, y: 70)
+            Color(red: 0.028, green: 0.037, blue: 0.055).ignoresSafeArea()
+            Circle().fill(.teal.opacity(0.14)).frame(width: 360).blur(radius: 105).offset(x: -190, y: -330)
+            Circle().fill(.indigo.opacity(0.17)).frame(width: 300).blur(radius: 115).offset(x: 200, y: 390)
+            Circle().fill(.cyan.opacity(0.10)).frame(width: 250).blur(radius: 105).offset(x: 175, y: 85)
         }
     }
 }
@@ -305,6 +305,8 @@ struct NativeChatPane: View {
     let react: (Int, String) -> Void
     @FocusState private var inputFocused: Bool
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var reactionMessageID: Int?
+    @State private var showEmojiPicker = false
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -312,7 +314,7 @@ struct NativeChatPane: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(messages) { message in NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions).id(message.id) }
+                        ForEach(messages) { message in NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, openPicker: { reactionMessageID = $0; showEmojiPicker = true }).id(message.id) }
                     }.padding(.vertical, 2)
                 }.contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
@@ -326,6 +328,7 @@ struct NativeChatPane: View {
                     .buttonStyle(.plain).disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
         }.padding(12).liquidCard()
+            .sheet(isPresented: $showEmojiPicker) { FluentEmojiPicker { emoji in if let messageID = reactionMessageID { react(messageID, emoji) }; showEmojiPicker = false } }
     }
     private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text, ""); draft = "" }
     private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
@@ -333,7 +336,8 @@ struct NativeChatPane: View {
 }
 
 struct NativeMessageBubble: View {
-    let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
+    let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]; let openPicker: (Int) -> Void
+    @State private var showPhoto = false
     var body: some View {
         if message.isSystem {
             Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
@@ -344,9 +348,9 @@ struct NativeMessageBubble: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary)
                 if !message.text.isEmpty { Text(message.text).font(.subheadline).lineLimit(5) }
-                if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
+                if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { showPhoto = true }.fullScreenCover(isPresented: $showPhoto) { ZStack { Color.black.ignoresSafeArea(); DataURLImage(dataURL: message.imageDataURL).scaledToFit().padding(); VStack { HStack { Spacer(); Button { showPhoto = false } label: { Image(systemName: "xmark.circle.fill").font(.title) }.padding() }; Spacer() } } } }
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { Text("\(item.emoji) \(item.count)").font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.purple.opacity(0.44) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
-            }.padding(10).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
+            }.padding(10).background(isMine ? Color.indigo.opacity(0.32) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }; Button("Все emoji") { openPicker(message.id) }
             }
             if !isMine { Spacer(minLength: 20) }
         }
@@ -431,7 +435,7 @@ struct RoomCard: View {
     }
 }
 
-struct PusheenTabs: View {
+struct LegacyPusheenTabs2: View {
     var body: some View { TabView { HomeView().tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }; FriendsGlassView().tabItem { Label("Друзья", systemImage: "person.2.fill") }; ProfileGlassView().tabItem { Label("Профиль", systemImage: "person.crop.circle.fill") } }.tint(.purple) }
 }
 
@@ -518,4 +522,37 @@ struct FriendsGlassView: View {
     }
     private func loadFriends() async { friends = (try? await session.api.friends()) ?? [] }
     private func search() async { results = (try? await session.api.friends(query: query)) ?? [] }
+}
+
+struct PusheenTabs: View {
+    @State private var selection = 0
+    @State private var dragX: CGFloat = 0
+    private let items: [(String, String)] = [("Комнаты", "play.rectangle.fill"), ("Друзья", "person.2.fill"), ("Профиль", "person.crop.circle.fill")]
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Group { switch selection { case 0: HomeView(); case 1: FriendsGlassView(); default: ProfileGlassView() } }
+                .transition(.opacity.combined(with: .scale(scale: 0.985))).id(selection)
+            HStack(spacing: 5) { ForEach(Array(items.enumerated()), id: \.offset) { index, item in Button { withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) { selection = index } } label: { HStack(spacing: 7) { Image(systemName: item.1).font(.headline); if selection == index { Text(item.0).font(.caption.weight(.semibold)).lineLimit(1).transition(.opacity.combined(with: .move(edge: .leading))) } }.foregroundStyle(selection == index ? .primary : .secondary).padding(.horizontal, selection == index ? 14 : 12).padding(.vertical, 11).background(selection == index ? Color.white.opacity(0.14) : .clear, in: Capsule()) }.buttonStyle(.plain) } }
+                .padding(6).liquidCard(Capsule()).padding(.horizontal, 20).padding(.bottom, 10).offset(x: dragX)
+                .gesture(DragGesture().onChanged { dragX = $0.translation.width * 0.15 }.onEnded { value in if value.translation.width < -45 { selection = min(2, selection + 1) }; if value.translation.width > 45 { selection = max(0, selection - 1) }; withAnimation(.spring) { dragX = 0 } })
+        }
+    }
+}
+
+struct FluentEmojiPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    let select: (String) -> Void
+    private var catalog: [String] {
+        let base = (0x1F300...0x1FAFF).compactMap { UnicodeScalar($0).map { String($0) } }
+        return query.isEmpty ? base : base.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 7)
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 12) { Capsule().fill(.white.opacity(0.24)).frame(width: 38, height: 5); HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Search Fluent Emoji", text: $query) }.padding(12).liquidCard(Capsule()); ScrollView { LazyVGrid(columns: columns, spacing: 14) { ForEach(catalog, id: \.self) { emoji in Button { select(emoji); dismiss() } label: { FluentEmojiView(emoji: emoji, size: 35) }.buttonStyle(.plain).frame(height: 46) } } } }.padding(16) }.presentationDetents([.medium, .large]).presentationBackground(.clear) }
+}
+
+struct FluentEmojiView: View {
+    let emoji: String; let size: CGFloat
+    private var url: URL? { let slug = emoji.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: "-"); return URL(string: "https://unpkg.com/@lobehub/fluent-emoji-3d@latest/assets/\(slug).webp") }
+    var body: some View { AsyncImage(url: url) { image in image.resizable().scaledToFit() } placeholder: { ProgressView().controlSize(.mini) }.frame(width: size, height: size) }
 }
