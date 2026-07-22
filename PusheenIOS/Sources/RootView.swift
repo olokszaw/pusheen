@@ -168,9 +168,12 @@ struct RoomView: View {
                 PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
             }.padding(14)
-        }.contentShape(Rectangle()).onTapGesture { chatFocused = false }.gesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
+            if showMembers {
+                Color.black.opacity(0.32).ignoresSafeArea().onTapGesture { withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) { showMembers = false } }
+                ParticipantsDrawer(members: model.members, currentID: session.profile?.userId, dismiss: { withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) { showMembers = false } }).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing).transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }.animation(.spring(response: 0.34, dampingFraction: 0.88), value: showMembers).contentShape(Rectangle()).onTapGesture { chatFocused = false }.gesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
-            .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
 }
@@ -264,6 +267,11 @@ struct MembersSheet: View {
     }
 }
 
+struct ParticipantsDrawer: View {
+    let members: [RoomMember]; let currentID: Int?; let dismiss: () -> Void
+    var body: some View { VStack(alignment: .leading, spacing: 14) { HStack { Text("Участники").font(.title3.bold()); Spacer(); Button(action: dismiss) { Image(systemName: "xmark").frame(width: 32, height: 32).liquidCard(Circle()) }.buttonStyle(.plain) }; ForEach(members) { member in HStack(spacing: 10) { AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 45); VStack(alignment: .leading, spacing: 3) { HStack { Text(member.nickname).font(.subheadline.bold()); if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }; Text("@\(member.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Circle().fill(member.isOnline ? .green : .gray).frame(width: 8, height: 8) }.padding(8).liquidCard(RoundedRectangle(cornerRadius: 16)) }; Spacer() }.padding(18).frame(width: min(UIScreen.main.bounds.width * 0.84, 360), maxHeight: .infinity).liquidCard(RoundedRectangle(cornerRadius: 30)).padding(.vertical, 10).padding(.trailing, 8) }
+}
+
 struct BarePlayerSurface: UIViewRepresentable {
     let player: AVPlayer
     func makeUIView(context: Context) -> PlayerLayerView { PlayerLayerView(player: player) }
@@ -347,7 +355,7 @@ struct NativeMessageBubble: View {
             if isMine { Spacer(minLength: 44) }
             VStack(alignment: .leading, spacing: 4) {
                 Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary)
-                if !message.text.isEmpty { Text(message.text).font(.subheadline).lineLimit(5) }
+                if !message.text.isEmpty { FluentMessageText(message.text) }
                 if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { showPhoto = true }.fullScreenCover(isPresented: $showPhoto) { ZStack { Color.black.ignoresSafeArea(); DataURLImage(dataURL: message.imageDataURL).scaledToFit().padding(); VStack { HStack { Spacer(); Button { showPhoto = false } label: { Image(systemName: "xmark.circle.fill").font(.title) }.padding() }; Spacer() } } } }
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { Text("\(item.emoji) \(item.count)").font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.purple.opacity(0.44) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
             }.padding(10).background(isMine ? Color.indigo.opacity(0.32) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }; Button("Все emoji") { openPicker(message.id) }
@@ -555,4 +563,11 @@ struct FluentEmojiView: View {
     let emoji: String; let size: CGFloat
     private var url: URL? { let slug = emoji.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: "-"); return URL(string: "https://unpkg.com/@lobehub/fluent-emoji-3d@latest/assets/\(slug).webp") }
     var body: some View { AsyncImage(url: url) { image in image.resizable().scaledToFit() } placeholder: { ProgressView().controlSize(.mini) }.frame(width: size, height: size) }
+}
+
+struct FluentMessageText: View {
+    let text: String
+    private var singleEmoji: String? { let characters = Array(text); guard characters.count == 1, let item = characters.first, item.unicodeScalars.contains(where: { (0x1F000...0x1FAFF).contains(Int($0.value)) || (0x2600...0x27FF).contains(Int($0.value)) }) else { return nil }; return String(item) }
+    init(_ text: String) { self.text = text }
+    var body: some View { if let singleEmoji { FluentEmojiView(emoji: singleEmoji, size: 31) } else { Text(text).font(.subheadline).lineLimit(5) } }
 }
