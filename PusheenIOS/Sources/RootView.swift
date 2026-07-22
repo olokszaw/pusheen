@@ -112,15 +112,16 @@ struct HomeView: View {
     @State private var rooms: [Room] = []
     @State private var path = NavigationPath()
     @State private var showCreate = false
+    @State private var showJoin = false
     var body: some View {
         NavigationStack(path: $path) { ZStack { AcrylicBackground()
             ScrollView { VStack(alignment: .leading, spacing: 18) {
                 HStack { VStack(alignment: .leading) { Text("Pusheen").font(.largeTitle.bold()); Text("Привет, \(session.profile?.nickname ?? "")").foregroundStyle(.secondary) }; Spacer(); Button { session.logout() } label: { Image(systemName: "rectangle.portrait.and.arrow.right").padding(10).liquidCard(Circle()) }.buttonStyle(.plain) }
-                HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Button { showCreate = true } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
+                HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 ForEach(rooms) { room in NavigationLink(value: room) { RoomCard(room: room) }.buttonStyle(.plain) }
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
             }.padding(18) }.task { await load() }
-        }.navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }.sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } } }
+        }.navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }.sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }.sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } } }
     }
     private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
 }
@@ -252,7 +253,7 @@ struct MembersSheet: View {
             Text("Участники").font(.title2.bold())
             ForEach(members) { member in
                 HStack(spacing: 11) {
-                    Circle().fill(.purple.opacity(0.7)).frame(width: 46, height: 46).overlay(Text(member.nickname.prefix(1)).bold())
+                    AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 46)
                     VStack(alignment: .leading) {
                         HStack { Text(member.nickname).bold(); if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
                         Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
@@ -445,8 +446,45 @@ struct LegacyFriendsGlassView: View {
 struct ProfileGlassView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var edit = false
-    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 12) { Spacer(minLength: 40); Circle().fill(LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing)).frame(width: 112, height: 112).overlay(Text((session.profile?.nickname ?? "?").prefix(1)).font(.system(size: 42, weight: .bold))); HStack(spacing: 8) { VStack(spacing: 3) { Text(session.profile?.nickname ?? "").font(.title2.bold()); Text("@\(session.profile?.username ?? "")").foregroundStyle(.secondary) }; Button { edit = true } label: { Image(systemName: "pencil").font(.caption.weight(.bold)).frame(width: 29, height: 29).liquidCard(Circle()) }.buttonStyle(.plain) }; Spacer(); Button("Выйти") { session.logout() }.buttonStyle(.bordered).tint(.red).padding(.bottom, 28) }.padding(20) }.sheet(isPresented: $edit) { ProfileEditSheet() }
+    @State private var avatarPicker: PhotosPickerItem?
+    var body: some View {
+        ZStack {
+            AcrylicBackground()
+            ScrollView {
+                VStack(spacing: 14) {
+                    Spacer(minLength: 22)
+                    PhotosPicker(selection: $avatarPicker, matching: .images) {
+                        ZStack(alignment: .bottomTrailing) {
+                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 112)
+                            Image(systemName: "camera.fill").font(.caption.weight(.bold)).padding(8).liquidCard(Circle())
+                        }
+                    }.onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
+                    HStack(spacing: 8) {
+                        VStack(spacing: 3) {
+                            Text(session.profile?.nickname ?? "").font(.title2.bold())
+                            Text("@\(session.profile?.username ?? "")").foregroundStyle(.secondary)
+                        }
+                        Button { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { edit.toggle() } } label: {
+                            Image(systemName: "pencil").font(.caption.weight(.bold)).frame(width: 30, height: 30).liquidCard(Circle())
+                        }.buttonStyle(.plain)
+                    }
+                    if edit { ProfileInlineEditor(close: { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { edit = false } }).transition(.opacity.combined(with: .move(edge: .top))) }
+                    Button("Выйти") { session.logout() }.buttonStyle(.bordered).tint(.red).padding(.top, 8)
+                }.padding(20)
+            }
+        }
     }
+    private func updateAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self), let profile = session.profile else { return }; let value = "data:image/jpeg;base64," + data.base64EncodedString(); session.profile = try? await session.api.updateProfile(nickname: profile.nickname, username: profile.username, avatar: value) }
+}
+
+struct JoinRoomSheet: View {
+    @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    let joined: (Room) -> Void
+    @State private var code = ""
+    @State private var error = ""
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 16) { Text("Войти в комнату").font(.title3.bold()); GlassField(icon: "number", title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button("Присоединиться") { Task { await join() } }.buttonStyle(.plain).padding(.horizontal, 24).padding(.vertical, 12).liquidCard(Capsule()) }.padding(22).liquidCard(RoundedRectangle(cornerRadius: 28)).padding(18) }.presentationDetents([.height(250)]).presentationBackground(.clear) }
+    private func join() async { do { let room = try await session.api.joinRoom(code: code.trimmingCharacters(in: .whitespacesAndNewlines)); joined(room); dismiss() } catch { self.error = error.localizedDescription } }
 }
 
 struct LegacyProfileEditSheet: View {
@@ -486,6 +524,16 @@ struct ProfileEditSheet: View {
     private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username, avatar: avatar); dismiss() } catch { self.error = error.localizedDescription } }
 }
 
+struct ProfileInlineEditor: View {
+    @EnvironmentObject private var session: SessionStore
+    let close: () -> Void
+    @State private var nickname = ""
+    @State private var username = ""
+    @State private var error = ""
+    var body: some View { VStack(spacing: 10) { GlassField(icon: "person", title: "Nickname", text: $nickname); GlassField(icon: "at", title: "Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled(); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; HStack { Button("Отмена", action: close).buttonStyle(.bordered); Button("Готово") { Task { await save() } }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 11).liquidCard(Capsule()) } }.padding(14).liquidCard(RoundedRectangle(cornerRadius: 22)).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" } }
+    private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username); close() } catch { error = error.localizedDescription } }
+}
+
 struct FriendsGlassView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var expanded = false
@@ -508,7 +556,7 @@ struct FriendsGlassView: View {
                 ScrollView {
                     LazyVStack(spacing: 9) {
                         ForEach(expanded && !query.isEmpty ? results : friends) { person in
-                            HStack(spacing: 11) { AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48); VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); if expanded && !person.isFriend { Button("Добавить") { Task { try? await session.api.addFriend(username: person.username); await loadFriends(); await search() } }.buttonStyle(.bordered) } else if person.isFriend { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) } }.padding(11).liquidCard(RoundedRectangle(cornerRadius: 20))
+                            HStack(spacing: 11) { AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48); VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); if expanded && !person.isFriend { Button("Добавить") { Task { try? await session.api.addFriend(username: person.username); await loadFriends(); await search() } }.buttonStyle(.bordered) } }.padding(11).liquidCard(RoundedRectangle(cornerRadius: 20))
                         }
                         if friends.isEmpty && !expanded { ContentUnavailableView("Друзей пока нет", systemImage: "person.2") }
                     }

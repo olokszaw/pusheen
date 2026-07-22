@@ -1,0 +1,16 @@
+Pusheen Liquid Glass navigation backup
+======================================
+
+This file preserves the navigation implementation that must not be replaced
+without an explicit product decision. The active app navigation lives in:
+
+PusheenIOS/Sources/RootView.swift
+
+It is the PusheenTabs view and its three sections:
+- Rooms
+- Friends
+- Profile
+
+The intended visual language is iOS Liquid Glass: translucent material,
+soft blur, rounded capsule controls and spring transitions. Do not replace it
+with a default tab bar or a solid coloured navigation component.
