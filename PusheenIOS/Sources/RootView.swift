@@ -329,6 +329,9 @@ struct NativeChatPane: View {
     @FocusState private var inputFocused: Bool
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var sticksToBottom = true
+    @State private var protectFocusDuringSend = false
+    @State private var focusProtectionTask: Task<Void, Never>?
+    @State private var scrollRequest = 0
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -339,11 +342,12 @@ struct NativeChatPane: View {
                         ForEach(messages) { message in NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions).id(message.id) }
                         Color.clear.frame(height: 1).id("chat-bottom")
                     }.padding(.vertical, 2)
-                }.contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
+                }.defaultScrollAnchor(.bottom).contentShape(Rectangle()).onTapGesture { protectFocusDuringSend = false; focused = false; inputFocused = false }
                     .simultaneousGesture(DragGesture(minimumDistance: 6).onChanged { _ in sticksToBottom = false })
                     .onAppear { scroll(proxy, force: true) }
                     .onChange(of: focused) { _, active in if active { sticksToBottom = true; scroll(proxy, force: true) } }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
+                    .onChange(of: scrollRequest) { _, _ in scroll(proxy, force: true) }
             }.frame(maxHeight: .infinity)
             HStack(spacing: 8) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
@@ -352,14 +356,14 @@ struct NativeChatPane: View {
                     .onChange(of: inputFocused) { _, value in
                         if value {
                             focused = true
+                        } else if protectFocusDuringSend {
+                            // Sending via the arrow can transiently move focus to
+                            // the button. Restore it in the same update pass so
+                            // the keyboard never starts its dismissal animation.
+                            inputFocused = true
+                            focused = true
                         } else {
-                            // SwiftUI may briefly release the first responder
-                            // while the message list is updating. Ignore that
-                            // transient loss so the keyboard/player do not jump.
-                            Task {
-                                try? await Task.sleep(for: .milliseconds(180))
-                                if !inputFocused { focused = false }
-                            }
+                            focused = false
                         }
                     }
                 Button { submit() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 31, weight: .medium)) }
@@ -370,11 +374,19 @@ struct NativeChatPane: View {
     private func submit() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        focusProtectionTask?.cancel()
+        protectFocusDuringSend = true
+        inputFocused = true
+        focused = true
         sticksToBottom = true
         send(text, "")
         draft = ""
-        // Do not reassign FocusState here. The field already owns the keyboard;
-        // setting it again on the next run loop caused the visible reopen/jump.
+        scrollRequest += 1
+        focusProtectionTask = Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            protectFocusDuringSend = false
+        }
     }
     private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
     private func scroll(_ proxy: ScrollViewProxy, force: Bool = false) {
@@ -384,6 +396,7 @@ struct NativeChatPane: View {
         // The keyboard and a new message alter geometry on the following pass.
         // Pin again after that layout, without animation, to prevent a jump upward.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { if sticksToBottom { pin() } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { if sticksToBottom { pin() } }
     }
 }
 
