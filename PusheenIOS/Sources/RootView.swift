@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
@@ -71,7 +72,7 @@ struct HomeView: View {
                 ForEach(rooms) { room in NavigationLink(value: room) { RoomCard(room: room) }.buttonStyle(.plain) }
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
             }.padding(18) }.task { await load() }
-        }.navigationDestination(for: Room.self) { RoomView(room: $0) } }
+        }.navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") } }
     }
     private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
 }
@@ -84,13 +85,28 @@ struct RoomCard: View {
 struct RoomView: View {
     @EnvironmentObject private var session: SessionStore
     let room: Room
-    @State private var messages: [ChatMessage] = []
+    let api: APIClient
+    let token: String
     @State private var draft = ""
     @State private var showTime = false
-    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(spacing: 14) {
-        VideoPlayerPlaceholder(room: room, showTime: $showTime)
-        VStack(alignment: .leading, spacing: 10) { Text("Чат").font(.headline); ForEach(messages) { message in HStack { Text(message.nickname).font(.caption.bold()).foregroundStyle(.purple); Text(message.text); Spacer() }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 15)) }; HStack { TextField("Сообщение…", text: $draft); Button { draft = "" } label: { Image(systemName: "arrow.up.circle.fill") }.disabled(draft.isEmpty) }.padding(8).liquidCard(Capsule()) }.padding(14).liquidCard()
-    } .padding(14) }.task { messages = (try? await session.api.messages(roomID: room.id)) ?? [] } }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline) }
+    @StateObject private var model: RoomViewModel
+    init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
+    var body: some View {
+        ZStack { AcrylicBackground()
+            VStack(spacing: 12) {
+                if let player = model.player { VideoPlayer(player: player).frame(height: 235).clipShape(RoundedRectangle(cornerRadius: 25)) } else { ProgressView().frame(height: 235) }
+                HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
+                Slider(value: Binding(get: { model.position }, set: { model.seek($0) }), in: 0...max(1, model.duration)).disabled(!model.isOwner)
+                ChatPane(messages: model.messages, draft: $draft, send: { text in model.send(text); draft = "" })
+            }.padding(14)
+        }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }.sheet(isPresented: $showTime) { TimePickerSheet() }
+    }
+    private func time(_ value: Double) -> String { let total = Int(value); return String(format: "%02d:%02d", total / 60, total % 60) }
+}
+
+struct ChatPane: View {
+    let messages: [ChatMessage]; @Binding var draft: String; let send: (String) -> Void
+    var body: some View { VStack(alignment: .leading, spacing: 8) { Text("Чат").font(.headline); ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 7) { ForEach(messages) { message in HStack(alignment: .top, spacing: 8) { Circle().fill(.purple.opacity(0.7)).frame(width: 28, height: 28).overlay(Text(message.nickname.prefix(1)).font(.caption.bold())); VStack(alignment: .leading, spacing: 2) { Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary); Text(message.text).font(.subheadline) }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 15)); Spacer(minLength: 20) }.id(message.id) } } }.onChange(of: messages.count) { _, _ in if let id = messages.last?.id { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }.frame(maxHeight: 250); HStack { TextField("Сообщение…", text: $draft, axis: .vertical).lineLimit(1...3).onSubmit { send(draft) }; Button { send(draft) } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }.padding(8).liquidCard(Capsule()) }.padding(12).liquidCard() }
 }
 
 struct VideoPlayerPlaceholder: View {
