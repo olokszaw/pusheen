@@ -71,7 +71,7 @@ final class RoomViewModel: ObservableObject {
             let online = event["is_online"] as? Bool ?? true
             if event["changed"] as? Bool == true {
                 let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-                messages.append(ChatMessage(id: -timestamp, authorId: 0, nickname: "", text: online ? "(nickname) присоединился к просмотру" : "(nickname) вышел из комнаты", imageDataURL: "", avatarDataURL: "", reactions: [], isSystem: true))
+                messages.append(ChatMessage(id: -timestamp, authorId: 0, nickname: "", text: online ? "\(nickname) присоединился к просмотру" : "\(nickname) вышел из комнаты", imageDataURL: "", avatarDataURL: "", reactions: [], isSystem: true))
             }
             Task { self.members = (try? await self.api.members(roomID: self.room.id)) ?? self.members }
         default: break

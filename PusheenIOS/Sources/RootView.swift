@@ -159,21 +159,23 @@ struct RoomView: View {
     @State private var showTime = false
     @State private var showMembers = false
     @State private var chatFocused = false
+    @State private var copiedCode = false
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
-        ZStack { AcrylicBackground()
+        ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
             VStack(spacing: 12) {
-                if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 122 : 235).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 122 : 235) }
-                HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { UIPasteboard.general.string = room.inviteCode } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты"); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
+                if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 104 : 210) }
+                HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "doc.on.doc.fill").font(.title3).foregroundStyle(copiedCode ? .green : .primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты"); Button { showTime = true } label: { Text(time(model.position)) } }.padding(8).liquidCard(Capsule())
                 PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
-                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
-            }.padding(14)
-        }.contentShape(Rectangle()).onTapGesture { chatFocused = false }.gesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
+                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
+            }.padding(14).frame(maxHeight: .infinity, alignment: .top)
+        }.gesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
+    private func copyInviteCode() { UIPasteboard.general.string = room.inviteCode; withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) { copiedCode = true }; Task { try? await Task.sleep(for: .seconds(1.6)); await MainActor.run { withAnimation(.easeOut(duration: 0.22)) { copiedCode = false } } } }
 }
 
 struct ChatPane: View {
@@ -319,7 +321,7 @@ struct NativeChatPane: View {
                     .onAppear { scroll(proxy) }
                     .onChange(of: focused) { _, active in if active { scroll(proxy) } }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
-            }.frame(maxHeight: focused ? 360 : 220)
+            }.frame(maxHeight: .infinity)
             HStack(spacing: 8) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
                     .onChange(of: selectedPhoto) { _, item in Task { await sendPhoto(item) } }
