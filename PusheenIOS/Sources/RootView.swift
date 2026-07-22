@@ -168,9 +168,13 @@ struct RoomView: View {
             VStack(spacing: 12) {
                 Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
                     .frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).contentShape(Rectangle()).onTapGesture { withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { controlsVisible.toggle() } }.animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused)
-                PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
                 if controlsVisible {
-                    HStack(spacing: 22) { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Text(time(model.position)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary) }.padding(10).liquidCard(Capsule()).padding(.horizontal, 3).disabled(!model.isOwner).opacity(model.isOwner ? 1 : 0.42).transition(.opacity.combined(with: .move(edge: .top)))
+                    VStack(spacing: 8) {
+                        PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
+                        HStack(spacing: 22) { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Text(time(model.position)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary) }
+                            .padding(10).liquidCard(Capsule()).padding(.horizontal, 3).disabled(!model.isOwner).opacity(model.isOwner ? 1 : 0.42)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
             }.padding(14).frame(maxHeight: .infinity, alignment: .top)
@@ -426,7 +430,19 @@ struct DataURLImage: View {
 
 struct AvatarView: View {
     let dataURL: String; let name: String; let size: CGFloat
-    var body: some View { ZStack { Circle().fill(.purple.opacity(0.72)); if !dataURL.isEmpty { DataURLImage(dataURL: dataURL).clipShape(Circle()) } else { Text(name.prefix(1)).font(.caption.bold()) } }.frame(width: size, height: size) }
+    var body: some View {
+        ZStack {
+            Circle().fill(LinearGradient(colors: [Color(red: 0.13, green: 0.52, blue: 0.56), Color(red: 0.16, green: 0.28, blue: 0.52)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            if !dataURL.isEmpty {
+                DataURLImage(dataURL: dataURL).clipShape(Circle()).padding(2)
+            } else {
+                Text(name.prefix(1)).font(.system(size: max(12, size * 0.38), weight: .bold, design: .rounded))
+            }
+        }
+        .frame(width: size, height: size)
+        .overlay(Circle().stroke(LinearGradient(colors: [.white.opacity(0.58), .white.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
+        .shadow(color: .black.opacity(0.30), radius: 6, y: 3)
+    }
 }
 
 struct RoomCard: View {
@@ -485,12 +501,51 @@ struct ProfileGlassView: View {
     private func updateAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self), let profile = session.profile else { return }; let value = "data:image/jpeg;base64," + data.base64EncodedString(); session.profile = try? await session.api.updateProfile(nickname: profile.nickname, username: profile.username, avatar: value) }
 }
 
-struct FluentEmojiGlyph: View {
+/// Uses Unicode filenames, so every emoji typed from the system keyboard maps to
+/// the corresponding Microsoft Fluent asset instead of a small hard-coded set.
+struct FluentEmojiGlyph: UIViewRepresentable {
     let emoji: String
     let size: CGFloat
     init(_ emoji: String, size: CGFloat = 21) { self.emoji = emoji; self.size = size }
-    private var assetURL: URL? { let slug = emoji.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: "-"); return URL(string: "https://unpkg.com/@lobehub/fluent-emoji-animated@latest/assets/\(slug).webp") }
-    var body: some View { AsyncImage(url: assetURL) { image in image.resizable().scaledToFit() } placeholder: { Text(emoji).font(.system(size: size)) }.frame(width: size, height: size) }
+    private var assetURL: URL? {
+        let slug = emoji.unicodeScalars
+            .filter { $0.value != 0xFE0F }
+            .map { String($0.value, radix: 16) }
+            .joined(separator: "-")
+        return URL(string: "https://raw.githubusercontent.com/bignutty/fluent-emoji/main/animated/\(slug).png")
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> EmojiImageView {
+        let imageView = EmojiImageView(emojiSize: size)
+        imageView.contentMode = .scaleAspectFit
+        imageView.backgroundColor = .clear
+        return imageView
+    }
+    func updateUIView(_ imageView: EmojiImageView, context: Context) {
+        guard context.coordinator.lastEmoji != emoji else { return }
+        context.coordinator.lastEmoji = emoji
+        imageView.image = nil
+        context.coordinator.task?.cancel()
+        guard let assetURL else { return }
+        context.coordinator.task = URLSession.shared.dataTask(with: assetURL) { data, _, _ in
+            guard let data, let image = UIImage(data: data) else { return }
+            DispatchQueue.main.async {
+                guard context.coordinator.lastEmoji == emoji else { return }
+                imageView.image = image
+                imageView.startAnimating()
+            }
+        }
+        context.coordinator.task?.resume()
+    }
+    static func dismantleUIView(_ imageView: EmojiImageView, coordinator: Coordinator) { coordinator.task?.cancel() }
+    final class Coordinator { var task: URLSessionDataTask?; var lastEmoji = "" }
+}
+
+final class EmojiImageView: UIImageView {
+    private let emojiSize: CGFloat
+    init(emojiSize: CGFloat) { self.emojiSize = emojiSize; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var intrinsicContentSize: CGSize { CGSize(width: emojiSize, height: emojiSize) }
 }
 
 struct FluentInlineText: View {
