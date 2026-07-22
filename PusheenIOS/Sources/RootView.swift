@@ -4,9 +4,31 @@ import AVKit
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
     var body: some View {
-        Group { if session.profile == nil { AuthView() } else { HomeView() } }
+        Group { if session.profile == nil { AuthView() } else { PusheenTabs() } }
             .preferredColorScheme(.dark)
     }
+}
+
+struct PusheenTabs: View {
+    var body: some View { TabView {
+        HomeView().tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }
+        FriendsView().tabItem { Label("Друзья", systemImage: "person.2.fill") }
+        ProfileView().tabItem { Label("Профиль", systemImage: "person.crop.circle") }
+    }.tint(.purple) }
+}
+
+struct FriendsView: View {
+    @EnvironmentObject private var session: SessionStore
+    @State private var query = ""; @State private var people: [FriendProfile] = []
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 14) { HStack { Image(systemName: "person.badge.plus"); TextField("Найти по @username", text: $query).textInputAutocapitalization(.never).onSubmit { Task { await search() } } }.padding(12).liquidCard(Capsule()); ScrollView { LazyVStack(spacing: 8) { ForEach(people) { person in HStack { Circle().fill(.purple.opacity(0.7)).frame(width: 42, height: 42).overlay(Text(person.nickname.prefix(1))); VStack(alignment: .leading) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button(person.isFriend ? "Добавлен" : "Добавить") { Task { try? await session.api.addFriend(username: person.username); await search() } }.buttonStyle(.bordered) }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 18)) } } } }.padding(16) }.task { await search() } }
+    private func search() async { people = (try? await session.api.friends(query: query)) ?? [] }
+}
+
+struct ProfileView: View {
+    @EnvironmentObject private var session: SessionStore
+    @State private var nickname = ""; @State private var username = ""; @State private var available: Bool?; @State private var error = ""
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 16) { Circle().fill(.purple.opacity(0.7)).frame(width: 94, height: 94).overlay(Text((session.profile?.nickname ?? "?").prefix(1)).font(.largeTitle.bold())); Text(session.profile?.nickname ?? "").font(.title2.bold()); Text("@\(session.profile?.username ?? "")").foregroundStyle(.secondary); VStack(spacing: 10) { TextField("Nickname", text: $nickname); TextField("Username", text: $username).textInputAutocapitalization(.never).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; if !username.isEmpty { Text(available == true ? "@\(username) свободен" : "Проверяем или занято").font(.caption).foregroundStyle(available == true ? .green : .orange) }; Button("Сохранить") { Task { await save() } }.buttonStyle(.borderedProminent); if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) } }.textFieldStyle(.roundedBorder).padding(16).liquidCard(RoundedRectangle(cornerRadius: 24)); Spacer() }.padding(20) }.onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" } }
+    private func save() async { do { let profile = try await session.api.updateProfile(nickname: nickname, username: username); session.profile = profile } catch { self.error = error.localizedDescription } }
 }
 
 struct AcrylicBackground: View {
@@ -64,17 +86,37 @@ struct HomeView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var rooms: [Room] = []
     @State private var path = NavigationPath()
+    @State private var showCreate = false
     var body: some View {
         NavigationStack(path: $path) { ZStack { AcrylicBackground()
             ScrollView { VStack(alignment: .leading, spacing: 18) {
                 HStack { VStack(alignment: .leading) { Text("Pusheen").font(.largeTitle.bold()); Text("Привет, \(session.profile?.nickname ?? "")").foregroundStyle(.secondary) }; Spacer(); Button { session.logout() } label: { Image(systemName: "rectangle.portrait.and.arrow.right").padding(10).liquidCard(Circle()) }.buttonStyle(.plain) }
-                Text("Мои комнаты").font(.title2.bold())
+                HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Button { showCreate = true } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 ForEach(rooms) { room in NavigationLink(value: room) { RoomCard(room: room) }.buttonStyle(.plain) }
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
             }.padding(18) }.task { await load() }
-        }.navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") } }
+        }.navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }.sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } } }
     }
     private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
+}
+
+struct CreateRoomSheet: View {
+    @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    let created: (Room) -> Void
+    @State private var url = ""
+    @State private var isPrivate = false
+    @State private var loading = false
+    @State private var error = ""
+    var body: some View { ZStack { AcrylicBackground(); VStack(alignment: .leading, spacing: 16) {
+        Text("Новая комната").font(.title2.bold())
+        Text("Вставь ссылку VK Видео или сайта. Сервер сам возьмёт название и обложку.").font(.subheadline).foregroundStyle(.secondary)
+        TextField("Ссылка на видео", text: $url, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
+        Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
+        if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
+        Button { Task { await create() } } label: { Label("Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).disabled(url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading)
+    }.padding(22) }.presentationDetents([.medium]).presentationBackground(.clear) }
+    private func create() async { loading = true; error = ""; defer { loading = false }; do { let room = try await session.api.createRoom(videoURL: url.trimmingCharacters(in: .whitespacesAndNewlines), isPrivate: isPrivate); created(room); dismiss() } catch { self.error = error.localizedDescription } }
 }
 
 struct RoomCard: View {
