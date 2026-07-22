@@ -163,7 +163,7 @@ struct RoomView: View {
     var body: some View {
         ZStack { AcrylicBackground()
             VStack(spacing: 12) {
-                if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 148 : 235).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 148 : 235) }
+                if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 122 : 235).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 122 : 235) }
                 HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); ShareLink(item: api.baseURL.appending(path: "join/\(room.inviteCode)")) { Image(systemName: "link") }.buttonStyle(.plain); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
                 PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
@@ -291,7 +291,7 @@ struct PlaybackScrubber: View {
                 Circle().fill(.white).shadow(color: .purple.opacity(0.7), radius: 7).frame(width: 18, height: 18).offset(x: max(0, min(width - 18, width * ratio - 9)))
                 if let dragging { Text(scrubTime(dragging)).font(.caption2.monospacedDigit().weight(.bold)).padding(.horizontal, 8).padding(.vertical, 5).liquidCard(Capsule()).offset(x: max(0, min(width - 70, width * ratio - 35)), y: -31).transition(.opacity.combined(with: .scale)) }
             }.frame(height: proxy.size.height).contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { value in guard enabled else { return }; dragging = min(duration, max(0, duration * value.location.x / width)) }.onEnded { _ in if let value = dragging { commit(value) }; dragging = nil })
-        }.frame(height: 26).opacity(enabled ? 1 : 0.58)
+        }.frame(height: 26).padding(.horizontal, 10).padding(.vertical, 5).liquidCard(Capsule()).opacity(enabled ? 1 : 0.58)
     }
     private func scrubTime(_ seconds: Double) -> String { let total = Int(seconds); return total >= 3600 ? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) : String(format: "%02d:%02d", total / 60, total % 60) }
 }
@@ -316,8 +316,7 @@ struct NativeChatPane: View {
                     }.padding(.vertical, 2)
                 }.contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
-                    .onChange(of: focused) { _, value in if value { scroll(proxy) } }
-            }.frame(maxHeight: focused ? 310 : 220)
+            }.frame(maxHeight: focused ? 360 : 220)
             HStack(spacing: 8) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
                     .onChange(of: selectedPhoto) { _, item in Task { await sendPhoto(item) } }
@@ -328,8 +327,8 @@ struct NativeChatPane: View {
             }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
         }.padding(12).liquidCard()
     }
-    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text, ""); draft = ""; focused = true; inputFocused = true }
-    private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil; focused = true; inputFocused = true }
+    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text, ""); draft = "" }
+    private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
     private func scroll(_ proxy: ScrollViewProxy) { if let id = messages.last?.id { DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }
 }
 
@@ -389,7 +388,7 @@ struct LiquidAuthView: View {
             }
         }
     }
-    private func validate(_ value: String) async { guard register else { availability = .idle; return }; guard usernameValid else { availability = .invalid; return }; availability = .checking; try? await Task.sleep(for: .milliseconds(250)); guard username == value else { return }; availability = (try? await session.api.usernameAvailable(value)) == true ? .available : .taken }
+    private func validate(_ value: String) async { guard register else { withAnimation { availability = .idle }; return }; guard usernameValid else { withAnimation(.easeOut(duration: 0.2)) { availability = .invalid }; return }; withAnimation(.easeOut(duration: 0.2)) { availability = .checking }; try? await Task.sleep(for: .milliseconds(250)); guard username == value else { return }; withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) { availability = (try? await session.api.usernameAvailable(value)) == true ? .available : .taken } }
     private func submit() async { error = ""; guard !username.isEmpty, !password.isEmpty else { error = "Заполни username и пароль"; return }; if register && (!usernameValid || nickname.trimmingCharacters(in: .whitespacesAndNewlines).count < 2) { error = "Проверь nickname и username"; return }; loading = true; defer { loading = false }; do { if register { try await session.register(nickname: nickname, username: username, password: password) } else { try await session.login(username: username, password: password) } } catch { self.error = error.localizedDescription } }
 }
 
@@ -450,10 +449,39 @@ struct ProfileGlassView: View {
     }
 }
 
-struct ProfileEditSheet: View {
+struct LegacyProfileEditSheet: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.dismiss) private var dismiss
     @State private var nickname = ""; @State private var username = ""; @State private var available: Bool?; @State private var error = ""
     var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 13) { Text("Редактировать профиль").font(.title3.bold()); GlassField(icon: "person", title: "Nickname", text: $nickname); GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; if !username.isEmpty { Text(available == true ? "@\(username) available" : "Username unavailable").font(.caption).foregroundStyle(available == true ? .green : .orange) }; if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button("Сохранить") { Task { await save() } }.buttonStyle(.borderedProminent) }.padding(22) }.onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" }.presentationDetents([.height(360)]).presentationBackground(.clear) }
     private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username); dismiss() } catch { self.error = error.localizedDescription } }
+}
+
+struct ProfileEditSheet: View {
+    @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var nickname = ""
+    @State private var username = ""
+    @State private var avatar = ""
+    @State private var available: Bool?
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var error = ""
+    var body: some View {
+        ZStack { AcrylicBackground()
+            VStack(spacing: 14) {
+                Capsule().fill(.white.opacity(0.25)).frame(width: 38, height: 5)
+                Text("Профиль").font(.title3.bold())
+                PhotosPicker(selection: $selectedPhoto, matching: .images) { ZStack(alignment: .bottomTrailing) { AvatarView(dataURL: avatar, name: nickname, size: 78); Image(systemName: "camera.fill").font(.caption).padding(7).liquidCard(Circle()) } }
+                    .onChange(of: selectedPhoto) { _, item in Task { await loadAvatar(item) } }
+                VStack(spacing: 9) {
+                    GlassField(icon: "person", title: "Nickname", text: $nickname)
+                    VStack(spacing: 5) { GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; HStack { Text("@\(username)").font(.caption).foregroundStyle(.secondary); Spacer(); if !username.isEmpty { Text(available == true ? "Available" : "Unavailable").font(.caption2.weight(.semibold)).foregroundStyle(available == true ? .green : .orange) } } }
+                }
+                if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
+                Button("Готово") { Task { await save() } }.buttonStyle(.borderedProminent).controlSize(.large)
+            }.padding(20).liquidCard(RoundedRectangle(cornerRadius: 30)).padding(18)
+        }.presentationDetents([.height(470)]).presentationBackground(.clear).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? ""; avatar = session.profile?.avatarDataUrl ?? "" }
+    }
+    private func loadAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; avatar = "data:image/jpeg;base64," + data.base64EncodedString() }
+    private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username, avatar: avatar); dismiss() } catch { self.error = error.localizedDescription } }
 }
