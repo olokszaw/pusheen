@@ -435,7 +435,7 @@ struct PusheenTabs: View {
     var body: some View { TabView { HomeView().tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }; FriendsGlassView().tabItem { Label("Друзья", systemImage: "person.2.fill") }; ProfileGlassView().tabItem { Label("Профиль", systemImage: "person.crop.circle.fill") } }.tint(.purple) }
 }
 
-struct FriendsGlassView: View {
+struct LegacyFriendsGlassView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var expanded = false; @State private var query = ""; @State private var people: [FriendProfile] = []
     var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 16) { HStack { Text("Друзья").font(.largeTitle.bold()); Spacer(); Button { withAnimation(.spring(response: 0.35)) { expanded.toggle() }; if expanded { Task { await search() } } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 42, height: 42).liquidCard(Circle()) }.buttonStyle(.plain) }; if expanded { HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Найти по @username", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }.padding(12).liquidCard(Capsule()).transition(.opacity.combined(with: .move(edge: .top))) }; ScrollView { LazyVStack(spacing: 9) { ForEach(people) { person in HStack(spacing: 11) { Circle().fill(.purple.opacity(0.7)).frame(width: 48, height: 48).overlay(Text(person.nickname.prefix(1)).bold()); VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button(person.isFriend ? "Добавлен" : "Добавить") { Task { try? await session.api.addFriend(username: person.username); await search() } }.buttonStyle(.bordered) }.padding(11).liquidCard(RoundedRectangle(cornerRadius: 20)) } } }; Spacer() }.padding(20) } }
@@ -484,4 +484,38 @@ struct ProfileEditSheet: View {
     }
     private func loadAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; avatar = "data:image/jpeg;base64," + data.base64EncodedString() }
     private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username, avatar: avatar); dismiss() } catch { self.error = error.localizedDescription } }
+}
+
+struct FriendsGlassView: View {
+    @EnvironmentObject private var session: SessionStore
+    @State private var expanded = false
+    @State private var query = ""
+    @State private var friends: [FriendProfile] = []
+    @State private var results: [FriendProfile] = []
+    @FocusState private var searchFocused: Bool
+    var body: some View {
+        ZStack { AcrylicBackground()
+            VStack(spacing: 15) {
+                HStack {
+                    Text("Друзья").font(.largeTitle.bold())
+                    Spacer()
+                    Button { withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { expanded.toggle() }; if expanded { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { searchFocused = true } } else { query = ""; searchFocused = false } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 42, height: 42).liquidCard(Circle()) }.buttonStyle(.plain)
+                }
+                if expanded {
+                    HStack(spacing: 9) { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Username", text: $query).focused($searchFocused).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }
+                        .padding(13).liquidCard(Capsule()).transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                ScrollView {
+                    LazyVStack(spacing: 9) {
+                        ForEach(expanded && !query.isEmpty ? results : friends) { person in
+                            HStack(spacing: 11) { AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48); VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); if expanded && !person.isFriend { Button("Добавить") { Task { try? await session.api.addFriend(username: person.username); await loadFriends(); await search() } }.buttonStyle(.bordered) } else if person.isFriend { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) } }.padding(11).liquidCard(RoundedRectangle(cornerRadius: 20))
+                        }
+                        if friends.isEmpty && !expanded { ContentUnavailableView("Друзей пока нет", systemImage: "person.2") }
+                    }
+                }
+            }.padding(20)
+        }.task { await loadFriends() }
+    }
+    private func loadFriends() async { friends = (try? await session.api.friends()) ?? [] }
+    private func search() async { results = (try? await session.api.friends(query: query)) ?? [] }
 }
