@@ -57,6 +57,12 @@ struct AuthView: View {
     @State private var password = ""
     @State private var error = ""
     @State private var loading = false
+    @State private var usernameState: UsernameState = .idle
+
+    enum UsernameState { case idle, invalid, checking, available, taken }
+    private var usernameValid: Bool {
+        username.range(of: "^[A-Za-z][A-Za-z0-9_]{2,29}$", options: .regularExpression) != nil
+    }
 
     var body: some View {
         ZStack { AcrylicBackground()
@@ -65,7 +71,8 @@ struct AuthView: View {
                 Text(isRegister ? "Создай профиль" : "Смотри. Чувствуй.\nБудь рядом.").font(.system(size: 31, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
                 VStack(spacing: 10) {
                     if isRegister { TextField("Nickname", text: $nickname).textContentType(.nickname) }
-                    TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: username) { _, value in Task { await checkUsername(value) } }
+                    if isRegister && !username.isEmpty { UsernamePreview(nickname: nickname, username: username, state: usernameState) }
                     SecureField("Password", text: $password)
                     if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
                     Button { Task { await submit() } } label: { Label(isRegister ? "Создать" : "Войти", systemImage: "arrow.right").frame(maxWidth: .infinity) }
@@ -80,6 +87,22 @@ struct AuthView: View {
         do { if isRegister { try await session.register(nickname: nickname, username: username, password: password) } else { try await session.login(username: username, password: password) } }
         catch let caughtError { error = caughtError.localizedDescription }
     }
+
+    private func checkUsername(_ value: String) async {
+        guard isRegister else { usernameState = .idle; return }
+        guard usernameValid else { usernameState = .invalid; return }
+        usernameState = .checking
+        try? await Task.sleep(for: .milliseconds(260))
+        guard value == username else { return }
+        usernameState = (try? await session.api.usernameAvailable(value)) == true ? .available : .taken
+    }
+}
+
+private struct UsernamePreview: View {
+    let nickname: String; let username: String; let state: AuthView.UsernameState
+    private var title: String { switch state { case .available: return "Available"; case .taken: return "Taken"; case .invalid: return "Use A–Z, 0–9 or _"; case .checking: return "Checking…"; case .idle: return "" } }
+    private var tint: Color { switch state { case .available: return .green; case .taken: return .red; case .invalid: return .orange; default: return .secondary } }
+    var body: some View { HStack(spacing: 10) { Circle().fill(.purple.opacity(0.72)).frame(width: 38, height: 38).overlay(Text((nickname.isEmpty ? username : nickname).prefix(1)).bold()); VStack(alignment: .leading, spacing: 2) { Text(nickname.isEmpty ? "Your nickname" : nickname).font(.subheadline.bold()); Text("@\(username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(title).font(.caption2.weight(.semibold)).foregroundStyle(tint) }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 16)).transition(.opacity.combined(with: .move(edge: .top))).animation(.spring(response: 0.32), value: username) }
 }
 
 struct HomeView: View {
