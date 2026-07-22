@@ -164,11 +164,11 @@ struct RoomView: View {
         ZStack { AcrylicBackground()
             VStack(spacing: 12) {
                 if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 148 : 235).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 148 : 235) }
-                HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
+                HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); ShareLink(item: api.baseURL.appending(path: "join/\(room.inviteCode)")) { Image(systemName: "link") }.buttonStyle(.plain); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
                 PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
             }.padding(14)
-        }.contentShape(Rectangle()).onTapGesture { chatFocused = false }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
+        }.contentShape(Rectangle()).onTapGesture { chatFocused = false }.gesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
