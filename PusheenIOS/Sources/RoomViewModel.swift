@@ -41,8 +41,17 @@ final class RoomViewModel: ObservableObject {
     }
     func toggle() { guard isOwner else { return }; let next = !isPlaying; if next { player?.play() } else { player?.pause() }; isPlaying = next; socket.playback(action: next ? "play" : "pause", isPlaying: next, position: position) }
     func seek(_ value: Double) { guard isOwner else { return }; player?.seek(to: CMTime(seconds: value, preferredTimescale: 600)); position = value; socket.playback(action: "seek", isPlaying: isPlaying, position: value) }
-    func send(_ text: String) { guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; socket.chat(text: text) }
-    func send(text: String, image: String) { guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !image.isEmpty else { return }; socket.chat(text: text, image: image) }
+    func send(_ text: String, as profile: Profile?) { send(text: text, image: "", as: profile) }
+    func send(text: String, image: String, as profile: Profile?) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !image.isEmpty else { return }
+        // Render immediately; the server confirmation replaces this temporary
+        // message with its permanent id a moment later.
+        if let profile {
+            let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
+            messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: []))
+        }
+        socket.chat(text: text, image: image)
+    }
     func react(messageID: Int, emoji: String) { socket.reaction(messageID: messageID, emoji: emoji) }
     private func apply(_ event: [String: Any]) {
         switch event["type"] as? String {
@@ -57,7 +66,13 @@ final class RoomViewModel: ObservableObject {
             }
             if !isOwner { isPlaying ? player?.play() : player?.pause() }
         case "chat_message":
-            if let data = try? JSONSerialization.data(withJSONObject: event), let message = try? JSONDecoder().decode(ChatMessage.self, from: data), !messages.contains(where: { $0.id == message.id }) { messages.append(message) }
+            if let data = try? JSONSerialization.data(withJSONObject: event), let message = try? JSONDecoder().decode(ChatMessage.self, from: data), !messages.contains(where: { $0.id == message.id }) {
+                if let pending = messages.firstIndex(where: { $0.id < 0 && $0.authorId == message.authorId && $0.text == message.text && $0.imageDataURL == message.imageDataURL }) {
+                    messages[pending] = message
+                } else {
+                    messages.append(message)
+                }
+            }
         case "message_reaction":
             guard let messageID = event["message_id"] as? Int, let emoji = event["emoji"] as? String else { return }
             let count = (event["count"] as? NSNumber)?.intValue ?? 0
