@@ -166,15 +166,14 @@ struct RoomView: View {
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
             VStack(spacing: 12) {
-                ZStack(alignment: .bottom) {
-                    if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() }
-                    if model.isOwner && controlsVisible {
-                        HStack(spacing: 22) { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)) }.font(.subheadline.monospacedDigit()) }.padding(10).liquidCard(Capsule()).padding(8).transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                }.frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).contentShape(Rectangle()).onTapGesture { if model.isOwner { withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { controlsVisible.toggle() } } }.animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused)
+                Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
+                    .frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).contentShape(Rectangle()).onTapGesture { withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { controlsVisible.toggle() } }.animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused)
+                PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
+                if controlsVisible {
+                    HStack(spacing: 22) { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Text(time(model.position)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary) }.padding(10).liquidCard(Capsule()).padding(.horizontal, 3).disabled(!model.isOwner).opacity(model.isOwner ? 1 : 0.42).transition(.opacity.combined(with: .move(edge: .top)))
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
             }.padding(14).frame(maxHeight: .infinity, alignment: .top)
-            Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").font(.headline).foregroundStyle(copiedCode ? .green : .primary).contentTransition(.symbolEffect(.replace)).frame(width: 36, height: 36).liquidCard(Circle()) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты").padding(.trailing, 17).padding(.top, 8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").font(.headline).foregroundStyle(.primary).contentTransition(.symbolEffect(.replace)).frame(width: 36, height: 36).liquidCard(Circle()) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты").padding(.trailing, 17).padding(.top, 8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         }.gesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
@@ -339,7 +338,7 @@ struct NativeChatPane: View {
     }
     private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text, ""); draft = ""; DispatchQueue.main.async { inputFocused = true; focused = true } }
     private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
-    private func scroll(_ proxy: ScrollViewProxy) { if let id = messages.last?.id { DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }
+    private func scroll(_ proxy: ScrollViewProxy) { if let id = messages.last?.id { DispatchQueue.main.async { var transaction = Transaction(); transaction.disablesAnimations = true; withTransaction(transaction) { proxy.scrollTo(id, anchor: .bottom) } } } }
 }
 
 struct NativeMessageBubble: View {
@@ -358,7 +357,7 @@ struct NativeMessageBubble: View {
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
             }.padding(10).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
             }
-            if !isMine { Spacer(minLength: 20) }
+            if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 36) } else { Spacer(minLength: 20) }
         }
         }
     }
@@ -490,7 +489,7 @@ struct FluentEmojiGlyph: View {
     let emoji: String
     let size: CGFloat
     init(_ emoji: String, size: CGFloat = 21) { self.emoji = emoji; self.size = size }
-    private var assetURL: URL? { let slug = emoji.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: "-"); return URL(string: "https://unpkg.com/@lobehub/fluent-emoji-3d@latest/assets/\(slug).webp") }
+    private var assetURL: URL? { let slug = emoji.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: "-"); return URL(string: "https://unpkg.com/@lobehub/fluent-emoji-animated@latest/assets/\(slug).webp") }
     var body: some View { AsyncImage(url: assetURL) { image in image.resizable().scaledToFit() } placeholder: { Text(emoji).font(.system(size: size)) }.frame(width: size, height: size) }
 }
 
