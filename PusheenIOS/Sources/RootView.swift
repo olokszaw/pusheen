@@ -329,9 +329,6 @@ struct NativeChatPane: View {
     @FocusState private var inputFocused: Bool
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var sticksToBottom = true
-    @State private var protectFocusDuringSend = false
-    @State private var focusProtectionTask: Task<Void, Never>?
-    @State private var scrollRequest = 0
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -342,51 +339,35 @@ struct NativeChatPane: View {
                         ForEach(messages) { message in NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions).id(message.id) }
                         Color.clear.frame(height: 1).id("chat-bottom")
                     }.padding(.vertical, 2)
-                }.defaultScrollAnchor(.bottom).contentShape(Rectangle()).onTapGesture { protectFocusDuringSend = false; focused = false; inputFocused = false }
+                }.defaultScrollAnchor(.bottom).contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
                     .simultaneousGesture(DragGesture(minimumDistance: 6).onChanged { _ in sticksToBottom = false })
                     .onAppear { scroll(proxy, force: true) }
                     .onChange(of: focused) { _, active in if active { sticksToBottom = true; scroll(proxy, force: true) } }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
-                    .onChange(of: scrollRequest) { _, _ in scroll(proxy, force: true) }
             }.frame(maxHeight: .infinity)
             HStack(spacing: 8) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
                     .onChange(of: selectedPhoto) { _, item in Task { await sendPhoto(item) } }
                 TextField("Сообщение…", text: $draft).focused($inputFocused).submitLabel(.send).onSubmit { submit() }
                     .onChange(of: inputFocused) { _, value in
-                        if value {
-                            focused = true
-                        } else if protectFocusDuringSend {
-                            // Sending via the arrow can transiently move focus to
-                            // the button. Restore it in the same update pass so
-                            // the keyboard never starts its dismissal animation.
-                            inputFocused = true
-                            focused = true
-                        } else {
-                            focused = false
-                        }
+                        focused = value
                     }
-                Button { submit() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 31, weight: .medium)) }
-                    .buttonStyle(.plain).disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 31, weight: .medium))
+                    .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
+                    .frame(width: 38, height: 38)
+                    .contentShape(Circle())
+                    .onTapGesture { submit() }
+                    .accessibilityAddTraits(.isButton)
             }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
         }.padding(12).liquidCard()
     }
     private func submit() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        focusProtectionTask?.cancel()
-        protectFocusDuringSend = true
-        inputFocused = true
-        focused = true
         sticksToBottom = true
         send(text, "")
         draft = ""
-        scrollRequest += 1
-        focusProtectionTask = Task {
-            try? await Task.sleep(for: .milliseconds(700))
-            guard !Task.isCancelled else { return }
-            protectFocusDuringSend = false
-        }
     }
     private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
     private func scroll(_ proxy: ScrollViewProxy, force: Bool = false) {
