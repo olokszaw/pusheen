@@ -2,6 +2,7 @@ import SwiftUI
 import AVKit
 import UIKit
 import PhotosUI
+import ImageIO
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
@@ -380,7 +381,7 @@ struct NativeMessageBubble: View {
                 if !message.text.isEmpty { FluentInlineText(message.text) }
                 if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
-            }.padding(10).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
+            }.padding(10).frame(maxWidth: 260, alignment: .leading).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
             }
             if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 36) } else { Spacer(minLength: 20) }
         }
@@ -540,8 +541,13 @@ struct FluentEmojiGlyph: UIViewRepresentable {
         let imageView = EmojiImageView(emojiSize: size)
         imageView.contentMode = .scaleAspectFit
         imageView.backgroundColor = .clear
+        imageView.setContentHuggingPriority(.required, for: .horizontal)
+        imageView.setContentHuggingPriority(.required, for: .vertical)
+        imageView.setContentCompressionResistancePriority(.required, for: .horizontal)
+        imageView.setContentCompressionResistancePriority(.required, for: .vertical)
         return imageView
     }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: EmojiImageView, context: Context) -> CGSize { CGSize(width: size, height: size) }
     func updateUIView(_ imageView: EmojiImageView, context: Context) {
         guard context.coordinator.lastEmoji != emoji else { return }
         context.coordinator.lastEmoji = emoji
@@ -549,7 +555,7 @@ struct FluentEmojiGlyph: UIViewRepresentable {
         context.coordinator.task?.cancel()
         guard let assetURL else { return }
         context.coordinator.task = URLSession.shared.dataTask(with: assetURL) { data, _, _ in
-            guard let data, let image = UIImage(data: data) else { return }
+            guard let data, let image = EmojiImageView.decodeAPNG(data) else { return }
             DispatchQueue.main.async {
                 guard context.coordinator.lastEmoji == emoji else { return }
                 imageView.image = image
@@ -567,6 +573,24 @@ final class EmojiImageView: UIImageView {
     init(emojiSize: CGFloat) { self.emojiSize = emojiSize; super.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var intrinsicContentSize: CGSize { CGSize(width: emojiSize, height: emojiSize) }
+    static func decodeAPNG(_ data: Data) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let count = CGImageSourceGetCount(source)
+        guard count > 1 else { return UIImage(data: data) }
+        var frames: [UIImage] = []
+        var duration = 0.0
+        for index in 0..<count {
+            guard let frame = CGImageSourceCreateImageAtIndex(source, index, nil) else { continue }
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+            let png = properties?[kCGImagePropertyPNGDictionary] as? [CFString: Any]
+            let delay = (png?[kCGImagePropertyAPNGUnclampedDelayTime] as? Double)
+                ?? (png?[kCGImagePropertyAPNGDelayTime] as? Double)
+                ?? 0.09
+            duration += max(0.02, delay)
+            frames.append(UIImage(cgImage: frame))
+        }
+        return frames.isEmpty ? UIImage(data: data) : UIImage.animatedImage(with: frames, duration: duration)
+    }
 }
 
 struct FluentInlineText: View {
