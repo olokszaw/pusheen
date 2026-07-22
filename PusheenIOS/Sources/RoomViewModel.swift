@@ -49,8 +49,13 @@ final class RoomViewModel: ObservableObject {
         case "playback_state":
             isOwner = event["is_owner"] as? Bool ?? false; isPlaying = event["is_playing"] as? Bool ?? false
             let remote = (event["position_seconds"] as? NSNumber)?.doubleValue ?? 0
-            if abs(position - remote) > 1.2 { player?.seek(to: CMTime(seconds: remote, preferredTimescale: 600)); position = remote }
-            isPlaying ? player?.play() : player?.pause()
+            // The creator receives their own broadcast too. Never seek it back to
+            // an older server snapshot: that was the visible forward/back loop.
+            if !isOwner && abs(position - remote) > 2.5 {
+                player?.seek(to: CMTime(seconds: remote, preferredTimescale: 600))
+                position = remote
+            }
+            if !isOwner { isPlaying ? player?.play() : player?.pause() }
         case "chat_message":
             if let data = try? JSONSerialization.data(withJSONObject: event), let message = try? JSONDecoder().decode(ChatMessage.self, from: data), !messages.contains(where: { $0.id == message.id }) { messages.append(message) }
         case "message_reaction":

@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import UIKit
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
@@ -155,21 +156,18 @@ struct RoomView: View {
     @State private var draft = ""
     @State private var showTime = false
     @State private var showMembers = false
+    @State private var chatFocused = false
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground()
             VStack(spacing: 12) {
-                ZStack(alignment: .topTrailing) {
-                    if let player = model.player { VideoPlayer(player: player).frame(height: 235).clipShape(RoundedRectangle(cornerRadius: 25)) } else { ProgressView().frame(height: 235) }
-                    Button { showMembers = true } label: { Image(systemName: "person.2.fill").frame(width: 36, height: 36).liquidCard(Circle()) }
-                        .buttonStyle(.plain).padding(10).opacity(0.82)
-                }
+                if let player = model.player { BarePlayerSurface(player: player).frame(height: chatFocused ? 148 : 235).clipShape(RoundedRectangle(cornerRadius: 25)).animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused) } else { ProgressView().frame(height: chatFocused ? 148 : 235) }
                 HStack { Button { model.seek(max(0, model.position - 10)) } label: { Image(systemName: "gobackward.10") }; Button { model.toggle() } label: { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill") }.font(.title3); Button { model.seek(min(model.duration, model.position + 10)) } label: { Image(systemName: "goforward.10") }; Spacer(); Button { showTime = true } label: { Text(time(model.position)) } }.padding(10).liquidCard(Capsule())
-                Slider(value: Binding(get: { model.position }, set: { model.seek($0) }), in: 0...max(1, model.duration)).disabled(!model.isOwner)
-                ChatPane(messages: model.messages, draft: $draft, send: { text in model.send(text); draft = "" })
+                PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
+                NativeChatPane(messages: model.messages, draft: $draft, focused: $chatFocused, send: { text in model.send(text) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
             }.padding(14)
-        }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
+        }.contentShape(Rectangle()).onTapGesture { chatFocused = false }.navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).task { await model.start() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
@@ -262,5 +260,83 @@ struct MembersSheet: View {
                 }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 17))
             }; Spacer()
         }.padding(20) }.presentationDetents([.medium, .large]).presentationBackground(.clear)
+    }
+}
+
+struct BarePlayerSurface: UIViewRepresentable {
+    let player: AVPlayer
+    func makeUIView(context: Context) -> PlayerLayerView { PlayerLayerView(player: player) }
+    func updateUIView(_ view: PlayerLayerView, context: Context) { view.playerLayer.player = player }
+}
+
+final class PlayerLayerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    init(player: AVPlayer) { super.init(frame: .zero); playerLayer.player = player; playerLayer.videoGravity = .resizeAspect; backgroundColor = .black }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+struct PlaybackScrubber: View {
+    let position: Double; let duration: Double; let enabled: Bool; let commit: (Double) -> Void
+    @State private var dragging: Double?
+    private var display: Double { dragging ?? position }
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(1, proxy.size.width)
+            let ratio = min(1, max(0, display / max(1, duration)))
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.13)).frame(height: 6)
+                Capsule().fill(LinearGradient(colors: [.pink, .purple, .blue], startPoint: .leading, endPoint: .trailing)).frame(width: max(10, width * ratio), height: 6)
+                Circle().fill(.white).shadow(color: .purple.opacity(0.7), radius: 7).frame(width: 18, height: 18).offset(x: max(0, min(width - 18, width * ratio - 9)))
+            }.frame(height: proxy.size.height).contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { value in guard enabled else { return }; dragging = min(duration, max(0, duration * value.location.x / width)) }.onEnded { _ in if let value = dragging { commit(value) }; dragging = nil })
+        }.frame(height: 26).opacity(enabled ? 1 : 0.58)
+    }
+}
+
+struct NativeChatPane: View {
+    let messages: [ChatMessage]
+    @Binding var draft: String
+    @Binding var focused: Bool
+    let send: (String) -> Void
+    let react: (Int, String) -> Void
+    @FocusState private var inputFocused: Bool
+    private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Чат").font(.headline)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(messages) { message in NativeMessageBubble(message: message, react: react, quickReactions: quickReactions).id(message.id) }
+                    }.padding(.vertical, 2)
+                }.contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
+                    .onChange(of: messages.count) { _, _ in scroll(proxy) }
+                    .onChange(of: focused) { _, value in if value { scroll(proxy) } }
+            }.frame(maxHeight: focused ? 310 : 220)
+            HStack(spacing: 8) {
+                TextField("Сообщение…", text: $draft).focused($inputFocused).submitLabel(.send).onSubmit { submit() }
+                    .onChange(of: inputFocused) { _, value in focused = value }
+                Button { submit() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 31, weight: .medium)) }
+                    .buttonStyle(.plain).disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
+        }.padding(12).liquidCard()
+    }
+    private func submit() { let text = draft.trimmingCharacters(in: .whitespacesAndNewlines); guard !text.isEmpty else { return }; send(text); draft = ""; focused = true; inputFocused = true }
+    private func scroll(_ proxy: ScrollViewProxy) { if let id = messages.last?.id { DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }
+}
+
+struct NativeMessageBubble: View {
+    let message: ChatMessage; let react: (Int, String) -> Void; let quickReactions: [String]
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Circle().fill(.purple.opacity(0.72)).frame(width: 36, height: 36).overlay(Text(message.nickname.prefix(1)).font(.caption.bold()))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary)
+                if !message.text.isEmpty { Text(message.text).font(.subheadline).lineLimit(5) }
+                if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { Text("\(item.emoji) \(item.count)").font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.purple.opacity(0.44) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
+            }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 16)).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
+            }
+            Spacer(minLength: 20)
+        }
     }
 }
