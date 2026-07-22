@@ -31,9 +31,14 @@ struct Room: Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey { case id, owner, title, playback; case ownerName = "owner_name"; case inviteCode = "invite_code"; case mediaURL = "media_url"; case thumbnailURL = "thumbnail_url"; case membersCount = "members_count" }
 }
 
+struct ChatReaction: Codable, Hashable, Identifiable {
+    let emoji: String; let count: Int; let reacted: Bool
+    var id: String { emoji }
+}
+
 struct ChatMessage: Codable, Identifiable, Hashable {
-    let id: Int; let authorId: Int; let nickname: String; let text: String; let imageDataURL: String
-    enum CodingKeys: String, CodingKey { case id, nickname, text; case authorId = "author_id"; case imageDataURL = "image_data_url" }
+    let id: Int; let authorId: Int; let nickname: String; let text: String; let imageDataURL: String; var reactions: [ChatReaction]
+    enum CodingKeys: String, CodingKey { case id, nickname, text, reactions; case authorId = "author_id"; case imageDataURL = "image_data_url" }
 }
 
 struct RoomMember: Codable, Identifiable, Hashable {

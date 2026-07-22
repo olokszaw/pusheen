@@ -42,6 +42,8 @@ final class RoomViewModel: ObservableObject {
     func toggle() { guard isOwner else { return }; let next = !isPlaying; if next { player?.play() } else { player?.pause() }; isPlaying = next; socket.playback(action: next ? "play" : "pause", isPlaying: next, position: position) }
     func seek(_ value: Double) { guard isOwner else { return }; player?.seek(to: CMTime(seconds: value, preferredTimescale: 600)); position = value; socket.playback(action: "seek", isPlaying: isPlaying, position: value) }
     func send(_ text: String) { guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; socket.chat(text: text) }
+    func send(text: String, image: String) { guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !image.isEmpty else { return }; socket.chat(text: text, image: image) }
+    func react(messageID: Int, emoji: String) { socket.reaction(messageID: messageID, emoji: emoji) }
     private func apply(_ event: [String: Any]) {
         switch event["type"] as? String {
         case "playback_state":
@@ -51,6 +53,14 @@ final class RoomViewModel: ObservableObject {
             isPlaying ? player?.play() : player?.pause()
         case "chat_message":
             if let data = try? JSONSerialization.data(withJSONObject: event), let message = try? JSONDecoder().decode(ChatMessage.self, from: data), !messages.contains(where: { $0.id == message.id }) { messages.append(message) }
+        case "message_reaction":
+            guard let messageID = event["message_id"] as? Int, let emoji = event["emoji"] as? String else { return }
+            let count = (event["count"] as? NSNumber)?.intValue ?? 0
+            let reacted = event["reacted"] as? Bool ?? false
+            if let index = messages.firstIndex(where: { $0.id == messageID }) {
+                messages[index].reactions.removeAll { $0.emoji == emoji }
+                if count > 0 { messages[index].reactions.append(ChatReaction(emoji: emoji, count: count, reacted: reacted)) }
+            }
         case "presence":
             Task { self.members = (try? await self.api.members(roomID: self.room.id)) ?? self.members }
         default: break
