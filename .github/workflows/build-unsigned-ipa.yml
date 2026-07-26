@@ -30,12 +30,19 @@ jobs:
       - name: Build native SwiftUI app
         working-directory: PusheenIOS
         run: |
-          set -o pipefail
+          set +e
           xcodebuild -project Pusheen.xcodeproj -scheme Pusheen \
             -configuration Release -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             PUSHEEN_API_BASE_URL=$API_BASE_URL \
             SYMROOT=$PWD/build build 2>&1 | tee xcodebuild.log
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            grep -E '(^|[[:space:]])(error:|fatal error:)' xcodebuild.log | tail -30 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+          exit "$result"
 
       - name: Upload Xcode build log
         if: always()
