@@ -514,7 +514,13 @@ struct NativeChatPane: View {
                     .onTapGesture { submit() }
                     .accessibilityAddTraits(.isButton)
             }.frame(height: 54).padding(.horizontal, 12).liquidCard(Capsule())
-        }.padding(12).liquidCard()
+        }
+        .padding(12)
+        .liquidCard()
+        .onChange(of: draft) { _, value in FluentEmojiCache.shared.prefetch(in: value) }
+        .onChange(of: messages.count) { _, _ in
+            if let text = messages.last?.text { FluentEmojiCache.shared.prefetch(in: text) }
+        }
     }
     private func submit() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -918,7 +924,8 @@ struct FluentEmojiGlyph: UIViewRepresentable {
     func updateUIView(_ imageView: EmojiImageView, context: Context) {
         guard context.coordinator.lastEmoji != emoji else { return }
         context.coordinator.lastEmoji = emoji
-        imageView.showFallback(emoji)
+        // Never flash the native iOS glyph before Fluent arrives.
+        imageView.prepareForFluentImage()
         context.coordinator.task?.cancel()
         guard let assetURL else { return }
         if let image = FluentEmojiCache.shared.image(for: emoji) {
@@ -927,17 +934,14 @@ struct FluentEmojiGlyph: UIViewRepresentable {
             imageView.startAnimating()
             return
         }
-        context.coordinator.task = URLSession.shared.dataTask(with: assetURL) { data, _, _ in
-            guard let data, let image = EmojiImageView.decodeAPNG(data) else { return }
-            FluentEmojiCache.shared.store(image, for: emoji)
+        context.coordinator.task = FluentEmojiCache.shared.load(emoji: emoji, from: assetURL) { image in
+            guard let image else { return }
             DispatchQueue.main.async {
                 guard context.coordinator.lastEmoji == emoji else { return }
                 imageView.image = image
-                imageView.hideFallback()
                 imageView.startAnimating()
             }
         }
-        context.coordinator.task?.resume()
     }
     static func dismantleUIView(_ imageView: EmojiImageView, coordinator: Coordinator) { coordinator.task?.cancel() }
     final class Coordinator { var task: URLSessionDataTask?; var lastEmoji = "" }
@@ -949,32 +953,57 @@ struct FluentEmojiGlyph: UIViewRepresentable {
 private final class FluentEmojiCache {
     static let shared = FluentEmojiCache()
     private let images = NSCache<NSString, UIImage>()
-    private init() { images.countLimit = 420 }
+    private let cacheDirectory: URL
+    private init() {
+        images.countLimit = 420
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        cacheDirectory = base.appendingPathComponent("FluentEmoji", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    }
     func image(for emoji: String) -> UIImage? { images.object(forKey: emoji as NSString) }
     func store(_ image: UIImage, for emoji: String) { images.setObject(image, forKey: emoji as NSString) }
+    private func slug(for emoji: String) -> String {
+        emoji.unicodeScalars.filter { $0.value != 0xFE0F }.map { String($0.value, radix: 16) }.joined(separator: "-")
+    }
+    @discardableResult
+    func load(emoji: String, from url: URL, completion: @escaping (UIImage?) -> Void) -> URLSessionDataTask? {
+        if let cached = image(for: emoji) { completion(cached); return nil }
+        let diskURL = cacheDirectory.appendingPathComponent(slug(for: emoji) + ".png")
+        if let data = try? Data(contentsOf: diskURL), let decoded = EmojiImageView.decodeAPNG(data) {
+            store(decoded, for: emoji)
+            completion(decoded)
+            return nil
+        }
+        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self, let data, let decoded = EmojiImageView.decodeAPNG(data) else { completion(nil); return }
+            self.store(decoded, for: emoji)
+            try? data.write(to: diskURL, options: .atomic)
+            completion(decoded)
+        }
+        task.resume()
+        return task
+    }
+    func prefetch(in text: String) {
+        for character in text {
+            let emoji = String(character)
+            guard emoji.unicodeScalars.contains(where: { (0x1F000...0x1FAFF).contains(Int($0.value)) || (0x2600...0x27FF).contains(Int($0.value)) }) else { continue }
+            guard image(for: emoji) == nil else { continue }
+            let slug = slug(for: emoji)
+            guard let url = URL(string: "https://raw.githubusercontent.com/bignutty/fluent-emoji/main/animated/\(slug).png") else { continue }
+            _ = load(emoji: emoji, from: url) { _ in }
+        }
+    }
 }
 
 final class EmojiImageView: UIImageView {
     private let emojiSize: CGFloat
-    private let fallbackLabel = UILabel()
     init(emojiSize: CGFloat) {
         self.emojiSize = emojiSize
         super.init(frame: .zero)
-        fallbackLabel.font = .systemFont(ofSize: emojiSize)
-        fallbackLabel.textAlignment = .center
-        fallbackLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(fallbackLabel)
-        NSLayoutConstraint.activate([
-            fallbackLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
-            fallbackLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-            fallbackLabel.topAnchor.constraint(equalTo: topAnchor),
-            fallbackLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var intrinsicContentSize: CGSize { CGSize(width: emojiSize, height: emojiSize) }
-    func showFallback(_ emoji: String) { image = nil; fallbackLabel.text = emoji; fallbackLabel.isHidden = false }
-    func hideFallback() { fallbackLabel.isHidden = true }
+    func prepareForFluentImage() { image = nil; stopAnimating() }
     static func decodeAPNG(_ data: Data) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let count = CGImageSourceGetCount(source)
