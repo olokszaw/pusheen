@@ -29,12 +29,22 @@ jobs:
 
       - name: Build native SwiftUI app
         working-directory: PusheenIOS
-        run: >-
-          xcodebuild -project Pusheen.xcodeproj -scheme Pusheen
-          -configuration Release -sdk iphoneos
-          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-          PUSHEEN_API_BASE_URL=$API_BASE_URL
-          SYMROOT=$PWD/build build
+        run: |
+          set -o pipefail
+          xcodebuild -project Pusheen.xcodeproj -scheme Pusheen \
+            -configuration Release -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            PUSHEEN_API_BASE_URL=$API_BASE_URL \
+            SYMROOT=$PWD/build build 2>&1 | tee xcodebuild.log
+
+      - name: Upload Xcode build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: PusheenIOS/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Package IPA for Sideloadly
         working-directory: PusheenIOS
