@@ -4,20 +4,37 @@ enum APIError: LocalizedError { case invalidURL, server(String); var errorDescri
 
 @MainActor
 final class SessionStore: ObservableObject {
+    enum AuthenticationState { case restoring, signedOut, signedIn }
     @Published var profile: Profile?
     @Published var token: String?
+    @Published private(set) var authenticationState: AuthenticationState = .restoring
     let api = APIClient()
 
     init() {
         token = UserDefaults.standard.string(forKey: "pusheen.token")
-        if let token { api.token = token; Task { await restore() } }
+        if let token {
+            api.token = token
+            Task { await restore() }
+        } else {
+            authenticationState = .signedOut
+        }
     }
 
-    func restore() async { do { profile = try await api.profile() } catch { logout() } }
+    func restore() async {
+        defer { if profile == nil { authenticationState = .signedOut } }
+        do {
+            profile = try await api.profile()
+            authenticationState = .signedIn
+        } catch {
+            token = nil
+            api.token = nil
+            UserDefaults.standard.removeObject(forKey: "pusheen.token")
+        }
+    }
     func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
     func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
-    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; api.token = auth.token; UserDefaults.standard.set(auth.token, forKey: "pusheen.token") }
-    func logout() { token = nil; profile = nil; api.token = nil; UserDefaults.standard.removeObject(forKey: "pusheen.token") }
+    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token") }
+    func logout() { token = nil; profile = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token") }
 }
 
 final class APIClient {

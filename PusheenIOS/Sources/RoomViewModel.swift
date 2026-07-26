@@ -16,6 +16,8 @@ final class RoomViewModel: ObservableObject {
     private let token: String
     private let socket = RoomSocket()
     private var timer: Any?
+    private var itemStatusObservation: NSKeyValueObservation?
+    private var audioObservers: [NSObjectProtocol] = []
 
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token }
     deinit {
@@ -25,14 +27,33 @@ final class RoomViewModel: ObservableObject {
 
     func start() async {
         do {
+            configureAudioSession()
             async let history = api.messages(roomID: room.id)
             async let people = api.members(roomID: room.id)
             let stream = try await api.stream(roomID: room.id)
             messages = try await history; members = try await people
-            let item = AVPlayerItem(url: URL(string: stream.url)!)
+            guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
+            let assetOptions: [String: Any] = stream.headers.isEmpty ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": stream.headers]
+            let item = AVPlayerItem(asset: AVURLAsset(url: streamURL, options: assetOptions))
             let roomPlayer = AVPlayer(playerItem: item)
             roomPlayer.automaticallyWaitsToMinimizeStalling = true
+            roomPlayer.isMuted = false
+            roomPlayer.volume = 1
             player = roomPlayer
+            isPlaying = room.playback?.isPlaying ?? false
+            itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    switch observedItem.status {
+                    case .readyToPlay:
+                        if self.isPlaying || self.room.playback?.isPlaying == true { self.player?.play() }
+                    case .failed:
+                        self.error = observedItem.error?.localizedDescription ?? "Не удалось открыть видео"
+                    default:
+                        break
+                    }
+                }
+            }
             timer = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.35, preferredTimescale: 600), queue: .main) { [weak self] time in
                 guard let self else { return }; self.position = time.seconds.isFinite ? time.seconds : 0
                 let value = self.player?.currentItem?.duration.seconds ?? 0; if value.isFinite && value > 0 { self.duration = value }
@@ -40,6 +61,31 @@ final class RoomViewModel: ObservableObject {
             socket.onEvent = { [weak self] event in self?.apply(event) }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
         } catch let caughtError { error = caughtError.localizedDescription }
+    }
+    private func configureAudioSession() {
+        let audio = AVAudioSession.sharedInstance()
+        do {
+            try audio.setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay, .allowBluetoothA2DP])
+            try audio.setActive(true)
+            NSLog("Pusheen audio active. route=%@ volume=%.2f", audio.currentRoute.description, audio.outputVolume)
+        } catch {
+            NSLog("Pusheen audio configuration failed: %@", error.localizedDescription)
+        }
+        guard audioObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        audioObservers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: audio, queue: .main) { [weak self] note in
+            let ended = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                .map { AVAudioSession.InterruptionType(rawValue: $0) == .ended } ?? false
+            guard ended else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.isPlaying else { return }
+                try? AVAudioSession.sharedInstance().setActive(true)
+                self.player?.play()
+            }
+        })
+        audioObservers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: audio, queue: .main) { _ in
+            NSLog("Pusheen audio route changed: %@", AVAudioSession.sharedInstance().currentRoute.description)
+        })
     }
     func toggle() { guard isOwner else { return }; let next = !isPlaying; if next { player?.play() } else { player?.pause() }; isPlaying = next; socket.playback(action: next ? "play" : "pause", isPlaying: next, position: position) }
     func seek(_ value: Double) { guard isOwner else { return }; player?.seek(to: CMTime(seconds: value, preferredTimescale: 600)); position = value; socket.playback(action: "seek", isPlaying: isPlaying, position: value) }

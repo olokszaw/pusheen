@@ -48,8 +48,18 @@ struct RoomMember: Codable, Identifiable, Hashable {
 }
 
 struct VideoStream: Codable, Hashable {
-    let url: String; let title: String; let durationSeconds: Double; let quality: String; let sourceType: String; let thumbnail: String
-    enum CodingKeys: String, CodingKey { case url, title, quality, thumbnail; case durationSeconds = "duration_seconds"; case sourceType = "source_type" }
+    let url: String; let title: String; let durationSeconds: Double; let quality: String; let sourceType: String; let thumbnail: String; let headers: [String: String]
+    enum CodingKeys: String, CodingKey { case url, title, quality, thumbnail, headers; case durationSeconds = "duration_seconds"; case sourceType = "source_type" }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        url = try values.decode(String.self, forKey: .url)
+        title = try values.decode(String.self, forKey: .title)
+        durationSeconds = try values.decodeIfPresent(Double.self, forKey: .durationSeconds) ?? 0
+        quality = try values.decodeIfPresent(String.self, forKey: .quality) ?? "MP4"
+        sourceType = try values.decodeIfPresent(String.self, forKey: .sourceType) ?? "video"
+        thumbnail = try values.decodeIfPresent(String.self, forKey: .thumbnail) ?? ""
+        headers = try values.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+    }
 }
 
 struct FriendProfile: Codable, Identifiable, Hashable {

@@ -7,8 +7,26 @@ import ImageIO
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
     var body: some View {
-        Group { if session.profile == nil { LiquidAuthView() } else { PusheenTabs() } }
+        Group {
+            switch session.authenticationState {
+            case .restoring: PusheenLaunchView()
+            case .signedOut: LiquidAuthView()
+            case .signedIn: PusheenTabs()
+            }
+        }
             .preferredColorScheme(.dark)
+    }
+}
+
+private struct PusheenLaunchView: View {
+    var body: some View {
+        ZStack {
+            AcrylicBackground()
+            VStack(spacing: 14) {
+                Image(systemName: "play.circle.fill").font(.system(size: 56)).foregroundStyle(.teal)
+                ProgressView().tint(.white)
+            }
+        }
     }
 }
 
@@ -348,10 +366,8 @@ struct NativeChatPane: View {
             HStack(spacing: 8) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
                     .onChange(of: selectedPhoto) { _, item in Task { await sendPhoto(item) } }
-                TextField("Сообщение…", text: $draft).focused($inputFocused).submitLabel(.send).onSubmit { submit() }
-                    .onChange(of: inputFocused) { _, value in
-                        focused = value
-                    }
+                PersistentChatTextField(text: $draft, isFocused: $inputFocused, onSubmit: submit)
+                    .onChange(of: inputFocused) { _, value in focused = value }
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 31, weight: .medium))
                     .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
@@ -377,6 +393,47 @@ struct NativeChatPane: View {
     }
 }
 
+/// `UITextField` can deliberately decline the default Return action, keeping
+/// first responder status while the common `submit()` method clears the draft.
+private struct PersistentChatTextField: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.delegate = context.coordinator
+        field.placeholder = "Сообщение…"
+        field.textColor = .label
+        field.tintColor = .systemTeal
+        field.font = .preferredFont(forTextStyle: .body)
+        field.adjustsFontForContentSizeCategory = true
+        field.returnKeyType = .send
+        field.enablesReturnKeyAutomatically = true
+        field.autocorrectionType = .yes
+        field.backgroundColor = .clear
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+    func updateUIView(_ field: UITextField, context: Context) {
+        if field.text != text { field.text = text }
+        if isFocused && !field.isFirstResponder { field.becomeFirstResponder() }
+        if !isFocused && field.isFirstResponder { field.resignFirstResponder() }
+    }
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: PersistentChatTextField
+        init(parent: PersistentChatTextField) { self.parent = parent }
+        func textFieldDidChangeSelection(_ textField: UITextField) { parent.text = textField.text ?? "" }
+        func textFieldDidBeginEditing(_ textField: UITextField) { parent.isFocused = true }
+        func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            parent.onSubmit()
+            return false
+        }
+    }
+}
+
 struct NativeMessageBubble: View {
     let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
     var body: some View {
@@ -388,26 +445,14 @@ struct NativeMessageBubble: View {
             if isMine { Spacer(minLength: 44) }
             VStack(alignment: .leading, spacing: 4) {
                 Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary)
-                if !message.text.isEmpty { FluentInlineText(message.text) }
+                if !message.text.isEmpty { FluentInlineText(message.text).lineLimit(nil).multilineTextAlignment(.leading).layoutPriority(1).fixedSize(horizontal: false, vertical: true) }
                 if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
-            }.padding(10).frame(width: bubbleWidth, alignment: .leading).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
+            }.padding(10).frame(minWidth: 72, maxWidth: 270, alignment: .leading).background(isMine ? Color.purple.opacity(0.34) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
             }
             if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 36) } else { Spacer(minLength: 20) }
         }
         }
-    }
-    private var bubbleWidth: CGFloat {
-        if !message.imageDataURL.isEmpty { return 230 }
-        let emojiCount = message.text.filter { character in
-            character.unicodeScalars.contains { scalar in
-                (0x1F000...0x1FAFF).contains(Int(scalar.value)) || (0x2600...0x27FF).contains(Int(scalar.value))
-            }
-        }.count
-        let textCount = max(0, message.text.count - emojiCount)
-        let contentWidth = CGFloat(textCount) * 8.2 + CGFloat(emojiCount) * 21 + 24
-        let estimated = max(contentWidth, CGFloat(message.nickname.count) * 7 + 24)
-        return min(260, max(64, estimated))
     }
 }
 

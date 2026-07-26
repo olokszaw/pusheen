@@ -3,6 +3,9 @@ from yt_dlp import YoutubeDL
 from .media_sources import SOURCE_VK, SOURCE_WEB
 
 
+TRAILER_WORDS = ("trailer", "teaser", "preview", "трейлер", "тизер")
+
+
 def _extract(page_url, *, format_selector=None):
     options = {
         "quiet": True,
@@ -17,7 +20,19 @@ def _extract(page_url, *, format_selector=None):
     with YoutubeDL(options) as downloader:
         info = downloader.extract_info(page_url, download=False)
     if info.get("entries"):
-        info = next((entry for entry in info["entries"] if entry), info)
+        entries = [entry for entry in info["entries"] if entry]
+
+        # A web page can expose a trailer alongside the full public video.
+        # Prefer a non-trailer, longer entry. This never fabricates a source or
+        # attempts to defeat DRM, sign-in walls, subscriptions or geo blocks.
+        def entry_score(entry):
+            text = " ".join(
+                str(entry.get(key) or "") for key in ("title", "description")
+            ).lower()
+            trailer_penalty = 1 if any(word in text for word in TRAILER_WORDS) else 0
+            return (-trailer_penalty, float(entry.get("duration") or 0), int(entry.get("view_count") or 0))
+
+        info = max(entries, key=entry_score, default=info)
     return info
 
 
@@ -43,10 +58,7 @@ def resolve_vk_stream(page_url):
     if not progressive:
         raise ValueError("VK не вернул совместимый MP4-поток")
 
-    # 1080p is enough for a watch party and avoids accidentally choosing
-    # oversized variants when VK exposes higher resolutions.
-    suitable = [item for item in progressive if (item.get("height") or 0) <= 1080]
-    selected = max(suitable or progressive, key=lambda item: item.get("height") or 0)
+    selected = max(progressive, key=lambda item: ((item.get("height") or 0), (item.get("tbr") or 0)))
     return {
         "url": selected["url"],
         "title": info.get("title") or "VK Видео",
@@ -62,10 +74,9 @@ def resolve_web_stream(page_url):
     """Extract the main public video without rendering the surrounding site."""
     info = _extract(
         page_url,
-        format_selector=(
-            "best[height<=1080][vcodec!=none][acodec!=none]/"
-            "best[vcodec!=none][acodec!=none]"
-        ),
+        # AVPlayer requires a combined audio+video stream. Do not cap quality:
+        # for YouTube and public sites choose the highest compatible stream.
+        format_selector="best[vcodec!=none][acodec!=none]",
     )
     formats = [
         item
@@ -86,7 +97,7 @@ def resolve_web_stream(page_url):
     def score(item):
         protocol = str(item.get("protocol", ""))
         is_progressive_mp4 = item.get("ext") == "mp4" and protocol.startswith("http")
-        height = min(int(item.get("height") or 0), 1080)
+        height = int(item.get("height") or 0)
         return (1 if is_progressive_mp4 else 0, height, int(item.get("tbr") or 0))
 
     selected = max(formats, key=score)
