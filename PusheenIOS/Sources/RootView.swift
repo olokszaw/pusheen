@@ -272,7 +272,7 @@ struct RoomView: View {
                 }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
             }.padding(.horizontal, 9).padding(.vertical, 12).frame(maxHeight: .infinity, alignment: .top)
-        }.simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").foregroundStyle(.primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты") } }.task { await model.start() }
+        }.simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").foregroundStyle(.primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты") } }.task { await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
@@ -755,12 +755,73 @@ struct ProfileGlassView: View {
                         }.buttonStyle(.plain)
                     }
                     if edit { ProfileInlineEditor(close: { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { edit = false } }).transition(.opacity.combined(with: .move(edge: .top))) }
+                    ViewingActivityCard(stats: session.viewingStats)
                     Button("Выйти") { session.logout() }.buttonStyle(.bordered).tint(.red).padding(.top, 8)
                 }.padding(20)
             }
-        }
+        }.onAppear { Task { await session.refreshViewingStats() } }
     }
     private func updateAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self), let profile = session.profile else { return }; let value = "data:image/jpeg;base64," + data.base64EncodedString(); session.profile = try? await session.api.updateProfile(nickname: profile.nickname, username: profile.username, avatar: value) }
+}
+
+private struct ViewingActivityCard: View {
+    let stats: ViewingStats?
+    private func time(_ seconds: Int) -> String {
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        return hours > 0 ? "\(hours) ч \(minutes) мин" : "\(minutes) мин"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack { Text("Активность").font(.headline); Spacer(); Image(systemName: "chart.bar.xaxis").foregroundStyle(.teal) }
+            HStack(spacing: 8) {
+                ActivityMetric(icon: "play.rectangle.fill", value: time(stats?.watchedSeconds ?? 0), title: "просмотрено")
+                ActivityMetric(icon: "clock.fill", value: time(stats?.appSeconds ?? 0), title: "в приложении")
+                ActivityMetric(icon: "film.fill", value: time(stats?.longestMovieSeconds ?? 0), title: "длиннее всего")
+            }
+            if let stats, !stats.dailySeconds.isEmpty {
+                HStack(spacing: 5) {
+                    ForEach(stats.dailySeconds.sorted(by: { $0.key < $1.key }).suffix(10), id: \.key) { entry in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.teal.opacity(min(0.86, 0.16 + Double(entry.value) / 3600 * 0.18)))
+                            .frame(maxWidth: .infinity, minHeight: 13, maxHeight: 28)
+                    }
+                }
+                .frame(height: 28)
+            }
+            if let stats, !stats.genres.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Предпочтения").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    ForEach(stats.genres.prefix(3)) { genre in
+                        HStack(spacing: 8) {
+                            Text(genre.name).font(.caption).frame(width: 88, alignment: .leading).lineLimit(1)
+                            GeometryReader { proxy in
+                                Capsule().fill(.white.opacity(0.10)).overlay(alignment: .leading) {
+                                    Capsule().fill(LinearGradient(colors: [.teal, .indigo.opacity(0.85)], startPoint: .leading, endPoint: .trailing)).frame(width: proxy.size.width * CGFloat(genre.percent) / 100)
+                                }
+                            }.frame(height: 7)
+                            Text("\(genre.percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 30, alignment: .trailing)
+                        }
+                    }
+                }
+            } else {
+                Text("Статистика появится после первого просмотра.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .liquidCard(RoundedRectangle(cornerRadius: 24))
+    }
+}
+
+private struct ActivityMetric: View {
+    let icon: String; let value: String; let title: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: icon).font(.caption).foregroundStyle(.teal)
+            Text(value).font(.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(9).liquidCard(RoundedRectangle(cornerRadius: 16))
+    }
 }
 
 /// Uses Unicode filenames, so every emoji typed from the system keyboard maps to

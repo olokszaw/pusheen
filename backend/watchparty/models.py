@@ -19,6 +19,8 @@ class Room(models.Model):
     allow_guests_control = models.BooleanField(default=False)
     vk_video_url = models.URLField(blank=True)
     thumbnail_url = models.TextField(blank=True, default="")
+    duration_seconds = models.FloatField(default=0)
+    genres = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -107,6 +109,17 @@ class FriendRequest(models.Model):
                 name="friend_request_cannot_target_self",
             ),
         ]
+
+
+class ViewingActivity(models.Model):
+    """Aggregated private viewing statistics for one profile."""
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="viewing_activity")
+    app_seconds = models.PositiveIntegerField(default=0)
+    watched_seconds = models.PositiveIntegerField(default=0)
+    longest_movie_seconds = models.PositiveIntegerField(default=0)
+    genre_counts = models.JSONField(default=dict, blank=True)
+    daily_seconds = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
 
 class ChatMessage(models.Model):

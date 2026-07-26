@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import RoomDetailView, RoomListCreateView, account_login, demo_login, friend_requests, friends, join_room, profile, register, room_members, room_messages, room_stream, username_available
+from .views import RoomDetailView, RoomListCreateView, account_login, activity, demo_login, friend_requests, friends, join_room, profile, register, room_members, room_messages, room_stream, username_available
 
 urlpatterns = [
     path("auth/demo-login/", demo_login),
@@ -7,6 +7,7 @@ urlpatterns = [
     path("auth/login/", account_login),
     path("auth/username-available/", username_available),
     path("profile/", profile),
+    path("activity/", activity),
     path("friends/", friends),
     path("friends/requests/", friend_requests),
     path("rooms/", RoomListCreateView.as_view()),

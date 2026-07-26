@@ -6,6 +6,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from django.utils.html import escape
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
@@ -22,6 +23,7 @@ from .models import (
     Room,
     RoomMember,
     UserProfile,
+    ViewingActivity,
 )
 from .permissions import IsRoomOwner
 from .serializers import (
@@ -44,6 +46,54 @@ def valid_username(value):
 def auth_payload(user):
     token, _ = Token.objects.get_or_create(user=user)
     return {"token": token.key, **public_profile(user)}
+
+
+def activity_payload(activity):
+    genres = activity.genre_counts or {}
+    total = sum(int(value or 0) for value in genres.values())
+    genre_rows = [
+        {"name": name, "seconds": int(seconds), "percent": round((int(seconds) / total * 100) if total else 0)}
+        for name, seconds in sorted(genres.items(), key=lambda item: item[1], reverse=True)[:5]
+    ]
+    return {
+        "app_seconds": activity.app_seconds,
+        "watched_seconds": activity.watched_seconds,
+        "longest_movie_seconds": activity.longest_movie_seconds,
+        "genres": genre_rows,
+        "daily_seconds": activity.daily_seconds or {},
+    }
+
+
+@api_view(["GET", "POST"])
+def activity(request):
+    activity_obj, _ = ViewingActivity.objects.get_or_create(user=request.user)
+    if request.method == "GET":
+        return Response(activity_payload(activity_obj))
+
+    # The client reports bounded foreground intervals. A single request can
+    # never inflate a profile by hours, and no raw viewing history is stored.
+    app_seconds = max(0, min(int(request.data.get("app_seconds") or 0), 90))
+    watched_seconds = max(0, min(int(request.data.get("watched_seconds") or 0), 90))
+    duration_seconds = max(0, min(int(request.data.get("duration_seconds") or 0), 86_400))
+    genres = request.data.get("genres") or []
+    if not isinstance(genres, list):
+        genres = []
+    day = timezone.localdate().isoformat()
+    with transaction.atomic():
+        activity_obj = ViewingActivity.objects.select_for_update().get(pk=activity_obj.pk)
+        activity_obj.app_seconds += app_seconds
+        activity_obj.watched_seconds += watched_seconds
+        activity_obj.longest_movie_seconds = max(activity_obj.longest_movie_seconds, duration_seconds)
+        daily = dict(activity_obj.daily_seconds or {})
+        daily[day] = min(86_400, int(daily.get(day, 0)) + app_seconds + watched_seconds)
+        activity_obj.daily_seconds = dict(sorted(daily.items())[-14:])
+        counts = dict(activity_obj.genre_counts or {})
+        for genre in genres[:5]:
+            if isinstance(genre, str) and genre.strip():
+                counts[genre.strip()[:32]] = int(counts.get(genre.strip()[:32], 0)) + watched_seconds
+        activity_obj.genre_counts = counts
+        activity_obj.save()
+    return Response(activity_payload(activity_obj))
 
 
 @api_view(["GET"])
@@ -272,6 +322,8 @@ class RoomListCreateView(generics.ListCreateAPIView):
                 )
                 resolved_title = str(metadata.get("title") or "").strip()[:80]
                 thumbnail = str(metadata.get("thumbnail") or "").strip()
+                duration = float(metadata.get("duration_seconds") or 0)
+                genres = metadata.get("genres") or []
                 changed = []
                 if resolved_title:
                     room.title = resolved_title
@@ -279,6 +331,12 @@ class RoomListCreateView(generics.ListCreateAPIView):
                 if thumbnail:
                     room.thumbnail_url = thumbnail
                     changed.append("thumbnail_url")
+                if duration:
+                    room.duration_seconds = duration
+                    changed.append("duration_seconds")
+                if genres:
+                    room.genres = genres
+                    changed.append("genres")
                 if changed:
                     room.save(update_fields=changed)
             except Exception:
@@ -337,12 +395,20 @@ def room_stream(request, room_id):
     changed = []
     resolved_title = str(stream.get("title") or "").strip()[:80]
     thumbnail = str(stream.get("thumbnail") or "").strip()
+    duration = float(stream.get("duration_seconds") or 0)
+    genres = stream.get("genres") or []
     if resolved_title and room.title != resolved_title:
         room.title = resolved_title
         changed.append("title")
     if thumbnail and room.thumbnail_url != thumbnail:
         room.thumbnail_url = thumbnail
         changed.append("thumbnail_url")
+    if duration and room.duration_seconds != duration:
+        room.duration_seconds = duration
+        changed.append("duration_seconds")
+    if genres and room.genres != genres:
+        room.genres = genres
+        changed.append("genres")
     if changed:
         room.save(update_fields=changed)
     return Response(stream)

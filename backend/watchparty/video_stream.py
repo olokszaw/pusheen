@@ -1,6 +1,7 @@
 from yt_dlp import YoutubeDL
 
 from .media_sources import SOURCE_VK, SOURCE_WEB
+from .genres import detect_genres
 
 
 TRAILER_WORDS = ("trailer", "teaser", "preview", "трейлер", "тизер")
@@ -45,6 +46,10 @@ def _safe_headers(info, selected):
     return headers
 
 
+def _genres(info):
+    return detect_genres(info.get("title"), info.get("description"), *(info.get("categories") or []), *(info.get("tags") or []))
+
+
 def resolve_vk_stream(page_url):
     info = _extract(page_url)
 
@@ -67,6 +72,7 @@ def resolve_vk_stream(page_url):
         "quality": selected.get("format_note") or selected.get("format_id") or "MP4",
         "headers": _safe_headers(info, selected),
         "source_type": SOURCE_VK,
+        "genres": _genres(info),
     }
 
 
@@ -109,6 +115,7 @@ def resolve_web_stream(page_url):
         "quality": selected.get("format_note") or selected.get("format_id") or "WEB",
         "headers": _safe_headers(info, selected),
         "source_type": SOURCE_WEB,
+        "genres": _genres(info),
     }
 
 

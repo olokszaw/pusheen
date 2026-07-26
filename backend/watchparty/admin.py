@@ -10,6 +10,7 @@ from .models import (
     Room,
     RoomMember,
     UserProfile,
+    ViewingActivity,
 )
 
 
@@ -22,3 +23,4 @@ admin.site.register(FriendLink)
 admin.site.register(FriendRequest)
 admin.site.register(ChatMessage)
 admin.site.register(MessageReaction)
+admin.site.register(ViewingActivity)

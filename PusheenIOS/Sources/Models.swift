@@ -48,8 +48,8 @@ struct RoomMember: Codable, Identifiable, Hashable {
 }
 
 struct VideoStream: Codable, Hashable {
-    let url: String; let title: String; let durationSeconds: Double; let quality: String; let sourceType: String; let thumbnail: String; let headers: [String: String]
-    enum CodingKeys: String, CodingKey { case url, title, quality, thumbnail, headers; case durationSeconds = "duration_seconds"; case sourceType = "source_type" }
+    let url: String; let title: String; let durationSeconds: Double; let quality: String; let sourceType: String; let thumbnail: String; let headers: [String: String]; let genres: [String]
+    enum CodingKeys: String, CodingKey { case url, title, quality, thumbnail, headers, genres; case durationSeconds = "duration_seconds"; case sourceType = "source_type" }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         url = try values.decode(String.self, forKey: .url)
@@ -59,6 +59,29 @@ struct VideoStream: Codable, Hashable {
         sourceType = try values.decodeIfPresent(String.self, forKey: .sourceType) ?? "video"
         thumbnail = try values.decodeIfPresent(String.self, forKey: .thumbnail) ?? ""
         headers = try values.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+        genres = try values.decodeIfPresent([String].self, forKey: .genres) ?? []
+    }
+}
+
+struct ViewingGenre: Codable, Hashable, Identifiable {
+    let name: String
+    let seconds: Int
+    let percent: Int
+    var id: String { name }
+}
+
+struct ViewingStats: Codable, Hashable {
+    let appSeconds: Int
+    let watchedSeconds: Int
+    let longestMovieSeconds: Int
+    let genres: [ViewingGenre]
+    let dailySeconds: [String: Int]
+    enum CodingKeys: String, CodingKey {
+        case genres
+        case appSeconds = "app_seconds"
+        case watchedSeconds = "watched_seconds"
+        case longestMovieSeconds = "longest_movie_seconds"
+        case dailySeconds = "daily_seconds"
     }
 }
 

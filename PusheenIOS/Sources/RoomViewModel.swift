@@ -18,6 +18,8 @@ final class RoomViewModel: ObservableObject {
     private var timer: Any?
     private var itemStatusObservation: NSKeyValueObservation?
     private var audioObservers: [NSObjectProtocol] = []
+    private var activityTask: Task<Void, Never>?
+    private var streamGenres: [String] = []
 
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token }
     deinit {
@@ -31,6 +33,7 @@ final class RoomViewModel: ObservableObject {
             async let history = api.messages(roomID: room.id)
             async let people = api.members(roomID: room.id)
             let stream = try await api.stream(roomID: room.id)
+            streamGenres = stream.genres
             messages = try await history; members = try await people
             guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
             let assetOptions: [String: Any] = stream.headers.isEmpty ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": stream.headers]
@@ -60,7 +63,31 @@ final class RoomViewModel: ObservableObject {
             }
             socket.onEvent = { [weak self] event in self?.apply(event) }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
+            startActivityReporting()
         } catch let caughtError { error = caughtError.localizedDescription }
+    }
+    func stop() {
+        activityTask?.cancel()
+        activityTask = nil
+        socket.close()
+    }
+    private func startActivityReporting() {
+        activityTask?.cancel()
+        activityTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard let self, self.isPlaying else { continue }
+                let stats = try? await self.api.reportActivity(
+                    watchedSeconds: 30,
+                    durationSeconds: Int(self.duration),
+                    genres: self.streamGenres
+                )
+                guard !Task.isCancelled else { return }
+                // Stats are fetched by Profile when it appears; this preserves
+                // the player ownership and keeps reporting off the main UI path.
+                _ = stats
+            }
+        }
     }
     private func configureAudioSession() {
         let audio = AVAudioSession.sharedInstance()
