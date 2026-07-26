@@ -550,6 +550,10 @@ struct NativeChatPane: View {
         }
         .padding(12)
         .liquidCard()
+        .task {
+            FluentEmojiCache.shared.warmCommonEmoji()
+            messages.forEach { FluentEmojiCache.shared.prefetch(in: $0.text) }
+        }
         .onChange(of: draft) { _, value in FluentEmojiCache.shared.prefetch(in: value) }
         .onChange(of: messages.count) { _, _ in
             if let text = messages.last?.text { FluentEmojiCache.shared.prefetch(in: text) }
@@ -1043,13 +1047,6 @@ struct FluentEmojiGlyph: UIViewRepresentable {
     let emoji: String
     let size: CGFloat
     init(_ emoji: String, size: CGFloat = 21) { self.emoji = emoji; self.size = size }
-    private var assetURL: URL? {
-        let slug = emoji.unicodeScalars
-            .filter { $0.value != 0xFE0F }
-            .map { String($0.value, radix: 16) }
-            .joined(separator: "-")
-        return URL(string: "https://raw.githubusercontent.com/bignutty/fluent-emoji/main/animated/\(slug).png")
-    }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> EmojiImageView {
         let imageView = EmojiImageView(emojiSize: size)
@@ -1068,13 +1065,12 @@ struct FluentEmojiGlyph: UIViewRepresentable {
         // Never flash the native iOS glyph before Fluent arrives.
         imageView.prepareForFluentImage()
         context.coordinator.task?.cancel()
-        guard let assetURL else { return }
         if let image = FluentEmojiCache.shared.image(for: emoji) {
             imageView.image = image
             imageView.startAnimating()
             return
         }
-        context.coordinator.task = FluentEmojiCache.shared.load(emoji: emoji, from: assetURL) { image in
+        context.coordinator.task = FluentEmojiCache.shared.load(emoji: emoji) { image in
             guard let image else { return }
             DispatchQueue.main.async {
                 guard context.coordinator.lastEmoji == emoji else { return }
@@ -1090,10 +1086,12 @@ struct FluentEmojiGlyph: UIViewRepresentable {
 /// Keeps already-used Fluent APNGs in memory for the whole app session. It
 /// removes the visible network delay when the same emoji appears in the chat,
 /// reactions or profile again.
-private final class FluentEmojiCache {
+final class FluentEmojiCache {
     static let shared = FluentEmojiCache()
     private let images = NSCache<NSString, UIImage>()
     private let cacheDirectory: URL
+    private let stateQueue = DispatchQueue(label: "app.pusheen.fluent-emoji-cache")
+    private var warmingCommonEmoji = false
     private init() {
         images.countLimit = 420
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -1102,11 +1100,37 @@ private final class FluentEmojiCache {
     }
     func image(for emoji: String) -> UIImage? { images.object(forKey: emoji as NSString) }
     func store(_ image: UIImage, for emoji: String) { images.setObject(image, forKey: emoji as NSString) }
-    private func slug(for emoji: String) -> String {
-        emoji.unicodeScalars.filter { $0.value != 0xFE0F }.map { String($0.value, radix: 16) }.joined(separator: "-")
+    private func slug(for emoji: String, preservingVariationSelector: Bool = true) -> String {
+        emoji.unicodeScalars
+            .filter { preservingVariationSelector || $0.value != 0xFE0F }
+            .map { String($0.value, radix: 16) }
+            .joined(separator: "-")
+    }
+    private func assetURLs(for emoji: String) -> [URL] {
+        let exact = slug(for: emoji)
+        let withoutVariation = slug(for: emoji, preservingVariationSelector: false)
+        var slugs = [exact]
+        // Some keyboards omit the emoji variation selector for symbols even
+        // though Fluent stores the asset with FE0F in its canonical filename.
+        if !emoji.unicodeScalars.contains(where: { $0.value == 0xFE0F }),
+           emoji.unicodeScalars.count == 1,
+           let scalar = emoji.unicodeScalars.first,
+           scalar.value <= 0xFFFF {
+            slugs.append(exact + "-fe0f")
+        }
+        if withoutVariation != exact { slugs.append(withoutVariation) }
+        var seen = Set<String>()
+        return slugs.flatMap { slug -> [URL] in
+            guard seen.insert(slug).inserted else { return [] }
+            // animated-static is the complete Fluent catalogue: it keeps APNG
+            // animation where Microsoft provides it and a Fluent PNG otherwise.
+            return ["animated-static", "static"].compactMap {
+                URL(string: "https://raw.githubusercontent.com/bignutty/fluent-emoji/main/\($0)/\(slug).png")
+            }
+        }
     }
     @discardableResult
-    func load(emoji: String, from url: URL, completion: @escaping (UIImage?) -> Void) -> URLSessionDataTask? {
+    func load(emoji: String, completion: @escaping (UIImage?) -> Void) -> URLSessionDataTask? {
         if let cached = image(for: emoji) { completion(cached); return nil }
         let diskURL = cacheDirectory.appendingPathComponent(slug(for: emoji) + ".png")
         if let data = try? Data(contentsOf: diskURL), let decoded = EmojiImageView.decodeAPNG(data) {
@@ -1114,24 +1138,45 @@ private final class FluentEmojiCache {
             completion(decoded)
             return nil
         }
-        let task = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self, let data, let decoded = EmojiImageView.decodeAPNG(data) else { completion(nil); return }
-            self.store(decoded, for: emoji)
-            try? data.write(to: diskURL, options: .atomic)
-            completion(decoded)
+        let urls = assetURLs(for: emoji)
+        guard !urls.isEmpty else { completion(nil); return nil }
+        func request(_ index: Int) -> URLSessionDataTask? {
+            guard index < urls.count else { completion(nil); return nil }
+            let task = URLSession.shared.dataTask(with: urls[index]) { [weak self] data, response, _ in
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard let self, (200..<300).contains(status), let data,
+                      let decoded = EmojiImageView.decodeAPNG(data) else {
+                    _ = request(index + 1)
+                    return
+                }
+                self.store(decoded, for: emoji)
+                try? data.write(to: diskURL, options: .atomic)
+                completion(decoded)
+            }
+            task.resume()
+            return task
         }
-        task.resume()
-        return task
+        return request(0)
     }
     func prefetch(in text: String) {
         for character in text {
             let emoji = String(character)
             guard emoji.unicodeScalars.contains(where: { (0x1F000...0x1FAFF).contains(Int($0.value)) || (0x2600...0x27FF).contains(Int($0.value)) }) else { continue }
             guard image(for: emoji) == nil else { continue }
-            let slug = slug(for: emoji)
-            guard let url = URL(string: "https://raw.githubusercontent.com/bignutty/fluent-emoji/main/animated/\(slug).png") else { continue }
-            _ = load(emoji: emoji, from: url) { _ in }
+            _ = load(emoji: emoji) { _ in }
         }
+    }
+    func warmCommonEmoji() {
+        let shouldStart = stateQueue.sync { () -> Bool in
+            guard !warmingCommonEmoji else { return false }
+            warmingCommonEmoji = true
+            return true
+        }
+        guard shouldStart else { return }
+        // Starts while the room is opening, so the most common chat/reaction
+        // glyphs are already in memory (and on disk for future launches).
+        let common = "😀😃😄😁😆😅😂🤣😊😇🙂🙃😉😍🥰😘😋😜🤪🤗🤭🫢🤫🤔🫡🤐😐😑😶🙄😏😣😥😮🤐😯😪😫🥱😴😌🤓😎🥳😤😡🤬😱😨😰😢😭😓🤩🥺❤️🧡💛💚💙💜🖤🤍🤎💔💕💞💓💗💖💘💝💟👍👎👏🙌🫶🤝🙏💪🔥✨🎉🎊💯🎬🍿"
+        prefetch(in: common)
     }
 }
 
