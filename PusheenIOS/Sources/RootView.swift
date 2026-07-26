@@ -134,8 +134,10 @@ struct HomeView: View {
     @State private var showJoin = false
     @State private var previewedRoom: Room?
     var body: some View {
-        NavigationStack(path: $path) { ZStack { AcrylicBackground()
-            ScrollView { VStack(alignment: .leading, spacing: 18) {
+        NavigationStack(path: $path) {
+            ZStack {
+                ZStack { AcrylicBackground()
+                    ScrollView { VStack(alignment: .leading, spacing: 18) {
                 HStack { VStack(alignment: .leading) { Text("Pusheen").font(.largeTitle.bold()); Text("Привет, \(session.profile?.nickname ?? "")").foregroundStyle(.secondary) }; Spacer(); Button { session.logout() } label: { Image(systemName: "rectangle.portrait.and.arrow.right").padding(10).liquidCard(Circle()) }.buttonStyle(.plain) }
                 HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 ForEach(rooms) { room in
@@ -146,15 +148,29 @@ struct HomeView: View {
                         })
                 }
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
-            }.padding(18) }.task { await load() }
-        }.navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }.sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }.sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
-            .sheet(item: $previewedRoom) { room in
-                RoomPreviewSheet(room: room, canDelete: room.owner == session.profile?.userId) {
-                    try? await session.api.deleteRoom(id: room.id)
-                    rooms.removeAll { $0.id == room.id }
-                    previewedRoom = nil
+                    }.padding(18) }.task { await load() }
+                }
+                .blur(radius: previewedRoom == nil ? 0 : 17)
+                .allowsHitTesting(previewedRoom == nil)
+
+                if let room = previewedRoom {
+                    Color.black.opacity(0.28)
+                        .ignoresSafeArea()
+                        .onTapGesture { withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { previewedRoom = nil } }
+                    RoomPreviewOverlay(room: room, canDelete: room.owner == session.profile?.userId, close: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { previewedRoom = nil }
+                    }) {
+                        try? await session.api.deleteRoom(id: room.id)
+                        rooms.removeAll { $0.id == room.id }
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { previewedRoom = nil }
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
                 }
             }
+            .animation(.spring(response: 0.34, dampingFraction: 0.84), value: previewedRoom?.id)
+            .navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }
+            .sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
+            .sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
         }
     }
     private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
@@ -249,14 +265,14 @@ struct RoomView: View {
     }
 }
 
-private struct RoomPreviewSheet: View {
+private struct RoomPreviewOverlay: View {
     let room: Room
     let canDelete: Bool
+    let close: () -> Void
     let delete: () async -> Void
-    @Environment(\.dismiss) private var dismiss
     @State private var deleting = false
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
             ZStack {
                 if let url = URL(string: room.thumbnailURL), !room.thumbnailURL.isEmpty {
                     AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.08) }
@@ -265,13 +281,13 @@ private struct RoomPreviewSheet: View {
                 }
                 Image(systemName: "play.fill").font(.title2.weight(.semibold)).padding(16).liquidCard(Circle())
             }
-            .frame(height: 208)
-            .clipShape(RoundedRectangle(cornerRadius: 28))
+            .frame(height: 160)
+            .clipShape(RoundedRectangle(cornerRadius: 24))
             Text(room.title).font(.title3.bold()).multilineTextAlignment(.center).lineLimit(2)
             Text("Код \(room.inviteCode)").font(.caption.monospaced()).foregroundStyle(.secondary)
             if canDelete {
                 Button(role: .destructive) {
-                    Task { deleting = true; await delete(); deleting = false; dismiss() }
+                    Task { deleting = true; await delete(); deleting = false }
                 } label: {
                     Label(deleting ? "Удаление…" : "Удалить комнату", systemImage: "trash")
                         .frame(maxWidth: .infinity).padding(.vertical, 6)
@@ -282,9 +298,14 @@ private struct RoomPreviewSheet: View {
                 .liquidCard(Capsule())
             }
         }
-        .padding(22)
-        .presentationDetents([.height(canDelete ? 410 : 330)])
-        .presentationBackground(.ultraThinMaterial)
+        .padding(16)
+        .frame(maxWidth: 330)
+        .liquidCard(RoundedRectangle(cornerRadius: 30))
+        .overlay(alignment: .topTrailing) {
+            Button(action: close) { Image(systemName: "xmark").font(.caption.weight(.bold)).frame(width: 32, height: 32).liquidCard(Circle()) }
+                .buttonStyle(.plain).padding(10)
+        }
+        .padding(.horizontal, 30)
     }
 }
 
