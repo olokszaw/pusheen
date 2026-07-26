@@ -366,7 +366,11 @@ struct NativeChatPane: View {
             HStack(spacing: 8) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
                     .onChange(of: selectedPhoto) { _, item in Task { await sendPhoto(item) } }
-                PersistentChatTextField(text: $draft, isFocused: $inputFocused, onSubmit: submit)
+                PersistentChatTextField(
+                    text: $draft,
+                    isFocused: Binding(get: { inputFocused }, set: { inputFocused = $0 }),
+                    onSubmit: submit
+                )
                     .onChange(of: inputFocused) { _, value in focused = value }
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 31, weight: .medium))
