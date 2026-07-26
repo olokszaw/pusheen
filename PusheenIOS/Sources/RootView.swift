@@ -1080,7 +1080,7 @@ private struct FriendSwipeRow: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            if person.isFriend {
+            if person.isFriend && (revealed || dragOffset < -10) {
                 Button {
                     Task { await remove() }
                 } label: {
