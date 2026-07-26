@@ -930,7 +930,6 @@ struct FluentEmojiGlyph: UIViewRepresentable {
         guard let assetURL else { return }
         if let image = FluentEmojiCache.shared.image(for: emoji) {
             imageView.image = image
-            imageView.hideFallback()
             imageView.startAnimating()
             return
         }
