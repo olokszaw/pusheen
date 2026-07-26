@@ -67,3 +67,21 @@ struct FriendProfile: Codable, Identifiable, Hashable {
     var id: Int { userId }
     enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isFriend = "is_friend" }
 }
+
+struct FriendRequestProfile: Codable, Identifiable, Hashable {
+    let id: Int
+    let userId: Int
+    let username: String
+    let nickname: String
+    let avatarDataURL: String
+    enum CodingKeys: String, CodingKey {
+        case id, username, nickname
+        case userId = "user_id"
+        case avatarDataURL = "avatar_data_url"
+    }
+}
+
+struct FriendRequestsResponse: Codable, Hashable {
+    let incoming: [FriendRequestProfile]
+    let outgoing: [FriendRequestProfile]
+}

@@ -88,6 +88,27 @@ class FriendLink(models.Model):
         ]
 
 
+class FriendRequest(models.Model):
+    """A pending friendship request; a link is only created after acceptance."""
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sent_friend_requests"
+    )
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="received_friend_requests"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(fields=("sender", "recipient"), name="unique_pending_friend_request"),
+            models.CheckConstraint(
+                condition=~models.Q(sender=models.F("recipient")),
+                name="friend_request_cannot_target_self",
+            ),
+        ]
+
+
 class ChatMessage(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="messages")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)

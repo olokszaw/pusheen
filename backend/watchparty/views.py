@@ -17,6 +17,7 @@ from .models import (
     ChatMessage,
     ClientIdentity,
     FriendLink,
+    FriendRequest,
     PlaybackState,
     Room,
     RoomMember,
@@ -164,9 +165,13 @@ def profile(request):
     return Response(public_profile(request.user))
 
 
+def request_profile(friend_request, user):
+    return {"id": friend_request.id, **public_profile(user)}
+
+
 @api_view(["GET", "POST", "DELETE"])
 def friends(request):
-    """Search profiles and add/remove confirmed friends by @username."""
+    """Search confirmed friends. POST sends a request; DELETE removes a friend."""
     users = get_user_model()
     if request.method == "GET":
         query = request.query_params.get("username", "").strip()
@@ -194,14 +199,49 @@ def friends(request):
     if friend.pk == request.user.pk:
         return Response({"detail": "Нельзя добавить самого себя"}, status=status.HTTP_400_BAD_REQUEST)
     if request.method == "POST":
+        if FriendLink.objects.filter(user=request.user, friend=friend).exists():
+            return Response({**public_profile(friend), "is_friend": True, "status": "already_friends"})
+        if FriendRequest.objects.filter(sender=request.user, recipient=friend).exists():
+            return Response({"detail": "Request already sent", "status": "pending"}, status=status.HTTP_200_OK)
+        # If both people pressed add, accepting immediately is friendlier than two requests.
+        reverse = FriendRequest.objects.filter(sender=friend, recipient=request.user).first()
         with transaction.atomic():
-            FriendLink.objects.get_or_create(user=request.user, friend=friend)
-            FriendLink.objects.get_or_create(user=friend, friend=request.user)
-        return Response({**public_profile(friend), "is_friend": True}, status=status.HTTP_201_CREATED)
+            if reverse:
+                reverse.delete()
+                FriendLink.objects.get_or_create(user=request.user, friend=friend)
+                FriendLink.objects.get_or_create(user=friend, friend=request.user)
+                return Response({**public_profile(friend), "is_friend": True, "status": "accepted"}, status=status.HTTP_201_CREATED)
+            FriendRequest.objects.create(sender=request.user, recipient=friend)
+        return Response({**public_profile(friend), "is_friend": False, "status": "pending"}, status=status.HTTP_201_CREATED)
 
     FriendLink.objects.filter(user=request.user, friend=friend).delete()
     FriendLink.objects.filter(user=friend, friend=request.user).delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["GET", "POST"])
+def friend_requests(request):
+    if request.method == "GET":
+        incoming = FriendRequest.objects.filter(recipient=request.user).select_related("sender", "sender__watch_profile")
+        outgoing = FriendRequest.objects.filter(sender=request.user).select_related("recipient", "recipient__watch_profile")
+        return Response({
+            "incoming": [request_profile(item, item.sender) for item in incoming],
+            "outgoing": [request_profile(item, item.recipient) for item in outgoing],
+        })
+
+    request_id = request.data.get("request_id")
+    action = request.data.get("action")
+    invite = get_object_or_404(FriendRequest, pk=request_id, recipient=request.user)
+    if action == "accept":
+        with transaction.atomic():
+            FriendLink.objects.get_or_create(user=request.user, friend=invite.sender)
+            FriendLink.objects.get_or_create(user=invite.sender, friend=request.user)
+            invite.delete()
+        return Response({"status": "accepted"})
+    if action == "decline":
+        invite.delete()
+        return Response({"status": "declined"})
+    return Response({"detail": "Unknown action"}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class RoomListCreateView(generics.ListCreateAPIView):

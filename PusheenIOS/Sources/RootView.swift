@@ -15,6 +15,41 @@ struct RootView: View {
             }
         }
             .preferredColorScheme(.dark)
+            .overlay(alignment: .top) {
+                if let request = session.friendRequestNotice {
+                    FriendRequestToast(request: request)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(20)
+                }
+            }
+            .animation(.spring(response: 0.38, dampingFraction: 0.84), value: session.friendRequestNotice?.id)
+    }
+}
+
+private struct FriendRequestToast: View {
+    @EnvironmentObject private var session: SessionStore
+    let request: FriendRequestProfile
+
+    var body: some View {
+        HStack(spacing: 11) {
+            AvatarView(dataURL: request.avatarDataURL, name: request.nickname, size: 45)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(request.nickname).font(.subheadline.bold()).lineLimit(1)
+                Text("хочет добавить тебя в друзья").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            Button("Принять") { Task { await session.respond(to: request, accept: true) } }
+                .font(.caption.weight(.bold)).buttonStyle(.plain).padding(.horizontal, 11).padding(.vertical, 8)
+                .liquidCard(Capsule())
+            Button { Task { await session.respond(to: request, accept: false) } } label: {
+                Image(systemName: "xmark").font(.caption.bold()).frame(width: 28, height: 28)
+            }.buttonStyle(.plain).liquidCard(Circle())
+        }
+        .padding(10)
+        .liquidCard(RoundedRectangle(cornerRadius: 22))
+        .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
     }
 }
 
@@ -141,11 +176,13 @@ struct HomeView: View {
                 HStack { VStack(alignment: .leading) { Text("Pusheen").font(.largeTitle.bold()); Text("Привет, \(session.profile?.nickname ?? "")").foregroundStyle(.secondary) }; Spacer(); Button { session.logout() } label: { Image(systemName: "rectangle.portrait.and.arrow.right").padding(10).liquidCard(Circle()) }.buttonStyle(.plain) }
                 HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 ForEach(rooms) { room in
-                    NavigationLink(value: room) { RoomCard(room: room) }
-                        .buttonStyle(.plain)
-                        .simultaneousGesture(LongPressGesture(minimumDuration: 0.42).onEnded { _ in
-                            previewedRoom = room
-                        })
+                    RoomCard(room: room)
+                        .contentShape(RoundedRectangle(cornerRadius: 22))
+                        .gesture(
+                            LongPressGesture(minimumDuration: 0.42)
+                                .onEnded { _ in previewedRoom = room }
+                                .exclusively(before: TapGesture().onEnded { path.append(room) })
+                        )
                 }
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
                     }.padding(18) }.task { await load() }
@@ -952,15 +989,60 @@ struct FriendsGlassView: View {
                 }
                 ScrollView {
                     LazyVStack(spacing: 9) {
+                        if !session.friendRequests.incoming.isEmpty {
+                            FriendRequestSection(title: "Входящие", requests: session.friendRequests.incoming, incoming: true) { request, accept in
+                                await session.respond(to: request, accept: accept)
+                                await loadFriends()
+                            }
+                        }
+                        if !session.friendRequests.outgoing.isEmpty {
+                            FriendRequestSection(title: "Отправленные", requests: session.friendRequests.outgoing, incoming: false) { _, _ in }
+                        }
                         ForEach(expanded && !query.isEmpty ? results : friends) { person in
-                            HStack(spacing: 11) { AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48); VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); if expanded && !person.isFriend { Button("Добавить") { Task { try? await session.api.addFriend(username: person.username); await loadFriends(); await search() } }.buttonStyle(.bordered) } }.padding(11).liquidCard(RoundedRectangle(cornerRadius: 20))
+                            HStack(spacing: 11) {
+                                AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
+                                VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }
+                                Spacer()
+                                if person.isFriend {
+                                    Menu { Button("Удалить из друзей", role: .destructive) { Task { try? await session.api.removeFriend(username: person.username); await loadFriends() } } } label: { Image(systemName: "ellipsis").frame(width: 34, height: 34).liquidCard(Circle()) }.buttonStyle(.plain)
+                                } else if expanded {
+                                    let pending = session.friendRequests.outgoing.contains { $0.userId == person.userId }
+                                    Button(pending ? "Отправлено" : "Добавить") {
+                                        guard !pending else { return }
+                                        Task { try? await session.api.addFriend(username: person.username); await session.refreshFriendRequests(); await search() }
+                                    }.buttonStyle(.bordered).disabled(pending)
+                                }
+                            }.padding(11).liquidCard(RoundedRectangle(cornerRadius: 20))
                         }
                         if friends.isEmpty && !expanded { ContentUnavailableView("Друзей пока нет", systemImage: "person.2") }
                     }
                 }
             }.padding(20)
-        }.task { await loadFriends() }
+        }.task { await loadFriends(); await session.refreshFriendRequests() }
     }
     private func loadFriends() async { friends = (try? await session.api.friends()) ?? [] }
     private func search() async { results = (try? await session.api.friends(query: query)) ?? [] }
+}
+
+private struct FriendRequestSection: View {
+    let title: String
+    let requests: [FriendRequestProfile]
+    let incoming: Bool
+    let action: (FriendRequestProfile, Bool) async -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.subheadline.weight(.bold)).foregroundStyle(.secondary).padding(.horizontal, 4)
+            ForEach(requests) { request in
+                HStack(spacing: 11) {
+                    AvatarView(dataURL: request.avatarDataURL, name: request.nickname, size: 44)
+                    VStack(alignment: .leading, spacing: 2) { Text(request.nickname).font(.subheadline.bold()); Text("@\(request.username)").font(.caption).foregroundStyle(.secondary) }
+                    Spacer()
+                    if incoming {
+                        Button { Task { await action(request, true) } } label: { Image(systemName: "checkmark").frame(width: 32, height: 32) }.buttonStyle(.plain).liquidCard(Circle())
+                        Button { Task { await action(request, false) } } label: { Image(systemName: "xmark").frame(width: 32, height: 32) }.buttonStyle(.plain).liquidCard(Circle())
+                    } else { Text("Отправлено").font(.caption.weight(.medium)).foregroundStyle(.secondary) }
+                }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 19))
+            }
+        }
+    }
 }

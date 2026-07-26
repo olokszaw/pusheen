@@ -4,11 +4,16 @@ enum APIError: LocalizedError { case invalidURL, server(String); var errorDescri
 
 @MainActor
 final class SessionStore: ObservableObject {
-    enum AuthenticationState { case restoring, signedOut, signedIn }
+    enum AuthenticationState: Equatable { case restoring, signedOut, signedIn }
     @Published var profile: Profile?
     @Published var token: String?
     @Published private(set) var authenticationState: AuthenticationState = .restoring
+    @Published var friendRequests = FriendRequestsResponse(incoming: [], outgoing: [])
+    @Published var friendRequestNotice: FriendRequestProfile?
     let api = APIClient()
+    private var friendRequestPollingTask: Task<Void, Never>?
+    private var knownIncomingRequestIDs = Set<Int>()
+    private var hasPrimedFriendRequests = false
 
     init() {
         token = UserDefaults.standard.string(forKey: "pusheen.token")
@@ -25,6 +30,7 @@ final class SessionStore: ObservableObject {
         do {
             profile = try await api.profile()
             authenticationState = .signedIn
+            startFriendRequestPolling()
         } catch {
             token = nil
             api.token = nil
@@ -33,8 +39,33 @@ final class SessionStore: ObservableObject {
     }
     func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
     func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
-    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token") }
-    func logout() { token = nil; profile = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token") }
+    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startFriendRequestPolling() }
+    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; token = nil; profile = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token") }
+
+    func refreshFriendRequests() async {
+        guard authenticationState == .signedIn, let response = try? await api.friendRequests() else { return }
+        let newItems = response.incoming.filter { !knownIncomingRequestIDs.contains($0.id) }
+        friendRequests = response
+        knownIncomingRequestIDs = Set(response.incoming.map(\.id))
+        if hasPrimedFriendRequests, let first = newItems.first { friendRequestNotice = first }
+        hasPrimedFriendRequests = true
+    }
+
+    func respond(to request: FriendRequestProfile, accept: Bool) async {
+        guard (try? await api.respondToFriendRequest(id: request.id, accept: accept)) != nil else { return }
+        if friendRequestNotice?.id == request.id { friendRequestNotice = nil }
+        await refreshFriendRequests()
+    }
+
+    private func startFriendRequestPolling() {
+        friendRequestPollingTask?.cancel()
+        friendRequestPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshFriendRequests()
+                try? await Task.sleep(for: .seconds(4))
+            }
+        }
+    }
 }
 
 final class APIClient {
@@ -70,5 +101,8 @@ final class APIClient {
     func usernameAvailable(_ username: String) async throws -> Bool { let data = try await request("/api/auth/username-available/?username=\(username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? username)"); return (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["available"] as? Bool ?? false }
     func friends(query: String = "") async throws -> [FriendProfile] { let suffix = query.isEmpty ? "" : "?username=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)"; let data = try await request("/api/friends/\(suffix)"); return try decoder.decode([FriendProfile].self, from: data) }
     func addFriend(username: String) async throws { _ = try await request("/api/friends/", method: "POST", body: ["username": username]) }
+    func removeFriend(username: String) async throws { _ = try await request("/api/friends/", method: "DELETE", body: ["username": username]) }
+    func friendRequests() async throws -> FriendRequestsResponse { let data = try await request("/api/friends/requests/"); return try decoder.decode(FriendRequestsResponse.self, from: data) }
+    func respondToFriendRequest(id: Int, accept: Bool) async throws { _ = try await request("/api/friends/requests/", method: "POST", body: ["request_id": id, "action": accept ? "accept" : "decline"]) }
     func updateProfile(nickname: String? = nil, username: String? = nil, avatar: String? = nil) async throws -> Profile { var body: [String: Any] = [:]; if let nickname { body["nickname"] = nickname }; if let username { body["username"] = username }; if let avatar { body["avatar_data_url"] = avatar }; let data = try await request("/api/profile/", method: "PATCH", body: body); return try decoder.decode(Profile.self, from: data) }
 }
