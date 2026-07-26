@@ -242,7 +242,9 @@ def friends(request):
         result = users.objects.filter(pk__in=friend_ids).select_related("watch_profile")
         return Response([{**public_profile(user), "is_friend": True} for user in result])
 
-    username = request.data.get("username", "").strip()
+    # DELETE bodies are not consistently forwarded by reverse proxies and
+    # temporary tunnels. Accept the username in either place.
+    username = (request.data.get("username") or request.query_params.get("username") or "").strip()
     friend = users.objects.filter(username__iexact=username).first()
     if not friend:
         return Response({"detail": "Пользователь не найден"}, status=status.HTTP_404_NOT_FOUND)

@@ -120,7 +120,12 @@ final class APIClient {
     func usernameAvailable(_ username: String) async throws -> Bool { let data = try await request("/api/auth/username-available/?username=\(username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? username)"); return (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["available"] as? Bool ?? false }
     func friends(query: String = "") async throws -> [FriendProfile] { let suffix = query.isEmpty ? "" : "?username=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)"; let data = try await request("/api/friends/\(suffix)"); return try decoder.decode([FriendProfile].self, from: data) }
     func addFriend(username: String) async throws { _ = try await request("/api/friends/", method: "POST", body: ["username": username]) }
-    func removeFriend(username: String) async throws { _ = try await request("/api/friends/", method: "DELETE", body: ["username": username]) }
+    func removeFriend(username: String) async throws {
+        // Some HTTP tunnels/proxies discard a body on DELETE. Keep the identifier
+        // in the URL so friend removal is reliable on both direct and tunneled APIs.
+        let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? username
+        _ = try await request("/api/friends/?username=\(encoded)", method: "DELETE")
+    }
     func friendRequests() async throws -> FriendRequestsResponse { let data = try await request("/api/friends/requests/"); return try decoder.decode(FriendRequestsResponse.self, from: data) }
     func viewingStats() async throws -> ViewingStats { let data = try await request("/api/activity/"); return try decoder.decode(ViewingStats.self, from: data) }
     func reportActivity(appSeconds: Int = 0, watchedSeconds: Int = 0, durationSeconds: Int = 0, genres: [String] = []) async throws -> ViewingStats {

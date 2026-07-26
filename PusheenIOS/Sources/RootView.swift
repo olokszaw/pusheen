@@ -1084,8 +1084,14 @@ struct FriendsGlassView: View {
                                     await search()
                                 },
                                 remove: {
-                                    try? await session.api.removeFriend(username: person.username)
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { friends.removeAll { $0.id == person.id } }
+                                    do {
+                                        try await session.api.removeFriend(username: person.username)
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
+                                            friends.removeAll { $0.id == person.id }
+                                        }
+                                    } catch {
+                                        // Keep the person visible if the server rejected the request.
+                                    }
                                 }
                                 )
                             }
@@ -1145,7 +1151,10 @@ private struct FriendSwipeRow: View {
         ZStack(alignment: .trailing) {
             if person.isFriend && (revealed || dragOffset < -10) {
                 Button {
-                    Task { await remove() }
+                    Task {
+                        await remove()
+                        withAnimation(.spring(response: 0.26, dampingFraction: 0.9)) { revealed = false }
+                    }
                 } label: {
                     Image(systemName: "trash.fill")
                         .font(.title3.weight(.bold))
@@ -1158,6 +1167,7 @@ private struct FriendSwipeRow: View {
                 .buttonStyle(.plain)
                 .padding(.trailing, 7)
                 .transition(.scale.combined(with: .opacity))
+                .zIndex(2)
             }
             HStack(spacing: 11) {
                 AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
@@ -1180,6 +1190,8 @@ private struct FriendSwipeRow: View {
             .liquidCard(RoundedRectangle(cornerRadius: 20))
             .offset(x: offset)
             .contentShape(RoundedRectangle(cornerRadius: 20))
+            // Once delete is visible, do not let the translated card sit over it.
+            .allowsHitTesting(!revealed)
             .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .local)
                 .onChanged { value in
                     guard person.isFriend else { return }
