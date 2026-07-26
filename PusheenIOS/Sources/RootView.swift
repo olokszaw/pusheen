@@ -1002,46 +1002,34 @@ struct FriendsGlassView: View {
                 }
                 ScrollView {
                     LazyVStack(spacing: 9) {
-                        if !session.friendRequests.incoming.isEmpty && requestFilter != .outgoing {
+                        if !session.friendRequests.incoming.isEmpty && requestFilter == .incoming {
                             FriendRequestSection(title: "Входящие", requests: session.friendRequests.incoming, incoming: true) { request, accept in
                                 await session.respond(to: request, accept: accept)
                                 await loadFriends()
                             }
                         }
-                        if !session.friendRequests.outgoing.isEmpty && requestFilter != .incoming {
+                        if !session.friendRequests.outgoing.isEmpty && requestFilter == .outgoing {
                             FriendRequestSection(title: "Отправленные", requests: session.friendRequests.outgoing, incoming: false) { _, _ in }
                         }
-                        ForEach(expanded && !query.isEmpty ? results : friends) { person in
-                            HStack(spacing: 11) {
-                                AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
-                                VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }
-                                Spacer()
-                                if !person.isFriend && expanded {
-                                    let pending = session.friendRequests.outgoing.contains { $0.userId == person.userId }
-                                    Button(pending ? "Отправлено" : "Добавить") {
-                                        guard !pending else { return }
-                                        Task { try? await session.api.addFriend(username: person.username); await session.refreshFriendRequests(); await search() }
-                                    }.buttonStyle(.bordered).disabled(pending)
+                        if requestFilter == nil {
+                            ForEach(expanded && !query.isEmpty ? results : friends) { person in
+                                FriendSwipeRow(
+                                person: person,
+                                showAdd: expanded && !person.isFriend,
+                                pending: session.friendRequests.outgoing.contains { $0.userId == person.userId },
+                                add: {
+                                    try? await session.api.addFriend(username: person.username)
+                                    await session.refreshFriendRequests()
+                                    await search()
+                                },
+                                remove: {
+                                    try? await session.api.removeFriend(username: person.username)
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { friends.removeAll { $0.id == person.id } }
                                 }
-                            }
-                            .padding(11)
-                            .liquidCard(RoundedRectangle(cornerRadius: 20))
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if person.isFriend {
-                                    Button(role: .destructive) {
-                                        Task {
-                                            try? await session.api.removeFriend(username: person.username)
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { friends.removeAll { $0.id == person.id } }
-                                        }
-                                    } label: {
-                                        Image(systemName: "trash.fill")
-                                            .font(.title3.weight(.semibold))
-                                    }
-                                    .tint(.red.opacity(0.88))
-                                }
+                                )
                             }
                         }
-                        if friends.isEmpty && !expanded { ContentUnavailableView("Друзей пока нет", systemImage: "person.2") }
+                        if friends.isEmpty && !expanded && requestFilter == nil { ContentUnavailableView("Друзей пока нет", systemImage: "person.2") }
                     }
                 }
             }.padding(20)
@@ -1076,6 +1064,74 @@ private struct RequestHeaderButton: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct FriendSwipeRow: View {
+    let person: FriendProfile
+    let showAdd: Bool
+    let pending: Bool
+    let add: () async -> Void
+    let remove: () async -> Void
+    @State private var revealed = false
+    @State private var dragOffset: CGFloat = 0
+
+    private var offset: CGFloat { dragOffset == 0 ? (revealed ? -78 : 0) : dragOffset }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if person.isFriend {
+                Button {
+                    Task { await remove() }
+                } label: {
+                    Image(systemName: "trash.fill")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 58, height: 58)
+                        .background(.red.opacity(0.80), in: Circle())
+                        .overlay(Circle().stroke(.white.opacity(0.34), lineWidth: 1))
+                        .shadow(color: .red.opacity(0.28), radius: 10, y: 4)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 7)
+                .transition(.scale.combined(with: .opacity))
+            }
+            HStack(spacing: 11) {
+                AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(person.nickname).bold().lineLimit(1)
+                    Text("@\(person.username)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if showAdd {
+                    Button(pending ? "Отправлено" : "Добавить") {
+                        guard !pending else { return }
+                        Task { await add() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(pending)
+                }
+            }
+            .padding(11)
+            .background(.clear)
+            .liquidCard(RoundedRectangle(cornerRadius: 20))
+            .offset(x: offset)
+            .gesture(DragGesture(minimumDistance: 8)
+                .onChanged { value in
+                    guard person.isFriend else { return }
+                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    dragOffset = min(0, max(-84, value.translation.width + (revealed ? -78 : 0)))
+                }
+                .onEnded { value in
+                    guard person.isFriend else { return }
+                    guard abs(value.translation.width) > abs(value.translation.height) else { dragOffset = 0; return }
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        revealed = dragOffset < -34
+                        dragOffset = 0
+                    }
+                })
+        }
+        .animation(.spring(response: 0.28, dampingFraction: 0.84), value: revealed)
     }
 }
 
