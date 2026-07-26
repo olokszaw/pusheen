@@ -124,7 +124,7 @@ struct AuthView: View {
         ZStack { AcrylicBackground()
             VStack(spacing: 18) {
                 Image(systemName: "play.fill").font(.system(size: 34, weight: .bold)).frame(width: 74, height: 74).foregroundStyle(.white).liquidCard(RoundedRectangle(cornerRadius: 24))
-                Text(isRegister ? "Создай профиль" : "Смотри. Чувствуй.\nБудь рядом.").font(.system(size: 31, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
+                Text(isRegister ? "Создать аккаунт" : "Войти").font(.system(size: 31, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
                 VStack(spacing: 10) {
                     if isRegister { TextField("Nickname", text: $nickname).textContentType(.nickname) }
                     TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: username) { _, value in Task { await checkUsername(value) } }
@@ -646,8 +646,8 @@ struct LiquidAuthView: View {
                 VStack(spacing: 18) {
                     Spacer(minLength: 48)
                     Image(systemName: "play.fill").font(.system(size: 30, weight: .bold)).frame(width: 76, height: 76).liquidCard(RoundedRectangle(cornerRadius: 25))
-                    Text(register ? "Создай профиль" : "Смотри. Чувствуй.\nБудь рядом.").font(.system(size: 34, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
-                    Text(register ? "Твой профиль для совместных просмотров" : "Фильмы и видео вместе с друзьями").font(.subheadline).foregroundStyle(.secondary)
+                    Text(register ? "Создать аккаунт" : "Войти").font(.system(size: 34, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
+                    Text(register ? "Укажи данные для нового аккаунта" : "Введи username и пароль").font(.subheadline).foregroundStyle(.secondary)
                     VStack(spacing: 11) {
                         if register { GlassField(icon: "person.text.rectangle", title: "Nickname", text: $nickname) }
                         GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { await validate(value) } }
@@ -1033,7 +1033,9 @@ struct FriendsGlassView: View {
                     }
                 }
             }.padding(20)
-        }.task { await loadFriends(); await session.refreshFriendRequests() }
+        }
+        .task { await loadFriends(); await session.refreshFriendRequests() }
+        .onChange(of: session.friendRequests) { _, _ in Task { await loadFriends() } }
     }
     private func loadFriends() async { friends = (try? await session.api.friends()) ?? [] }
     private func search() async { results = (try? await session.api.friends(query: query)) ?? [] }

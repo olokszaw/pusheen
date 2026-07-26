@@ -62,7 +62,7 @@ final class SessionStore: ObservableObject {
         friendRequestPollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshFriendRequests()
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(2))
             }
         }
     }
