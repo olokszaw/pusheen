@@ -968,19 +968,32 @@ struct ProfileInlineEditor: View {
     private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username); close() } catch { self.error = error.localizedDescription } }
 }
 
+private enum FriendRequestFilter { case incoming, outgoing }
+
 struct FriendsGlassView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var expanded = false
     @State private var query = ""
     @State private var friends: [FriendProfile] = []
     @State private var results: [FriendProfile] = []
+    @State private var requestFilter: FriendRequestFilter?
     @FocusState private var searchFocused: Bool
     var body: some View {
         ZStack { AcrylicBackground()
             VStack(spacing: 15) {
                 HStack {
-                    Text("Друзья").font(.largeTitle.bold())
+                    Text("Друзья").font(.title3.bold())
                     Spacer()
+                    if !session.friendRequests.incoming.isEmpty {
+                        RequestHeaderButton(symbol: "tray.and.arrow.down.fill", count: session.friendRequests.incoming.count, active: requestFilter == .incoming) {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) { requestFilter = requestFilter == .incoming ? nil : .incoming }
+                        }
+                    }
+                    if !session.friendRequests.outgoing.isEmpty {
+                        RequestHeaderButton(symbol: "paperplane.fill", count: nil, active: requestFilter == .outgoing) {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) { requestFilter = requestFilter == .outgoing ? nil : .outgoing }
+                        }
+                    }
                     Button { withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { expanded.toggle() }; if expanded { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { searchFocused = true } } else { query = ""; searchFocused = false } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 42, height: 42).liquidCard(Circle()) }.buttonStyle(.plain)
                 }
                 if expanded {
@@ -989,13 +1002,13 @@ struct FriendsGlassView: View {
                 }
                 ScrollView {
                     LazyVStack(spacing: 9) {
-                        if !session.friendRequests.incoming.isEmpty {
+                        if !session.friendRequests.incoming.isEmpty && requestFilter != .outgoing {
                             FriendRequestSection(title: "Входящие", requests: session.friendRequests.incoming, incoming: true) { request, accept in
                                 await session.respond(to: request, accept: accept)
                                 await loadFriends()
                             }
                         }
-                        if !session.friendRequests.outgoing.isEmpty {
+                        if !session.friendRequests.outgoing.isEmpty && requestFilter != .incoming {
                             FriendRequestSection(title: "Отправленные", requests: session.friendRequests.outgoing, incoming: false) { _, _ in }
                         }
                         ForEach(expanded && !query.isEmpty ? results : friends) { person in
@@ -1036,6 +1049,34 @@ struct FriendsGlassView: View {
     }
     private func loadFriends() async { friends = (try? await session.api.friends()) ?? [] }
     private func search() async { results = (try? await session.api.friends(query: query)) ?? [] }
+}
+
+private struct RequestHeaderButton: View {
+    let symbol: String
+    let count: Int?
+    let active: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: symbol)
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 38, height: 38)
+                    .background(active ? Color.teal.opacity(0.20) : .clear, in: Circle())
+                    .liquidCard(Circle())
+                if let count, count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 17, minHeight: 17)
+                        .background(.red.opacity(0.92), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.30), lineWidth: 0.7))
+                        .offset(x: 4, y: -4)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 private struct FriendRequestSection: View {
