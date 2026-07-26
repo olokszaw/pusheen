@@ -272,7 +272,22 @@ struct RoomView: View {
                 }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
             }.padding(.horizontal, 9).padding(.vertical, 12).frame(maxHeight: .infinity, alignment: .top)
-        }.simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { if $0.translation.width < -70 { showMembers = true } }).navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").foregroundStyle(.primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты") } }.task { await model.start() }.onDisappear { model.stop() }
+        }
+        .simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { value in
+            let horizontal = abs(value.translation.width)
+            let vertical = abs(value.translation.height)
+            guard value.translation.width < -70, horizontal > vertical * 1.35 else { return }
+            showMembers = true
+        })
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                chatFocused = false
+                showMembers = false
+            }
+        }
+        .navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").foregroundStyle(.primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты") } }.task { await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
@@ -478,6 +493,7 @@ struct NativeChatPane: View {
     // FocusState without a SwiftUI `.focused` attachment makes SwiftUI reset
     // it to false, which immediately dismisses the keyboard after any tap.
     @State private var inputFocused = false
+    @State private var inputHeight: CGFloat = 38
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var sticksToBottom = true
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
@@ -502,9 +518,11 @@ struct NativeChatPane: View {
                 PersistentChatTextField(
                     text: $draft,
                     isFocused: Binding(get: { inputFocused }, set: { inputFocused = $0 }),
+                    height: $inputHeight,
                     onSubmit: submit
                 )
-                    .frame(minHeight: 38, maxHeight: 116)
+                    .frame(height: inputHeight)
+                    .animation(.easeOut(duration: 0.14), value: inputHeight)
                     .onChange(of: inputFocused) { _, value in focused = value }
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 31, weight: .medium))
@@ -547,6 +565,7 @@ struct NativeChatPane: View {
 private struct PersistentChatTextField: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
+    @Binding var height: CGFloat
     let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -576,14 +595,17 @@ private struct PersistentChatTextField: UIViewRepresentable {
         context.coordinator.parent = self
         if field.text != text { field.text = text }
         field.updatePlaceholder()
-        field.updateScrolling()
+        DispatchQueue.main.async {
+            let measured = field.refreshLayout()
+            if abs(context.coordinator.parent.height - measured) > 0.5 {
+                context.coordinator.parent.height = measured
+            }
+        }
         if isFocused && !field.isFirstResponder { field.becomeFirstResponder() }
         if !isFocused && field.isFirstResponder { field.resignFirstResponder() }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ChatTextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? max(1, uiView.bounds.width)
-        let measured = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        return CGSize(width: width, height: min(116, max(38, measured)))
+        CGSize(width: proposal.width ?? max(1, uiView.bounds.width), height: height)
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: PersistentChatTextField
@@ -591,8 +613,10 @@ private struct PersistentChatTextField: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
             (textView as? ChatTextView)?.updatePlaceholder()
-            (textView as? ChatTextView)?.updateScrolling()
-            textView.invalidateIntrinsicContentSize()
+            if let field = textView as? ChatTextView {
+                let measured = field.refreshLayout()
+                if abs(parent.height - measured) > 0.5 { parent.height = measured }
+            }
         }
         func textViewDidBeginEditing(_ textView: UITextView) { parent.isFocused = true }
         func textViewDidEndEditing(_ textView: UITextView) { parent.isFocused = false }
@@ -620,16 +644,20 @@ private struct PersistentChatTextField: UIViewRepresentable {
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
         func updatePlaceholder() { placeholderLabel.isHidden = !text.isEmpty }
-        func updateScrolling() {
-            guard bounds.width > 1 else { return }
+        @discardableResult
+        func refreshLayout() -> CGFloat {
+            guard bounds.width > 1 else { return 38 }
             let availableWidth = bounds.width
             let requiredHeight = sizeThatFits(CGSize(width: availableWidth, height: .greatestFiniteMagnitude)).height
-            let shouldScroll = requiredHeight > 116
+            let fittedHeight = min(112, max(38, ceil(requiredHeight)))
+            let shouldScroll = requiredHeight > 112
             if isScrollEnabled != shouldScroll { isScrollEnabled = shouldScroll }
             if shouldScroll {
                 let bottom = max(-adjustedContentInset.top, contentSize.height - bounds.height + adjustedContentInset.bottom)
                 setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
             }
+            invalidateIntrinsicContentSize()
+            return fittedHeight
         }
     }
 }
