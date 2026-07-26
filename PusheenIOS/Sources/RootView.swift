@@ -371,6 +371,7 @@ struct NativeChatPane: View {
                     isFocused: Binding(get: { inputFocused }, set: { inputFocused = $0 }),
                     onSubmit: submit
                 )
+                    .frame(height: 38)
                     .onChange(of: inputFocused) { _, value in focused = value }
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 31, weight: .medium))
@@ -379,7 +380,7 @@ struct NativeChatPane: View {
                     .contentShape(Circle())
                     .onTapGesture { submit() }
                     .accessibilityAddTraits(.isButton)
-            }.padding(.horizontal, 12).padding(.vertical, 8).liquidCard(Capsule())
+            }.frame(height: 54).padding(.horizontal, 12).liquidCard(Capsule())
         }.padding(12).liquidCard()
     }
     private func submit() {
@@ -418,12 +419,18 @@ private struct PersistentChatTextField: UIViewRepresentable {
         field.autocorrectionType = .yes
         field.backgroundColor = .clear
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.setContentHuggingPriority(.required, for: .vertical)
+        field.setContentCompressionResistancePriority(.required, for: .vertical)
         return field
     }
     func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.parent = self
         if field.text != text { field.text = text }
         if isFocused && !field.isFirstResponder { field.becomeFirstResponder() }
         if !isFocused && field.isFirstResponder { field.resignFirstResponder() }
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextField, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: 38)
     }
     final class Coordinator: NSObject, UITextFieldDelegate {
         var parent: PersistentChatTextField
@@ -432,7 +439,12 @@ private struct PersistentChatTextField: UIViewRepresentable {
         func textFieldDidBeginEditing(_ textField: UITextField) { parent.isFocused = true }
         func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            parent.isFocused = true
             parent.onSubmit()
+            DispatchQueue.main.async {
+                if !textField.isFirstResponder { textField.becomeFirstResponder() }
+                self.parent.isFocused = true
+            }
             return false
         }
     }
@@ -667,16 +679,43 @@ final class EmojiImageView: UIImageView {
 struct FluentInlineText: View {
     let text: String
     init(_ text: String) { self.text = text }
-    private var characters: [String] { text.map(String.init) }
     private func isEmoji(_ value: String) -> Bool { value.unicodeScalars.contains { scalar in (0x1F000...0x1FAFF).contains(Int(scalar.value)) || (0x2600...0x27FF).contains(Int(scalar.value)) } }
-    var body: some View {
-        EmojiFlowLayout(spacing: 1) {
-            ForEach(Array(characters.enumerated()), id: \.offset) { _, character in
-                if isEmoji(character) { FluentEmojiGlyph(character, size: 20) }
-                else { Text(character).font(.subheadline) }
+    private struct Token: Identifiable {
+        let id: Int
+        let value: String
+        let emoji: Bool
+    }
+    private var tokens: [Token] {
+        var result: [Token] = []
+        var word = ""
+        func flushWord() {
+            guard !word.isEmpty else { return }
+            result.append(Token(id: result.count, value: word, emoji: false))
+            word = ""
+        }
+        for character in text {
+            let value = String(character)
+            if isEmoji(value) {
+                flushWord()
+                result.append(Token(id: result.count, value: value, emoji: true))
+            } else if character.isWhitespace {
+                flushWord()
+                result.append(Token(id: result.count, value: value, emoji: false))
+            } else {
+                word.append(character)
             }
         }
-        .frame(maxWidth: 238, alignment: .leading)
+        flushWord()
+        return result
+    }
+    var body: some View {
+        EmojiFlowLayout(spacing: 1) {
+            ForEach(tokens) { token in
+                if token.emoji { FluentEmojiGlyph(token.value, size: 20) }
+                else { Text(token.value).font(.subheadline) }
+            }
+        }
+        .frame(maxWidth: 250, alignment: .leading)
     }
 }
 
@@ -688,7 +727,10 @@ struct EmojiFlowLayout: Layout {
         let maxWidth = proposal.width ?? .greatestFiniteMagnitude
         var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, usedWidth: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let intrinsic = subview.sizeThatFits(.unspecified)
+            let size = intrinsic.width > maxWidth
+                ? subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
+                : intrinsic
             if x > 0 && x + size.width > maxWidth { y += lineHeight + spacing; x = 0; lineHeight = 0 }
             x += size.width
             lineHeight = max(lineHeight, size.height)
@@ -700,9 +742,12 @@ struct EmojiFlowLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var x = bounds.minX, y = bounds.minY, lineHeight: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let intrinsic = subview.sizeThatFits(.unspecified)
+            let size = intrinsic.width > bounds.width
+                ? subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+                : intrinsic
             if x > bounds.minX && x + size.width > bounds.maxX { y += lineHeight + spacing; x = bounds.minX; lineHeight = 0 }
-            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
             x += size.width + spacing
             lineHeight = max(lineHeight, size.height)
         }
