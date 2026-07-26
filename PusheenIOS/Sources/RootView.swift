@@ -344,7 +344,10 @@ struct NativeChatPane: View {
     @Binding var focused: Bool
     let send: (String, String) -> Void
     let react: (Int, String) -> Void
-    @FocusState private var inputFocused: Bool
+    // UIKit owns first-responder state for PersistentChatTextField. Using
+    // FocusState without a SwiftUI `.focused` attachment makes SwiftUI reset
+    // it to false, which immediately dismisses the keyboard after any tap.
+    @State private var inputFocused = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var sticksToBottom = true
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
@@ -398,55 +401,79 @@ struct NativeChatPane: View {
     }
 }
 
-/// `UITextField` can deliberately decline the default Return action, keeping
-/// first responder status while the common `submit()` method clears the draft.
+/// A one-line `UITextView` intercepts Return before UIKit can end editing.
+/// Both the software-keyboard Send key and the in-app button therefore call
+/// the same submit closure without ever dropping first-responder status.
 private struct PersistentChatTextField: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
     let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
-    func makeUIView(context: Context) -> UITextField {
-        let field = UITextField()
-        field.delegate = context.coordinator
-        field.placeholder = "Сообщение…"
-        field.textColor = .label
-        field.tintColor = .systemTeal
-        field.font = .preferredFont(forTextStyle: .body)
-        field.adjustsFontForContentSizeCategory = true
-        field.returnKeyType = .send
-        field.enablesReturnKeyAutomatically = true
-        field.autocorrectionType = .yes
-        field.backgroundColor = .clear
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        field.setContentHuggingPriority(.required, for: .vertical)
-        field.setContentCompressionResistancePriority(.required, for: .vertical)
-        return field
+    func makeUIView(context: Context) -> ChatTextView {
+        let view = ChatTextView()
+        view.delegate = context.coordinator
+        view.textColor = .label
+        view.tintColor = .systemTeal
+        view.font = .preferredFont(forTextStyle: .body)
+        view.adjustsFontForContentSizeCategory = true
+        view.returnKeyType = .send
+        view.enablesReturnKeyAutomatically = true
+        view.autocorrectionType = .yes
+        view.backgroundColor = .clear
+        view.isScrollEnabled = false
+        view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        view.textContainer.lineFragmentPadding = 0
+        view.textContainer.maximumNumberOfLines = 1
+        view.textContainer.lineBreakMode = .byTruncatingTail
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.required, for: .vertical)
+        view.setContentCompressionResistancePriority(.required, for: .vertical)
+        return view
     }
-    func updateUIView(_ field: UITextField, context: Context) {
+    func updateUIView(_ field: ChatTextView, context: Context) {
         context.coordinator.parent = self
         if field.text != text { field.text = text }
+        field.updatePlaceholder()
         if isFocused && !field.isFirstResponder { field.becomeFirstResponder() }
         if !isFocused && field.isFirstResponder { field.resignFirstResponder() }
     }
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextField, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ChatTextView, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: 38)
     }
-    final class Coordinator: NSObject, UITextFieldDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate {
         var parent: PersistentChatTextField
         init(parent: PersistentChatTextField) { self.parent = parent }
-        func textFieldDidChangeSelection(_ textField: UITextField) { parent.text = textField.text ?? "" }
-        func textFieldDidBeginEditing(_ textField: UITextField) { parent.isFocused = true }
-        func textFieldDidEndEditing(_ textField: UITextField) { parent.isFocused = false }
-        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text
+            (textView as? ChatTextView)?.updatePlaceholder()
+        }
+        func textViewDidBeginEditing(_ textView: UITextView) { parent.isFocused = true }
+        func textViewDidEndEditing(_ textView: UITextView) { parent.isFocused = false }
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
+            guard replacement == "\n" else { return true }
             parent.isFocused = true
             parent.onSubmit()
-            DispatchQueue.main.async {
-                if !textField.isFirstResponder { textField.becomeFirstResponder() }
-                self.parent.isFocused = true
-            }
             return false
         }
+    }
+    final class ChatTextView: UITextView {
+        private let placeholderLabel = UILabel()
+        override init(frame: CGRect, textContainer: NSTextContainer?) {
+            super.init(frame: frame, textContainer: textContainer)
+            placeholderLabel.text = "Сообщение…"
+            placeholderLabel.textColor = .placeholderText
+            placeholderLabel.font = .preferredFont(forTextStyle: .body)
+            placeholderLabel.adjustsFontForContentSizeCategory = true
+            placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(placeholderLabel)
+            NSLayoutConstraint.activate([
+                placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+                placeholderLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+            ])
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        func updatePlaceholder() { placeholderLabel.isHidden = !text.isEmpty }
     }
 }
 
