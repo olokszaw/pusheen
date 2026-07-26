@@ -1,20 +1,33 @@
-"""Small, transparent genre classifier for public video metadata.
+"""Genre detection from public page metadata only.
 
-It uses only titles/descriptions/tags returned by the provider; it never tries to
-infer protected content or inspect video frames.
+The resolver receives title, description, categories and tags from the video
+provider.  This map deliberately stays transparent: it never guesses from the
+actual video, bypasses a service, or accesses protected content.
 """
 
 GENRE_WORDS = {
-    "Хоррор": ("horror", "ужас", "хоррор", "страш", "слэшер"),
-    "Комедия": ("comedy", "комед", "смешн", "юмор"),
+    "Хоррор": ("horror", "ужас", "хоррор", "страш", "слэшер", "zombie", "зомби"),
+    "Комедия": ("comedy", "комед", "смешн", "юмор", "парод"),
     "Драма": ("drama", "драма", "драмат"),
     "Романтика": ("romance", "romantic", "мелодрам", "романтик", "любов"),
     "Триллер": ("thriller", "триллер", "напряж"),
     "Боевик": ("action", "боевик", "экшен", "action movie"),
-    "Фантастика": ("sci-fi", "science fiction", "фантаст", "космос"),
-    "Детектив": ("detective", "crime", "детектив", "криминал"),
-    "Анимация": ("animation", "anime", "мульт", "анимац"),
-    "Документальный": ("documentary", "документал"),
+    "Приключения": ("adventure", "приключ", "quest"),
+    "Фантастика": ("sci-fi", "science fiction", "фантаст", "космос", "space opera"),
+    "Фэнтези": ("fantasy", "фэнтези", "магия", "волшеб"),
+    "Детектив": ("detective", "детектив", "mystery", "тайна"),
+    "Криминал": ("crime", "криминал", "gangster", "мафия", "ограблен"),
+    "Анимация": ("animation", "anime", "мульт", "анимац", "cartoon"),
+    "Семейный": ("family", "семейн", "детск"),
+    "Документальный": ("documentary", "документал", "документ"),
+    "Военный": ("war", "военн", "world war"),
+    "Исторический": ("history", "historical", "историч", "биограф"),
+    "Музыка": ("music", "musical", "музык", "концерт"),
+    "Спорт": ("sport", "sports", "спорт", "футбол", "хоккей"),
+    "Вестерн": ("western", "вестерн"),
+    "Реалити": ("reality", "реалити", "шоу"),
+    "Новости": ("news", "новост"),
+    "Короткометражка": ("short film", "короткометраж", "short movie"),
 }
 
 

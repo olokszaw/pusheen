@@ -779,61 +779,114 @@ struct ProfileGlassView: View {
 
 private struct ViewingActivityCard: View {
     let stats: ViewingStats?
-    private func time(_ seconds: Int) -> String {
-        let hours = seconds / 3600
-        let minutes = (seconds % 3600) / 60
-        return hours > 0 ? "\(hours) ч \(minutes) мин" : "\(minutes) мин"
-    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack { Text("Активность").font(.headline); Spacer(); Image(systemName: "chart.bar.xaxis").foregroundStyle(.teal) }
-            HStack(spacing: 8) {
-                ActivityMetric(icon: "play.rectangle.fill", value: time(stats?.watchedSeconds ?? 0), title: "просмотрено")
-                ActivityMetric(icon: "clock.fill", value: time(stats?.appSeconds ?? 0), title: "в приложении")
-                ActivityMetric(icon: "film.fill", value: time(stats?.longestMovieSeconds ?? 0), title: "длиннее всего")
+        let genres = stats?.genres ?? []
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Твой просмотр").font(.headline)
+                Spacer()
+                Image(systemName: "sparkles").foregroundStyle(.teal)
             }
-            if let stats, !stats.dailySeconds.isEmpty {
-                HStack(spacing: 5) {
-                    ForEach(stats.dailySeconds.sorted(by: { $0.key < $1.key }).suffix(10), id: \.key) { entry in
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.teal.opacity(min(0.86, 0.16 + Double(entry.value) / 3600 * 0.18)))
-                            .frame(maxWidth: .infinity, minHeight: 13, maxHeight: 28)
-                    }
-                }
-                .frame(height: 28)
-            }
-            if let stats, !stats.genres.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("Предпочтения").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    ForEach(stats.genres.prefix(3)) { genre in
-                        HStack(spacing: 8) {
-                            Text(genre.name).font(.caption).frame(width: 88, alignment: .leading).lineLimit(1)
-                            GeometryReader { proxy in
-                                Capsule().fill(.white.opacity(0.10)).overlay(alignment: .leading) {
-                                    Capsule().fill(LinearGradient(colors: [.teal, .indigo.opacity(0.85)], startPoint: .leading, endPoint: .trailing)).frame(width: proxy.size.width * CGFloat(genre.percent) / 100)
-                                }
-                            }.frame(height: 7)
-                            Text("\(genre.percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 30, alignment: .trailing)
-                        }
-                    }
+            if genres.isEmpty {
+                HStack(spacing: 12) {
+                    ActivityOrb(daily: stats?.dailySeconds ?? [:])
+                    Text("После первого фильма здесь появятся твои жанры и ритм просмотра.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             } else {
-                Text("Статистика появится после первого просмотра.").font(.caption).foregroundStyle(.secondary)
+                HStack(alignment: .center, spacing: 18) {
+                    VStack(spacing: 7) {
+                        ActivityOrb(daily: stats?.dailySeconds ?? [:])
+                        Text("Активность").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    GenrePreferenceOrb(genres: genres)
+                        .frame(width: 164, height: 164)
+                }
+                GenreLegend(genres: genres)
             }
         }
-        .padding(14)
-        .liquidCard(RoundedRectangle(cornerRadius: 24))
+        .padding(15)
+        .liquidCard(RoundedRectangle(cornerRadius: 26))
     }
 }
 
-private struct ActivityMetric: View {
-    let icon: String; let value: String; let title: String
+private struct ActivityOrb: View {
+    let daily: [String: Int]
+    private var values: [Int] { Array(daily.sorted(by: { $0.key < $1.key }).suffix(14).map(\.value)) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Image(systemName: icon).font(.caption).foregroundStyle(.teal)
-            Text(value).font(.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
-            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(9).liquidCard(RoundedRectangle(cornerRadius: 16))
+        let maximum = max(1, values.max() ?? 1)
+        ZStack {
+            Circle().fill(.white.opacity(0.055))
+            Circle().stroke(.white.opacity(0.14), lineWidth: 1)
+            ForEach(Array(0..<14), id: \.self) { index in
+                let value = index < values.count ? values[index] : 0
+                let strength = Double(value) / Double(maximum)
+                Circle()
+                    .fill(Color.teal.opacity(value == 0 ? 0.10 : 0.30 + strength * 0.65))
+                    .frame(width: 8, height: 8)
+                    .offset(y: -35)
+                    .rotationEffect(.degrees(Double(index) * 360 / 14))
+            }
+            Image(systemName: "play.fill").font(.caption.weight(.bold)).foregroundStyle(.teal)
+        }
+        .frame(width: 90, height: 90)
+    }
+}
+
+private struct GenrePreferenceOrb: View {
+    let genres: [ViewingGenre]
+    private let colors: [Color] = [.teal, .cyan, .blue, .indigo, .mint, .orange, .green, .purple, .yellow, .pink, .gray]
+    var body: some View {
+        let total = max(1, genres.reduce(0) { $0 + $1.seconds })
+        ZStack {
+            ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
+                let before = genres.prefix(index).reduce(0) { $0 + $1.seconds }
+                DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total))
+                    .fill(colors[index % colors.count].opacity(0.82))
+            }
+            Circle().fill(.ultraThinMaterial).frame(width: 86, height: 86)
+            VStack(spacing: 2) {
+                Text(genres[0].name).font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
+                Text("\(genres[0].percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            }.frame(width: 74)
+        }
+        .overlay(Circle().stroke(.white.opacity(0.24), lineWidth: 1))
+        .shadow(color: .teal.opacity(0.18), radius: 12)
+    }
+}
+
+private struct DonutSlice: Shape {
+    let start: Double
+    let end: Double
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2 - 3
+        var path = Path()
+        path.addArc(center: center, radius: radius, startAngle: .degrees(start * 360 - 90), endAngle: .degrees(end * 360 - 90), clockwise: false)
+        path.addArc(center: center, radius: radius - 28, startAngle: .degrees(end * 360 - 90), endAngle: .degrees(start * 360 - 90), clockwise: true)
+        path.closeSubpath()
+        return path
+    }
+}
+
+private struct GenreLegend: View {
+    let genres: [ViewingGenre]
+    private let colors: [Color] = [.teal, .cyan, .blue, .indigo, .mint, .orange, .green, .purple, .yellow, .pink, .gray]
+    var body: some View {
+        let smallText = genres.count > 6
+        EmojiFlowLayout(spacing: 6) {
+            ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
+                HStack(spacing: 4) {
+                    Circle().fill(colors[index % colors.count]).frame(width: 6, height: 6)
+                    Text("\(genre.name) \(genre.percent)%")
+                }
+                .font(.system(size: smallText ? 9 : 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, smallText ? 6 : 8)
+                .padding(.vertical, 4)
+                .background(.white.opacity(0.055), in: Capsule())
+            }
+        }
     }
 }
 
