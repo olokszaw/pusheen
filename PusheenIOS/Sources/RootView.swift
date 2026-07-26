@@ -1275,12 +1275,14 @@ private struct FriendSwipeRow: View {
     @State private var dragOffset: CGFloat = 0
     @State private var removing = false
 
-    private var offset: CGFloat { dragOffset == 0 ? (revealed ? -138 : 0) : dragOffset }
+    private let settledOffset: CGFloat = -122
+    private var offset: CGFloat { dragOffset == 0 ? (revealed ? settledOffset : 0) : dragOffset }
     private var deleteReveal: CGFloat {
-        let activeOffset = dragOffset == 0 ? (revealed ? -138 : 0) : dragOffset
-        return min(1, max(0, -activeOffset / 138))
+        min(1, max(0, (-offset) / (-settledOffset)))
     }
-    private var deleteWidth: CGFloat { 54 + (96 * deleteReveal) }
+    /// The action grows exactly with the revealed part of the row. There is no
+    /// fixed oversized pill that can cover the friend card.
+    private var deleteWidth: CGFloat { max(58, min(164, -offset)) }
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -1296,30 +1298,27 @@ private struct FriendSwipeRow: View {
                         }
                     }
                 } label: {
-                    ZStack(alignment: .bottom) {
+                    ZStack(alignment: .leading) {
                         Capsule()
-                            .fill(.red.opacity(0.82))
-                            .overlay(Capsule().stroke(.white.opacity(0.32), lineWidth: 1))
-                            .shadow(color: .red.opacity(0.24), radius: 10, y: 4)
-                        VStack(spacing: 2) {
+                            .fill(.red.opacity(0.94))
+                            .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 0.8))
+                            .shadow(color: .red.opacity(0.20), radius: 8, y: 3)
+                        Group {
                             if removing { ProgressView().tint(.white) }
-                            else { Image(systemName: "trash.fill").font(.title3.weight(.bold)) }
-                            if deleteReveal > 0.64 {
-                                Text("Удалить").font(.caption2.weight(.medium))
-                            }
+                            else { Image(systemName: "trash.fill").font(.title3.weight(.semibold)) }
                         }
                         .foregroundStyle(.white)
-                        .padding(.bottom, 7)
+                        .padding(.leading, min(27, max(18, deleteWidth * 0.18)))
                     }
-                    .frame(width: deleteWidth, height: 60)
-                    .contentShape(Rectangle())
+                    .frame(width: deleteWidth, height: 56)
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .contentShape(Rectangle())
-                .frame(width: deleteWidth, height: 68)
-                .padding(.trailing, 6)
-                .transition(.scale.combined(with: .opacity))
-                .zIndex(2)
+                .contentShape(Capsule())
+                .frame(width: deleteWidth, height: 64)
+                .padding(.trailing, 3)
+                .opacity(min(1, deleteReveal * 2.2))
+                .zIndex(0)
             }
             HStack(spacing: 11) {
                 AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
@@ -1342,23 +1341,26 @@ private struct FriendSwipeRow: View {
             .liquidCard(RoundedRectangle(cornerRadius: 20))
             .offset(x: offset)
             .contentShape(RoundedRectangle(cornerRadius: 20))
-            // Once delete is visible, do not let the translated card sit over it.
             .allowsHitTesting(!revealed)
+            .zIndex(1)
             .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .local)
                 .onChanged { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                    dragOffset = min(0, max(-150, value.translation.width + (revealed ? -138 : 0)))
+                    dragOffset = min(0, max(-164, value.translation.width + (revealed ? settledOffset : 0)))
                 }
                 .onEnded { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { dragOffset = 0; return }
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
-                        revealed = dragOffset < -46
+                    let projected = value.predictedEndTranslation.width + (revealed ? settledOffset : 0)
+                    withAnimation(.interactiveSpring(response: 0.27, dampingFraction: 0.88, blendDuration: 0.08)) {
+                        revealed = projected < -54
                         dragOffset = 0
                     }
                 })
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: 70)
         .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.86, blendDuration: 0.12), value: revealed)
     }
 }
