@@ -1003,16 +1003,30 @@ struct FriendsGlassView: View {
                                 AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
                                 VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }
                                 Spacer()
-                                if person.isFriend {
-                                    Menu { Button("Удалить из друзей", role: .destructive) { Task { try? await session.api.removeFriend(username: person.username); await loadFriends() } } } label: { Image(systemName: "ellipsis").frame(width: 34, height: 34).liquidCard(Circle()) }.buttonStyle(.plain)
-                                } else if expanded {
+                                if !person.isFriend && expanded {
                                     let pending = session.friendRequests.outgoing.contains { $0.userId == person.userId }
                                     Button(pending ? "Отправлено" : "Добавить") {
                                         guard !pending else { return }
                                         Task { try? await session.api.addFriend(username: person.username); await session.refreshFriendRequests(); await search() }
                                     }.buttonStyle(.bordered).disabled(pending)
                                 }
-                            }.padding(11).liquidCard(RoundedRectangle(cornerRadius: 20))
+                            }
+                            .padding(11)
+                            .liquidCard(RoundedRectangle(cornerRadius: 20))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if person.isFriend {
+                                    Button(role: .destructive) {
+                                        Task {
+                                            try? await session.api.removeFriend(username: person.username)
+                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { friends.removeAll { $0.id == person.id } }
+                                        }
+                                    } label: {
+                                        Image(systemName: "trash.fill")
+                                            .font(.title3.weight(.semibold))
+                                    }
+                                    .tint(.red.opacity(0.88))
+                                }
+                            }
                         }
                         if friends.isEmpty && !expanded { ContentUnavailableView("Друзей пока нет", systemImage: "person.2") }
                     }
