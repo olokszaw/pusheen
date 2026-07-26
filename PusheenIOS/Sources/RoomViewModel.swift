@@ -134,12 +134,28 @@ final class RoomViewModel: ObservableObject {
                 if count > 0 { messages[index].reactions.append(ChatReaction(emoji: emoji, count: count, reacted: reacted)) }
             }
         case "presence":
+            let userID = (event["user_id"] as? NSNumber)?.intValue ?? 0
             let nickname = event["nickname"] as? String ?? "Участник"
             let online = event["is_online"] as? Bool ?? true
+            let member = RoomMember(
+                userId: userID,
+                username: event["username"] as? String ?? "",
+                nickname: nickname,
+                avatarDataURL: event["avatar_data_url"] as? String ?? "",
+                isOwner: event["is_owner"] as? Bool ?? false,
+                isOnline: online
+            )
+            if let index = members.firstIndex(where: { $0.userId == userID }) {
+                members[index] = member
+            } else if userID != 0 {
+                members.append(member)
+            }
             if event["changed"] as? Bool == true {
                 let timestamp = Int(Date().timeIntervalSince1970 * 1000)
                 messages.append(ChatMessage(id: -timestamp, authorId: 0, nickname: "", text: online ? "\(nickname) присоединился к просмотру" : "\(nickname) вышел из комнаты", imageDataURL: "", avatarDataURL: "", reactions: [], isSystem: true))
             }
+            // The event updates the UI immediately; a lightweight fetch then
+            // reconciles the list in case the client missed a prior event.
             Task { self.members = (try? await self.api.members(roomID: self.room.id)) ?? self.members }
         default: break
         }

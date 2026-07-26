@@ -1,3 +1,5 @@
+import asyncio
+import time
 from datetime import datetime, timezone
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -14,6 +16,11 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             return
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
+        # A cellular/Wi-Fi drop does not always close TCP immediately. The
+        # heartbeat watchdog makes presence change within seconds instead of
+        # waiting for an OS-level socket timeout.
+        self.last_heartbeat = time.monotonic()
+        self.heartbeat_watchdog = asyncio.create_task(self.watch_heartbeat())
         await self.send_json({"type": "playback_state", **await self.current_state()})
         presence = await self.mark_connected()
         await self.channel_layer.group_send(
@@ -21,6 +28,8 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         )
 
     async def disconnect(self, _code):
+        if hasattr(self, "heartbeat_watchdog"):
+            self.heartbeat_watchdog.cancel()
         if hasattr(self, "room_id") and self.scope["user"].is_authenticated:
             presence = await self.mark_disconnected()
             if presence:
@@ -30,8 +39,11 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive_json(self, content, **_kwargs):
+        self.last_heartbeat = time.monotonic()
         event = content.get("type")
-        if event == "request_state":
+        if event == "heartbeat":
+            await self.send_json({"type": "heartbeat_ack"})
+        elif event == "request_state":
             await self.send_json({"type": "playback_state", **await self.current_state()})
         elif event == "playback_command":
             await self.apply_playback_command(content)
@@ -39,6 +51,16 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             await self.broadcast_chat(content.get("text", ""), content.get("image_data_url", ""))
         elif event == "message_reaction":
             await self.toggle_reaction(content.get("message_id"), content.get("emoji", ""))
+
+    async def watch_heartbeat(self):
+        try:
+            while True:
+                await asyncio.sleep(5)
+                if time.monotonic() - self.last_heartbeat > 26:
+                    await self.close(code=4001)
+                    return
+        except asyncio.CancelledError:
+            return
 
     async def apply_playback_command(self, content):
         # Client input is never trusted: only the creator can change global playback.
