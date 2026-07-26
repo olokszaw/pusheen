@@ -1116,7 +1116,8 @@ private struct FriendSwipeRow: View {
             .background(.clear)
             .liquidCard(RoundedRectangle(cornerRadius: 20))
             .offset(x: offset)
-            .gesture(DragGesture(minimumDistance: 8)
+            .contentShape(RoundedRectangle(cornerRadius: 20))
+            .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .local)
                 .onChanged { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { return }
