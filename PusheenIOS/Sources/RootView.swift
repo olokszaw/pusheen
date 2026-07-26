@@ -1193,27 +1193,42 @@ private struct FriendSwipeRow: View {
     @State private var revealed = false
     @State private var dragOffset: CGFloat = 0
 
-    private var offset: CGFloat { dragOffset == 0 ? (revealed ? -78 : 0) : dragOffset }
+    private var offset: CGFloat { dragOffset == 0 ? (revealed ? -138 : 0) : dragOffset }
+    private var deleteReveal: CGFloat {
+        let activeOffset = dragOffset == 0 ? (revealed ? -138 : 0) : dragOffset
+        return min(1, max(0, -activeOffset / 138))
+    }
+    private var deleteWidth: CGFloat { 54 + (96 * deleteReveal) }
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            if person.isFriend && (revealed || dragOffset < -10) {
+            if person.isFriend && (revealed || dragOffset < -4) {
                 Button {
                     Task {
                         await remove()
                         withAnimation(.spring(response: 0.26, dampingFraction: 0.9)) { revealed = false }
                     }
                 } label: {
-                    Image(systemName: "trash.fill")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 58, height: 58)
-                        .background(.red.opacity(0.80), in: Circle())
-                        .overlay(Circle().stroke(.white.opacity(0.34), lineWidth: 1))
-                        .shadow(color: .red.opacity(0.28), radius: 10, y: 4)
+                    VStack(spacing: 3) {
+                        Image(systemName: "trash.fill")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(height: 48)
+                            .frame(maxWidth: .infinity)
+                            .background(.red.opacity(0.82), in: Capsule())
+                            .overlay(Capsule().stroke(.white.opacity(0.32), lineWidth: 1))
+                            .shadow(color: .red.opacity(0.24), radius: 10, y: 4)
+                        if deleteReveal > 0.64 {
+                            Text("Удалить")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.red.opacity(0.92))
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                    }
+                    .frame(width: deleteWidth)
                 }
                 .buttonStyle(.plain)
-                .padding(.trailing, 7)
+                .padding(.trailing, 6)
                 .transition(.scale.combined(with: .opacity))
                 .zIndex(2)
             }
@@ -1244,18 +1259,18 @@ private struct FriendSwipeRow: View {
                 .onChanged { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                    dragOffset = min(0, max(-84, value.translation.width + (revealed ? -78 : 0)))
+                    dragOffset = min(0, max(-150, value.translation.width + (revealed ? -138 : 0)))
                 }
                 .onEnded { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { dragOffset = 0; return }
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
-                        revealed = dragOffset < -34
+                        revealed = dragOffset < -46
                         dragOffset = 0
                     }
                 })
         }
-        .animation(.spring(response: 0.28, dampingFraction: 0.84), value: revealed)
+        .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.86, blendDuration: 0.12), value: revealed)
     }
 }
 
