@@ -1245,6 +1245,7 @@ private struct FriendSwipeRow: View {
     let remove: () async -> Void
     @State private var revealed = false
     @State private var dragOffset: CGFloat = 0
+    @State private var removing = false
 
     private var offset: CGFloat { dragOffset == 0 ? (revealed ? -138 : 0) : dragOffset }
     private var deleteReveal: CGFloat {
@@ -1257,30 +1258,37 @@ private struct FriendSwipeRow: View {
         ZStack(alignment: .trailing) {
             if person.isFriend && (revealed || dragOffset < -4) {
                 Button {
+                    guard !removing else { return }
+                    removing = true
                     Task {
                         await remove()
-                        withAnimation(.spring(response: 0.26, dampingFraction: 0.9)) { revealed = false }
-                    }
-                } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: "trash.fill")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.white)
-                            .frame(height: 48)
-                            .frame(maxWidth: .infinity)
-                            .background(.red.opacity(0.82), in: Capsule())
-                            .overlay(Capsule().stroke(.white.opacity(0.32), lineWidth: 1))
-                            .shadow(color: .red.opacity(0.24), radius: 10, y: 4)
-                        if deleteReveal > 0.64 {
-                            Text("Удалить")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.red.opacity(0.92))
-                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        await MainActor.run {
+                            removing = false
+                            withAnimation(.spring(response: 0.26, dampingFraction: 0.9)) { revealed = false }
                         }
                     }
-                    .frame(width: deleteWidth)
+                } label: {
+                    ZStack(alignment: .bottom) {
+                        Capsule()
+                            .fill(.red.opacity(0.82))
+                            .overlay(Capsule().stroke(.white.opacity(0.32), lineWidth: 1))
+                            .shadow(color: .red.opacity(0.24), radius: 10, y: 4)
+                        VStack(spacing: 2) {
+                            if removing { ProgressView().tint(.white) }
+                            else { Image(systemName: "trash.fill").font(.title3.weight(.bold)) }
+                            if deleteReveal > 0.64 {
+                                Text("Удалить").font(.caption2.weight(.medium))
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.bottom, 7)
+                    }
+                    .frame(width: deleteWidth, height: 60)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .frame(width: deleteWidth, height: 68)
                 .padding(.trailing, 6)
                 .transition(.scale.combined(with: .opacity))
                 .zIndex(2)

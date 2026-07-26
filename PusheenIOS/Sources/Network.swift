@@ -121,10 +121,15 @@ final class APIClient {
     func friends(query: String = "") async throws -> [FriendProfile] { let suffix = query.isEmpty ? "" : "?username=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)"; let data = try await request("/api/friends/\(suffix)"); return try decoder.decode([FriendProfile].self, from: data) }
     func addFriend(username: String) async throws { _ = try await request("/api/friends/", method: "POST", body: ["username": username]) }
     func removeFriend(username: String) async throws {
-        // Some HTTP tunnels/proxies discard a body on DELETE. Keep the identifier
-        // in the URL so friend removal is reliable on both direct and tunneled APIs.
+        // New servers accept the query parameter because some tunnels discard a
+        // DELETE body. Fall back to the legacy JSON-body contract so the current
+        // IPA can also remove friends before the backend archive is deployed.
         let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? username
-        _ = try await request("/api/friends/?username=\(encoded)", method: "DELETE")
+        do {
+            _ = try await request("/api/friends/?username=\(encoded)", method: "DELETE")
+        } catch {
+            _ = try await request("/api/friends/", method: "DELETE", body: ["username": username])
+        }
     }
     func friendRequests() async throws -> FriendRequestsResponse { let data = try await request("/api/friends/requests/"); return try decoder.decode(FriendRequestsResponse.self, from: data) }
     func viewingStats() async throws -> ViewingStats { let data = try await request("/api/activity/"); return try decoder.decode(ViewingStats.self, from: data) }
