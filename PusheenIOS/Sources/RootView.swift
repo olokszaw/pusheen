@@ -577,8 +577,30 @@ struct NativeChatPane: View {
     }
     private func preparePhoto(_ item: PhotosPickerItem?) async {
         guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
-        let photo = PendingChatPhoto(dataURL: "data:image/jpeg;base64," + data.base64EncodedString())
+        guard let dataURL = await Task.detached(priority: .userInitiated, operation: {
+            Self.chatPhotoDataURL(from: data)
+        }).value else { return }
+        let photo = PendingChatPhoto(dataURL: dataURL)
         await MainActor.run { pendingPhoto = photo; selectedPhoto = nil }
+    }
+    nonisolated private static func chatPhotoDataURL(from source: Data) -> String? {
+        guard let image = UIImage(data: source) else { return nil }
+        let longestSide = max(image.size.width, image.size.height)
+        let scale = min(1, 1_440 / max(longestSide, 1))
+        let target = CGSize(width: max(1, image.size.width * scale), height: max(1, image.size.height * scale))
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        let normalized = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            UIColor.black.setFill()
+            UIRectFill(CGRect(origin: .zero, size: target))
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        guard var jpeg = normalized.jpegData(compressionQuality: 0.8) else { return nil }
+        // The backend accepts a 2.8 MB data URL. Keep enough room for Base64
+        // expansion and the websocket envelope even for very detailed photos.
+        if jpeg.count > 1_850_000, let smaller = normalized.jpegData(compressionQuality: 0.56) { jpeg = smaller }
+        return "data:image/jpeg;base64," + jpeg.base64EncodedString()
     }
     private func scroll(_ proxy: ScrollViewProxy, force: Bool = false) {
         guard force || sticksToBottom else { return }
@@ -593,28 +615,45 @@ private struct PendingChatPhoto: Identifiable {
 }
 
 private struct ChatPhotoConfirmation: View {
+    @Environment(\.dismiss) private var dismiss
     let photo: PendingChatPhoto
     let cancel: () -> Void
     let send: () -> Void
     var body: some View {
-        VStack(spacing: 16) {
-            Capsule().fill(.white.opacity(0.25)).frame(width: 38, height: 5)
-            Text("Отправить фотографию?").font(.headline)
-            DataURLImage(dataURL: photo.dataURL)
-                .frame(maxWidth: .infinity, maxHeight: 260)
+        VStack(spacing: 14) {
+            Text("Отправить фотографию?")
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            DataURLImage(dataURL: photo.dataURL, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .frame(height: 300)
+                .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             HStack(spacing: 10) {
-                Button("Отмена", action: cancel).frame(maxWidth: .infinity).padding(.vertical, 11).liquidCard(Capsule())
-                Button(action: send) {
+                Button {
+                    cancel()
+                    dismiss()
+                } label: {
+                    Text("Отмена").frame(maxWidth: .infinity).frame(height: 48).contentShape(Rectangle())
+                }
+                .liquidCard(Capsule())
+                Button {
+                    send()
+                    dismiss()
+                } label: {
                     Label("Отправить", systemImage: "arrow.up")
-                        .frame(maxWidth: .infinity).padding(.vertical, 11)
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .contentShape(Rectangle())
                 }
                 .liquidCard(Capsule())
             }
             .buttonStyle(.plain)
         }
         .padding(18)
-        .presentationDetents([.height(410)])
+        .presentationDetents([.fraction(0.62)])
+        .presentationDragIndicator(.visible)
         .presentationBackground(.ultraThinMaterial)
         .presentationCornerRadius(30)
     }
@@ -828,8 +867,13 @@ struct AuthProfilePreview: View {
 
 struct DataURLImage: View {
     let dataURL: String
+    let contentMode: ContentMode
+    init(dataURL: String, contentMode: ContentMode = .fill) {
+        self.dataURL = dataURL
+        self.contentMode = contentMode
+    }
     var body: some View {
-        if let comma = dataURL.firstIndex(of: ","), let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])), let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() }
+        if let comma = dataURL.firstIndex(of: ","), let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])), let image = UIImage(data: data) { Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode) }
         else { Color.white.opacity(0.08) }
     }
 }
