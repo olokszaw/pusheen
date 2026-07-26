@@ -504,7 +504,7 @@ struct NativeChatPane: View {
                     isFocused: Binding(get: { inputFocused }, set: { inputFocused = $0 }),
                     onSubmit: submit
                 )
-                    .frame(height: 38)
+                    .frame(minHeight: 38, maxHeight: 116)
                     .onChange(of: inputFocused) { _, value in focused = value }
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 31, weight: .medium))
@@ -513,7 +513,11 @@ struct NativeChatPane: View {
                     .contentShape(Circle())
                     .onTapGesture { submit() }
                     .accessibilityAddTraits(.isButton)
-            }.frame(height: 54).padding(.horizontal, 12).liquidCard(Capsule())
+            }
+            .frame(minHeight: 54)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .liquidCard(RoundedRectangle(cornerRadius: 27, style: .continuous))
         }
         .padding(12)
         .liquidCard()
@@ -558,10 +562,11 @@ private struct PersistentChatTextField: UIViewRepresentable {
         view.autocorrectionType = .yes
         view.backgroundColor = .clear
         view.isScrollEnabled = false
+        view.showsVerticalScrollIndicator = true
         view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         view.textContainer.lineFragmentPadding = 0
-        view.textContainer.maximumNumberOfLines = 1
-        view.textContainer.lineBreakMode = .byTruncatingTail
+        view.textContainer.maximumNumberOfLines = 5
+        view.textContainer.lineBreakMode = .byWordWrapping
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.setContentHuggingPriority(.required, for: .vertical)
         view.setContentCompressionResistancePriority(.required, for: .vertical)
@@ -571,11 +576,14 @@ private struct PersistentChatTextField: UIViewRepresentable {
         context.coordinator.parent = self
         if field.text != text { field.text = text }
         field.updatePlaceholder()
+        field.updateScrolling()
         if isFocused && !field.isFirstResponder { field.becomeFirstResponder() }
         if !isFocused && field.isFirstResponder { field.resignFirstResponder() }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ChatTextView, context: Context) -> CGSize? {
-        CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: 38)
+        let width = proposal.width ?? max(1, uiView.bounds.width)
+        let measured = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
+        return CGSize(width: width, height: min(116, max(38, measured)))
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: PersistentChatTextField
@@ -583,6 +591,8 @@ private struct PersistentChatTextField: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
             (textView as? ChatTextView)?.updatePlaceholder()
+            (textView as? ChatTextView)?.updateScrolling()
+            textView.invalidateIntrinsicContentSize()
         }
         func textViewDidBeginEditing(_ textView: UITextView) { parent.isFocused = true }
         func textViewDidEndEditing(_ textView: UITextView) { parent.isFocused = false }
@@ -605,11 +615,22 @@ private struct PersistentChatTextField: UIViewRepresentable {
             addSubview(placeholderLabel)
             NSLayoutConstraint.activate([
                 placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
-                placeholderLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+                placeholderLabel.topAnchor.constraint(equalTo: topAnchor, constant: 8)
             ])
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
         func updatePlaceholder() { placeholderLabel.isHidden = !text.isEmpty }
+        func updateScrolling() {
+            guard bounds.width > 1 else { return }
+            let availableWidth = bounds.width
+            let requiredHeight = sizeThatFits(CGSize(width: availableWidth, height: .greatestFiniteMagnitude)).height
+            let shouldScroll = requiredHeight > 116
+            if isScrollEnabled != shouldScroll { isScrollEnabled = shouldScroll }
+            if shouldScroll {
+                let bottom = max(-adjustedContentInset.top, contentSize.height - bounds.height + adjustedContentInset.bottom)
+                setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
+            }
+        }
     }
 }
 
@@ -1300,15 +1321,39 @@ private struct FriendSwipeRow: View {
                 } label: {
                     ZStack(alignment: .leading) {
                         Capsule()
-                            .fill(.red.opacity(0.94))
-                            .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 0.8))
-                            .shadow(color: .red.opacity(0.20), radius: 8, y: 3)
+                            .fill(.ultraThinMaterial)
+                            .overlay {
+                                Capsule().fill(
+                                    LinearGradient(
+                                        colors: [Color(red: 1.0, green: 0.25, blue: 0.29).opacity(0.96),
+                                                 Color(red: 0.78, green: 0.04, blue: 0.12).opacity(0.92)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                            }
+                            .overlay {
+                                Capsule().stroke(
+                                    LinearGradient(colors: [.white.opacity(0.48), .white.opacity(0.08)], startPoint: .top, endPoint: .bottom),
+                                    lineWidth: 0.8
+                                )
+                            }
+                            .shadow(color: .red.opacity(0.27), radius: 10, y: 4)
                         Group {
                             if removing { ProgressView().tint(.white) }
-                            else { Image(systemName: "trash.fill").font(.title3.weight(.semibold)) }
+                            else {
+                                Image(systemName: "trash.fill")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .frame(width: 36, height: 36)
+                                    .background(.white.opacity(0.13), in: Circle())
+                                    .overlay(Circle().stroke(.white.opacity(0.20), lineWidth: 0.7))
+                                    .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+                            }
                         }
                         .foregroundStyle(.white)
                         .padding(.leading, min(27, max(18, deleteWidth * 0.18)))
+                        .scaleEffect(0.84 + 0.16 * deleteReveal)
+                        .opacity(min(1, deleteReveal * 2.6))
                     }
                     .frame(width: deleteWidth, height: 56)
                     .contentShape(Capsule())
@@ -1341,7 +1386,6 @@ private struct FriendSwipeRow: View {
             .liquidCard(RoundedRectangle(cornerRadius: 20))
             .offset(x: offset)
             .contentShape(RoundedRectangle(cornerRadius: 20))
-            .allowsHitTesting(!revealed)
             .zIndex(1)
             .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .local)
                 .onChanged { value in
@@ -1352,16 +1396,23 @@ private struct FriendSwipeRow: View {
                 .onEnded { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { dragOffset = 0; return }
-                    let projected = value.predictedEndTranslation.width + (revealed ? settledOffset : 0)
-                    withAnimation(.interactiveSpring(response: 0.27, dampingFraction: 0.88, blendDuration: 0.08)) {
-                        revealed = projected < -54
+                    let wasRevealed = revealed
+                    let projected = value.predictedEndTranslation.width + (wasRevealed ? settledOffset : 0)
+                    withAnimation(.interactiveSpring(response: 0.25, dampingFraction: 0.91, blendDuration: 0.06)) {
+                        if wasRevealed {
+                            // A deliberate reverse swipe closes the action even
+                            // if the finger did not travel all the way back.
+                            revealed = !(value.translation.width > 16 || value.predictedEndTranslation.width > 30)
+                        } else {
+                            revealed = projected < -54
+                        }
                         dragOffset = 0
                     }
                 })
         }
         .frame(maxWidth: .infinity)
         .frame(height: 70)
-        .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.86, blendDuration: 0.12), value: revealed)
+        .animation(.interactiveSpring(response: 0.26, dampingFraction: 0.91, blendDuration: 0.08), value: revealed)
     }
 }
 
