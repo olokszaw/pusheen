@@ -536,6 +536,7 @@ struct NativeChatPane: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .liquidCard(RoundedRectangle(cornerRadius: 27, style: .continuous))
+            .padding(.horizontal, 14)
         }
         .padding(12)
         .liquidCard()
