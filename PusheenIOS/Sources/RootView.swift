@@ -495,6 +495,7 @@ struct NativeChatPane: View {
     @State private var inputFocused = false
     @State private var inputHeight: CGFloat = 38
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
@@ -512,37 +513,55 @@ struct NativeChatPane: View {
                     .onChange(of: focused) { _, active in if active { sticksToBottom = true; scroll(proxy, force: true) } }
                     .onChange(of: messages.count) { _, _ in scroll(proxy) }
             }.frame(maxHeight: .infinity)
-            HStack(spacing: 8) {
-                PhotosPicker(selection: $selectedPhoto, matching: .images) { Image(systemName: "photo.badge.plus").font(.title3).frame(width: 32, height: 32) }
-                    .onChange(of: selectedPhoto) { _, item in Task { await sendPhoto(item) } }
-                PersistentChatTextField(
-                    text: $draft,
-                    isFocused: Binding(get: { inputFocused }, set: { inputFocused = $0 }),
-                    height: $inputHeight,
-                    onSubmit: submit
-                )
-                    .frame(height: inputHeight)
-                    .animation(.easeOut(duration: 0.14), value: inputHeight)
-                    .onChange(of: inputFocused) { _, value in focused = value }
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 31, weight: .medium))
-                    .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
-                    .frame(width: 38, height: 38)
-                    .contentShape(Circle())
-                    .onTapGesture { submit() }
-                    .accessibilityAddTraits(.isButton)
+            HStack(alignment: .bottom, spacing: 10) {
+                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 21, weight: .semibold))
+                        .frame(width: 46, height: 46)
+                        .liquidCard(Circle())
+                }
+                .buttonStyle(.plain)
+                .onChange(of: selectedPhoto) { _, item in Task { await preparePhoto(item) } }
+
+                HStack(alignment: .bottom, spacing: 7) {
+                    PersistentChatTextField(
+                        text: $draft,
+                        isFocused: Binding(get: { inputFocused }, set: { inputFocused = $0 }),
+                        height: $inputHeight,
+                        onSubmit: submit
+                    )
+                        .frame(height: inputHeight)
+                        .animation(.easeOut(duration: 0.14), value: inputHeight)
+                        .onChange(of: inputFocused) { _, value in focused = value }
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 31, weight: .medium))
+                        .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
+                        .frame(width: 38, height: 38)
+                        .contentShape(Circle())
+                        .onTapGesture { submit() }
+                        .accessibilityAddTraits(.isButton)
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 8)
+                .padding(.vertical, 6)
+                .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
             }
-            .frame(minHeight: 54)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .liquidCard(RoundedRectangle(cornerRadius: 27, style: .continuous))
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 26)
         }
         .padding(12)
         .liquidCard()
         .onChange(of: draft) { _, value in FluentEmojiCache.shared.prefetch(in: value) }
         .onChange(of: messages.count) { _, _ in
             if let text = messages.last?.text { FluentEmojiCache.shared.prefetch(in: text) }
+        }
+        .sheet(item: $pendingPhoto) { photo in
+            ChatPhotoConfirmation(photo: photo) {
+                pendingPhoto = nil
+            } send: {
+                sticksToBottom = true
+                send("", photo.dataURL)
+                pendingPhoto = nil
+            }
         }
     }
     private func submit() {
@@ -552,11 +571,48 @@ struct NativeChatPane: View {
         send(text, "")
         draft = ""
     }
-    private func sendPhoto(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; send("", "data:image/jpeg;base64," + data.base64EncodedString()); selectedPhoto = nil }
+    private func preparePhoto(_ item: PhotosPickerItem?) async {
+        guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
+        let photo = PendingChatPhoto(dataURL: "data:image/jpeg;base64," + data.base64EncodedString())
+        await MainActor.run { pendingPhoto = photo; selectedPhoto = nil }
+    }
     private func scroll(_ proxy: ScrollViewProxy, force: Bool = false) {
         guard force || sticksToBottom else { return }
         func pin() { var transaction = Transaction(); transaction.disablesAnimations = true; withTransaction(transaction) { proxy.scrollTo("chat-bottom", anchor: .bottom) } }
         DispatchQueue.main.async { pin() }
+    }
+}
+
+private struct PendingChatPhoto: Identifiable {
+    let id = UUID()
+    let dataURL: String
+}
+
+private struct ChatPhotoConfirmation: View {
+    let photo: PendingChatPhoto
+    let cancel: () -> Void
+    let send: () -> Void
+    var body: some View {
+        VStack(spacing: 16) {
+            Capsule().fill(.white.opacity(0.25)).frame(width: 38, height: 5)
+            Text("Отправить фотографию?").font(.headline)
+            DataURLImage(dataURL: photo.dataURL)
+                .frame(maxWidth: .infinity, maxHeight: 260)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            HStack(spacing: 10) {
+                Button("Отмена", action: cancel).frame(maxWidth: .infinity).padding(.vertical, 11).liquidCard(Capsule())
+                Button(action: send) {
+                    Label("Отправить", systemImage: "arrow.up")
+                        .frame(maxWidth: .infinity).padding(.vertical, 11)
+                }
+                .liquidCard(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(18)
+        .presentationDetents([.height(410)])
+        .presentationBackground(.ultraThinMaterial)
+        .presentationCornerRadius(30)
     }
 }
 
@@ -665,6 +721,11 @@ private struct PersistentChatTextField: UIViewRepresentable {
 
 struct NativeMessageBubble: View {
     let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
+    private var containsEmoji: Bool {
+        message.text.unicodeScalars.contains { scalar in
+            (0x1F000...0x1FAFF).contains(Int(scalar.value)) || (0x2600...0x27FF).contains(Int(scalar.value))
+        }
+    }
     // Bubbles use their content length, not the whole chat width. This keeps a
     // one-word reply compact while giving a real sentence enough readable space.
     private var bubbleWidth: CGFloat {
@@ -687,7 +748,17 @@ struct NativeMessageBubble: View {
             if isMine { Spacer(minLength: 44) }
             VStack(alignment: .leading, spacing: 4) {
                 Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary).lineLimit(1)
-                if !message.text.isEmpty { FluentInlineText(message.text).multilineTextAlignment(.leading).layoutPriority(1) }
+                if !message.text.isEmpty {
+                    if containsEmoji {
+                        FluentInlineText(message.text).multilineTextAlignment(.leading).layoutPriority(1)
+                    } else {
+                        Text(message.text)
+                            .font(.subheadline)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
                 if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
                 if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
             }.padding(10).frame(width: bubbleWidth, alignment: .leading).background(isMine ? Color.indigo.opacity(0.28) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
@@ -891,14 +962,13 @@ private struct ActivityOrb: View {
 
 private struct GenrePreferenceOrb: View {
     let genres: [ViewingGenre]
-    private let colors: [Color] = [.teal, .cyan, .blue, .indigo, .mint, .orange, .green, .purple, .yellow, .pink, .gray]
     var body: some View {
         let total = max(1, genres.reduce(0) { $0 + $1.seconds })
         ZStack {
             ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
                 let before = genres.prefix(index).reduce(0) { $0 + $1.seconds }
                 DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total))
-                    .fill(colors[index % colors.count].opacity(0.82))
+                    .fill(GenrePalette.color(for: genre.name).opacity(0.88))
             }
             Circle().fill(.ultraThinMaterial).frame(width: 86, height: 86)
             VStack(spacing: 2) {
@@ -907,7 +977,7 @@ private struct GenrePreferenceOrb: View {
             }.frame(width: 74)
         }
         .overlay(Circle().stroke(.white.opacity(0.24), lineWidth: 1))
-        .shadow(color: .teal.opacity(0.18), radius: 12)
+        .shadow(color: GenrePalette.color(for: genres.first?.name ?? "").opacity(0.22), radius: 12)
     }
 }
 
@@ -927,13 +997,12 @@ private struct DonutSlice: Shape {
 
 private struct GenreLegend: View {
     let genres: [ViewingGenre]
-    private let colors: [Color] = [.teal, .cyan, .blue, .indigo, .mint, .orange, .green, .purple, .yellow, .pink, .gray]
     var body: some View {
         let smallText = genres.count > 6
         EmojiFlowLayout(spacing: 6) {
             ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
                 HStack(spacing: 4) {
-                    Circle().fill(colors[index % colors.count]).frame(width: 6, height: 6)
+                    Circle().fill(GenrePalette.color(for: genre.name)).frame(width: 6, height: 6)
                     Text("\(genre.name) \(genre.percent)%")
                 }
                 .font(.system(size: smallText ? 9 : 11, weight: .medium))
@@ -943,6 +1012,28 @@ private struct GenreLegend: View {
                 .background(.white.opacity(0.055), in: Capsule())
             }
         }
+    }
+}
+
+private enum GenrePalette {
+    private static let fallback: [Color] = [.teal, .orange, .purple, .blue, .green, .pink, .yellow, .indigo, .brown, .mint]
+    static func color(for name: String) -> Color {
+        let value = name.lowercased()
+        if value.contains("анима") || value.contains("animation") { return .cyan }
+        if value.contains("ужас") || value.contains("horror") { return .red }
+        if value.contains("комед") || value.contains("comedy") { return .yellow }
+        if value.contains("драм") || value.contains("drama") { return .blue }
+        if value.contains("роман") || value.contains("мелодрам") || value.contains("romance") { return .pink }
+        if value.contains("триллер") || value.contains("thriller") { return .orange }
+        if value.contains("кримин") || value.contains("crime") { return .purple }
+        if value.contains("семейн") || value.contains("family") { return .green }
+        if value.contains("фантаст") || value.contains("sci-fi") || value.contains("science fiction") { return .mint }
+        if value.contains("фэнтез") || value.contains("fantasy") { return .indigo }
+        if value.contains("приключ") || value.contains("adventure") { return .teal }
+        if value.contains("документ") || value.contains("documentary") { return .brown }
+        if value.contains("другое") || value.contains("other") { return .gray }
+        let stableIndex = value.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % fallback.count }
+        return fallback[stableIndex]
     }
 }
 
