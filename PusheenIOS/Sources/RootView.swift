@@ -268,54 +268,11 @@ struct RoomView: View {
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
             VStack(spacing: 6) {
-                VStack(spacing: 8) {
-                    Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
-                        .frame(height: 252)
-                        .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
-                        .contentShape(Rectangle())
-                        .onTapGesture { toggleControls() }
-                    if controlsVisible {
-                        VStack(spacing: 7) {
-                            PlaybackScrubber(
-                                position: model.position,
-                                duration: model.duration,
-                                enabled: model.isOwner,
-                                commit: { model.seek($0) },
-                                interactionChanged: { isScrubbingPlayer = $0 }
-                            )
-                            HStack(spacing: 10) {
-                                playerControl("gobackward.10") { model.seek(max(0, model.position - 10)) }
-                                playerControl(model.isPlaying ? "pause.fill" : "play.fill", primary: true) { model.toggle() }
-                                playerControl("goforward.10") { model.seek(min(model.duration, model.position + 10)) }
-                                Spacer(minLength: 6)
-                                ZStack {
-                                    Image(systemName: copiedCode ? "checkmark" : "link")
-                                        .font(.body.weight(.semibold))
-                                        .frame(width: 48, height: 44)
-                                        .contentShape(Rectangle())
-                                        .contentTransition(.symbolEffect(.replace))
-                                        .symbolEffect(.bounce, value: copyFeedbackTick)
-                                        .liquidCard(Circle())
-                                }
-                                .frame(width: 52, height: 48)
-                                .contentShape(Rectangle())
-                                .highPriorityGesture(TapGesture().onEnded { copyInviteCode() })
-                                .accessibilityElement(children: .ignore)
-                                .accessibilityAddTraits(.isButton)
-                                .accessibilityLabel("Скопировать код комнаты")
-                                .accessibilityAction { copyInviteCode() }
-                                Button { showTime = true } label: {
-                                    Text(time(model.position)).font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 7).liquidCard(Capsule())
-                                }.buttonStyle(.plain)
-                            }
-                            .padding(7).liquidCard(Capsule()).opacity(model.isOwner ? 1 : 0.62)
-                        }
-                        .padding(9)
-                        .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                }
-                .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
+                Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
+                    .frame(height: 252)
+                    .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleControls() }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardInset: keyboardHeight, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
                     .frame(maxHeight: .infinity)
                     .layoutPriority(2)
@@ -324,6 +281,16 @@ struct RoomView: View {
             .padding(.top, 2)
             .padding(.bottom, 10)
             .frame(maxHeight: .infinity, alignment: .top)
+            .overlay(alignment: .top) {
+                if controlsVisible {
+                    playerControls
+                        .padding(.horizontal, 9)
+                        .offset(y: 260)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .zIndex(20)
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .offset(x: max(0, roomSwipeOffset))
@@ -394,6 +361,53 @@ struct RoomView: View {
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
+    private var playerControls: some View {
+        VStack(spacing: 7) {
+            PlaybackScrubber(
+                position: model.position,
+                duration: model.duration,
+                enabled: model.isOwner,
+                commit: { model.seek($0) },
+                interactionChanged: { isScrubbingPlayer = $0 }
+            )
+            HStack(spacing: 10) {
+                playerControl("gobackward.10") { model.seek(max(0, model.position - 10)) }
+                playerControl(model.isPlaying ? "pause.fill" : "play.fill", primary: true) { model.toggle() }
+                playerControl("goforward.10") { model.seek(min(model.duration, model.position + 10)) }
+                Spacer(minLength: 6)
+                ZStack {
+                    Image(systemName: copiedCode ? "checkmark" : "link")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 48, height: 44)
+                        .contentShape(Rectangle())
+                        .contentTransition(.symbolEffect(.replace))
+                        .symbolEffect(.bounce, value: copyFeedbackTick)
+                        .liquidCard(Circle())
+                }
+                .frame(width: 52, height: 48)
+                .contentShape(Rectangle())
+                .highPriorityGesture(TapGesture().onEnded { copyInviteCode() })
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel("Скопировать код комнаты")
+                .accessibilityAction { copyInviteCode() }
+                Button { showTime = true } label: {
+                    Text(time(model.position))
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 7)
+                        .liquidCard(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(7)
+            .liquidCard(Capsule())
+            .opacity(model.isOwner ? 1 : 0.62)
+        }
+        .padding(9)
+        .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
     private func copyInviteCode() {
         controlsHideTask?.cancel()
         let code = room.inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
