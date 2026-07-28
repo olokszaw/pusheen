@@ -275,11 +275,13 @@ struct RoomView: View {
             // the top safe area so the inset is never applied twice.
             let uncoveredSafeTop = max(0, safeTop - geometryTop)
             let contentTop = uncoveredSafeTop + (chatFocused ? 2 : 6)
+            let playerHeight = chatFocused ? 176.0 : roomPlayerHeight
+            let roomHeight = max(playerHeight + 180, geometry.size.height - (chatFocused ? keyboardHeight : 0))
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
             ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
                     Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
-                        .frame(height: roomPlayerHeight)
+                        .frame(height: playerHeight)
                         .contentShape(Rectangle())
                         .onTapGesture { toggleControls() }
                     if controlsVisible {
@@ -288,7 +290,7 @@ struct RoomView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                             .zIndex(20)
                     }
-                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardInset: keyboardHeight, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
                         .frame(maxHeight: .infinity)
                         .layoutPriority(2)
                 }
@@ -297,9 +299,10 @@ struct RoomView: View {
                 .padding(.horizontal, 7)
                 .padding(.top, contentTop)
                 .padding(.bottom, 2)
-                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+                .frame(width: geometry.size.width, height: roomHeight, alignment: .top)
                 .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
                 .animation(.spring(response: 0.34, dampingFraction: 0.88), value: chatFocused)
+                .animation(.easeOut(duration: 0.22), value: keyboardHeight)
             }
             .offset(x: max(0, roomSwipeOffset))
             .simultaneousGesture(
@@ -307,7 +310,7 @@ struct RoomView: View {
                     .onChanged { value in
                         let horizontal = abs(value.translation.width)
                         let vertical = abs(value.translation.height)
-                        let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80)
+                        let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? playerHeight + 188 : playerHeight + 80)
                         guard !isScrubbingPlayer,
                               value.startLocation.y > playerInteractionBottom,
                               value.startLocation.x <= 44,
@@ -318,7 +321,7 @@ struct RoomView: View {
                     .onEnded { value in
                         let horizontal = abs(value.translation.width)
                         let vertical = abs(value.translation.height)
-                        let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80)
+                        let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? playerHeight + 188 : playerHeight + 80)
                         let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
                         let exitsFromLeftEdge = !isScrubbingPlayer && beganOutsidePlayer && value.startLocation.x <= 44 && value.translation.width > 0
                         let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= geometry.size.width - 44 && value.translation.width < 0
@@ -662,7 +665,6 @@ struct NativeChatPane: View {
     let currentUserID: Int?
     @Binding var draft: String
     @Binding var focused: Bool
-    let keyboardInset: CGFloat
     let send: (String, String) -> Void
     let react: (Int, String) -> Void
     // UIKit owns first-responder state for PersistentChatTextField. Using
@@ -748,17 +750,17 @@ struct NativeChatPane: View {
                 .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
             }
             .padding(.horizontal, 26)
-            .offset(y: -14)
+            .offset(y: inputFocused ? 0 : -14)
         }
         .padding(.horizontal, 12)
         .padding(.top, 12)
-        .padding(.bottom, 18)
+        .padding(.bottom, inputFocused ? 6 : 18)
         // RoomView owns the single continuous glass surface around video and
         // chat. A second card here created the visible seam and double corners.
-        // Keyboard avoidance stays outside the chat content so it cannot add a
-        // blank tail inside the message list.
-        .padding(.bottom, inputFocused ? keyboardInset : 0)
-        .animation(.easeOut(duration: 0.22), value: keyboardInset)
+        // RoomView shortens the unified surface to the keyboard edge. No
+        // keyboard-sized padding belongs inside the chat: it created the large
+        // empty rectangle below the composer.
+        .animation(.easeOut(duration: 0.18), value: inputFocused)
         .task {
             FluentEmojiCache.shared.warmCommonEmoji()
             messages.forEach { FluentEmojiCache.shared.prefetch(in: $0.text) }
