@@ -644,22 +644,38 @@ struct NativeChatPane: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
+    @State private var scrollTarget: Int? = Int.min
+    private let bottomAnchorID = Int.min
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Чат").font(.headline)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(messages) { message in NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions).id(message.id) }
-                        Color.clear.frame(height: 1).id("chat-bottom")
-                    }.padding(.vertical, 2)
-                }.defaultScrollAnchor(.bottom).contentShape(Rectangle()).onTapGesture { focused = false; inputFocused = false }
-                    .simultaneousGesture(DragGesture(minimumDistance: 6).onChanged { _ in sticksToBottom = false })
-                    .onAppear { scroll(proxy, force: true) }
-                    .onChange(of: focused) { _, active in if active { sticksToBottom = true; scroll(proxy, force: true) } }
-                    .onChange(of: messages.count) { _, _ in scroll(proxy) }
-            }.frame(maxHeight: .infinity)
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(messages) { message in
+                        NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
+                            .id(message.id)
+                    }
+                    Color.clear.frame(height: 1).id(bottomAnchorID)
+                }
+                .padding(.vertical, 2)
+                .scrollTargetLayout()
+            }
+            .scrollPosition(id: $scrollTarget, anchor: .bottom)
+            .contentShape(Rectangle())
+            .onTapGesture { focused = false; inputFocused = false }
+            .onChange(of: scrollTarget) { _, target in
+                // SwiftUI updates this binding while the user scrolls. Only
+                // follow future messages while the bottom sentinel is visible.
+                sticksToBottom = target == bottomAnchorID
+            }
+            .onChange(of: focused) { _, active in
+                if active { pinToBottom() }
+            }
+            .onChange(of: messages.last?.id) { _, _ in
+                if sticksToBottom { pinToBottom() }
+            }
+            .frame(maxHeight: .infinity)
             HStack(alignment: .bottom, spacing: 10) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
                     Image(systemName: "paperclip")
@@ -751,10 +767,11 @@ struct NativeChatPane: View {
         if jpeg.count > 1_850_000, let smaller = normalized.jpegData(compressionQuality: 0.56) { jpeg = smaller }
         return "data:image/jpeg;base64," + jpeg.base64EncodedString()
     }
-    private func scroll(_ proxy: ScrollViewProxy, force: Bool = false) {
-        guard force || sticksToBottom else { return }
-        func pin() { var transaction = Transaction(); transaction.disablesAnimations = true; withTransaction(transaction) { proxy.scrollTo("chat-bottom", anchor: .bottom) } }
-        DispatchQueue.main.async { pin() }
+    private func pinToBottom() {
+        sticksToBottom = true
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction { scrollTarget = bottomAnchorID }
     }
 }
 
