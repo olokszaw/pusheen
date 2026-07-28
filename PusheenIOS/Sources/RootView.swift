@@ -751,9 +751,13 @@ struct NativeChatPane: View {
         }
         .padding(.horizontal, 12)
         .padding(.top, 12)
-        .padding(.bottom, inputFocused ? keyboardInset + 12 : 18)
-        .animation(.easeOut(duration: 0.22), value: keyboardInset)
+        .padding(.bottom, 18)
         .liquidCard()
+        // Keep the glass edge attached to the composer. The keyboard inset
+        // belongs outside the card; placing it inside left a large empty glass
+        // tail below the input while the keyboard was visible.
+        .padding(.bottom, inputFocused ? keyboardInset : 0)
+        .animation(.easeOut(duration: 0.22), value: keyboardInset)
         .task {
             FluentEmojiCache.shared.warmCommonEmoji()
             messages.forEach { FluentEmojiCache.shared.prefetch(in: $0.text) }
