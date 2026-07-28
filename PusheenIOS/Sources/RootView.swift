@@ -293,6 +293,10 @@ struct RoomView: View {
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
         }
+        // The room player deliberately extends beneath the status bar. This
+        // keeps the media surface pinned to the physical top edge and gives
+        // the chat the full remaining height above the keyboard.
+        .ignoresSafeArea(edges: .top)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .offset(x: max(0, roomSwipeOffset))
         .simultaneousGesture(
