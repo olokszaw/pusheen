@@ -239,6 +239,7 @@ struct LegacyRoomCard: View {
 
 struct RoomView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
     let room: Room
     let api: APIClient
     let token: String
@@ -297,8 +298,12 @@ struct RoomView: View {
         .simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { value in
             let horizontal = abs(value.translation.width)
             let vertical = abs(value.translation.height)
-            guard value.translation.width < -70, horizontal > vertical * 1.35 else { return }
-            showMembers = true
+            guard horizontal > vertical * 1.35 else { return }
+            if value.translation.width < -70 {
+                dismiss()
+            } else if value.translation.width > 70 {
+                showMembers = true
+            }
         })
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             var transaction = Transaction()
@@ -803,8 +808,8 @@ struct NativeMessageBubble: View {
         case 0...5: return 88
         case 6...12: return 128
         case 13...24: return 184
-        case 25...42: return 226
-        default: return 266
+        case 25...42: return 218
+        default: return 238
         }
     }
     private var emojiOnly: [String] {
@@ -855,13 +860,14 @@ struct NativeMessageBubble: View {
             Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
         } else {
             HStack(alignment: .bottom, spacing: 9) {
-                if !isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38) }
-                if isMine { Spacer(minLength: 38) }
+                if !isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 42) }
+                if isMine { Spacer(minLength: 0) }
                 VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
-                    Text(message.nickname).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 240, alignment: isMine ? .trailing : .leading)
-                    bubble
+                    Text(message.nickname).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
+                    bubble.frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
                 }
-                if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38) } else { Spacer(minLength: 18) }
+                .frame(width: 238, alignment: isMine ? .trailing : .leading)
+                if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 42) } else { Spacer(minLength: 0) }
             }
         }
     }
@@ -988,14 +994,13 @@ struct ProfileGlassView: View {
                             Image(systemName: "camera.fill").font(.caption.weight(.bold)).padding(8).liquidCard(Circle())
                         }
                     }.onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
-                    HStack(spacing: 8) {
+                    if !edit {
                         VStack(spacing: 3) {
                             Text(session.profile?.nickname ?? "").font(.title2.bold())
                             Text("@\(session.profile?.username ?? "")").foregroundStyle(.secondary)
                         }
-                        Button { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { edit.toggle() } } label: {
-                            Image(systemName: "pencil").font(.caption.weight(.bold)).frame(width: 30, height: 30).liquidCard(Circle())
-                        }.buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                        .onTapGesture { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { edit = true } }
                     }
                     if edit { ProfileInlineEditor(close: { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { edit = false } }).transition(.opacity.combined(with: .move(edge: .top))) }
                     ViewingActivityCard(stats: session.viewingStats)
@@ -1073,9 +1078,15 @@ private struct ActivityOrb: View {
 private struct GenrePreferenceOrb: View {
     let genres: [ViewingGenre]
     @Binding var selectedGenreID: String?
+    private var defaultGenre: ViewingGenre {
+        genres.first {
+            let value = $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return value != "другое" && value != "other"
+        } ?? genres[0]
+    }
     var body: some View {
         let total = max(1, genres.reduce(0) { $0 + $1.seconds })
-        let selected = genres.first(where: { $0.id == selectedGenreID }) ?? genres[0]
+        let selected = genres.first(where: { $0.id == selectedGenreID }) ?? defaultGenre
         ZStack {
             ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
                 let before = genres.prefix(index).reduce(0) { $0 + $1.seconds }
