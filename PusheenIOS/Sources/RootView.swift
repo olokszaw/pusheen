@@ -263,12 +263,12 @@ struct RoomView: View {
     @State private var controlsVisible = false
     @State private var isScrubbingPlayer = false
     @State private var controlsHideTask: Task<Void, Never>?
-    private let roomPlayerHeight: CGFloat = 214
+    private let roomPlayerHeight: CGFloat = 164
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
-            VStack(spacing: 6) {
+            VStack(spacing: 2) {
                 Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
                     .frame(height: roomPlayerHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
@@ -293,10 +293,10 @@ struct RoomView: View {
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
         }
-        // The room player deliberately extends beneath the status bar. This
-        // keeps the media surface pinned to the physical top edge and gives
-        // the chat the full remaining height above the keyboard.
-        .ignoresSafeArea(edges: [.top, .bottom])
+        // Only the chat extends into the bottom safe area. The player stays
+        // below the status bar; its compact height offsets that top inset so
+        // the chat keeps the same large viewport above the keyboard.
+        .ignoresSafeArea(edges: .bottom)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .offset(x: max(0, roomSwipeOffset))
         .simultaneousGesture(
@@ -304,7 +304,7 @@ struct RoomView: View {
                 .onChanged { value in
                     let horizontal = abs(value.translation.width)
                     let vertical = abs(value.translation.height)
-                    let playerInteractionBottom: CGFloat = controlsVisible ? roomPlayerHeight + 138 : roomPlayerHeight + 28
+                    let playerInteractionBottom: CGFloat = controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80
                     guard !isScrubbingPlayer,
                           value.startLocation.y > playerInteractionBottom,
                           value.startLocation.x <= 44,
@@ -315,7 +315,7 @@ struct RoomView: View {
                 .onEnded { value in
                     let horizontal = abs(value.translation.width)
                     let vertical = abs(value.translation.height)
-                    let playerInteractionBottom: CGFloat = controlsVisible ? roomPlayerHeight + 138 : roomPlayerHeight + 28
+                    let playerInteractionBottom: CGFloat = controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80
                     let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
                     let exitsFromLeftEdge = !isScrubbingPlayer && beganOutsidePlayer && value.startLocation.x <= 44 && value.translation.width > 0
                     let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= UIScreen.main.bounds.width - 44 && value.translation.width < 0
