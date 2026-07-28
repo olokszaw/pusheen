@@ -296,7 +296,7 @@ struct RoomView: View {
         // The room player deliberately extends beneath the status bar. This
         // keeps the media surface pinned to the physical top edge and gives
         // the chat the full remaining height above the keyboard.
-        .ignoresSafeArea(edges: .top)
+        .ignoresSafeArea(edges: [.top, .bottom])
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .offset(x: max(0, roomSwipeOffset))
         .simultaneousGesture(
@@ -743,7 +743,7 @@ struct NativeChatPane: View {
         }
         .padding(.horizontal, 12)
         .padding(.top, 12)
-        .padding(.bottom, 4)
+        .padding(.bottom, 12)
         .liquidCard()
         .task {
             FluentEmojiCache.shared.warmCommonEmoji()
