@@ -656,7 +656,13 @@ struct NativeChatPane: View {
                         NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
                             .id(message.id)
                     }
-                    Color.clear.frame(height: 1).id(bottomAnchorID)
+                    // The composer is translated above the keyboard instead of
+                    // resizing the whole room (the player must stay visible).
+                    // Reserve the same distance inside the scroll content so
+                    // the last messages never render underneath the composer.
+                    Color.clear
+                        .frame(height: inputFocused ? max(1, keyboardInset) : 1)
+                        .id(bottomAnchorID)
                 }
                 .padding(.vertical, 2)
                 .scrollTargetLayout()
@@ -671,6 +677,9 @@ struct NativeChatPane: View {
             }
             .onChange(of: focused) { _, active in
                 if active { pinToBottom() }
+            }
+            .onChange(of: keyboardInset) { _, _ in
+                if inputFocused && sticksToBottom { pinToBottom() }
             }
             .onChange(of: messages.last?.id) { _, _ in
                 if sticksToBottom { pinToBottom() }
