@@ -274,7 +274,7 @@ struct RoomView: View {
             // start below the status bar. Add only the still-uncovered part of
             // the top safe area so the inset is never applied twice.
             let uncoveredSafeTop = max(0, safeTop - geometryTop)
-            let contentTop = uncoveredSafeTop + (chatFocused ? 8 : 18)
+            let contentTop = uncoveredSafeTop + (chatFocused ? 2 : 6)
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
             ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
