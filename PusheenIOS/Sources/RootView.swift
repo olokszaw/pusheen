@@ -249,8 +249,7 @@ struct RoomView: View {
     @State private var chatFocused = false
     @State private var copiedCode = false
     @State private var copyFeedbackTick = 0
-    @State private var leavePending = false
-    @State private var leaveTask: Task<Void, Never>?
+    @State private var roomSwipeOffset: CGFloat = 0
     @State private var controlsVisible = false
     @State private var controlsHideTask: Task<Void, Never>?
     @StateObject private var model: RoomViewModel
@@ -272,14 +271,18 @@ struct RoomView: View {
                                 playerControl(model.isPlaying ? "pause.fill" : "play.fill", primary: true) { model.toggle() }
                                 playerControl("goforward.10") { model.seek(min(model.duration, model.position + 10)) }
                                 Spacer(minLength: 6)
-                                Button { copyInviteCode() } label: {
+                                Button(action: copyInviteCode) {
                                     Image(systemName: copiedCode ? "checkmark" : "link")
                                         .font(.body.weight(.semibold))
-                                        .frame(width: 38, height: 38)
+                                        .frame(width: 48, height: 44)
+                                        .contentShape(Rectangle())
                                         .contentTransition(.symbolEffect(.replace))
                                         .symbolEffect(.bounce, value: copyFeedbackTick)
                                         .liquidCard(Circle())
-                                }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты")
+                                }
+                                .buttonStyle(.plain)
+                                .contentShape(Rectangle())
+                                .accessibilityLabel("Скопировать код комнаты")
                                 Button { showTime = true } label: {
                                     Text(time(model.position)).font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 7).liquidCard(Capsule())
                                 }.buttonStyle(.plain)
@@ -301,35 +304,40 @@ struct RoomView: View {
             .padding(.bottom, chatFocused ? 4 : 10)
             .frame(maxHeight: .infinity, alignment: .top)
         }
-        .overlay(alignment: .top) {
-            if leavePending {
-                HStack(spacing: 10) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                    Text("Выход из комнаты")
-                    Button("Отмена") { cancelLeave() }
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .liquidCard(Capsule())
+        .offset(x: max(0, roomSwipeOffset))
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { value in
+                    let horizontal = abs(value.translation.width)
+                    let vertical = abs(value.translation.height)
+                    guard value.translation.width > 0, horizontal > vertical * 1.25 else { return }
+                    roomSwipeOffset = min(value.translation.width, 420)
                 }
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .liquidCard(Capsule())
-                .padding(.top, 10)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { value in
-            let horizontal = abs(value.translation.width)
-            let vertical = abs(value.translation.height)
-            guard horizontal > vertical * 1.35 else { return }
-            if value.translation.width < -70 {
-                showMembers = true
-            } else if value.translation.width > 70 {
-                beginLeave()
-            }
-        })
+                .onEnded { value in
+                    let horizontal = abs(value.translation.width)
+                    let vertical = abs(value.translation.height)
+                    guard horizontal > vertical * 1.25 else {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { roomSwipeOffset = 0 }
+                        return
+                    }
+                    if value.translation.width < -70 {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) { roomSwipeOffset = 0 }
+                        showMembers = true
+                    } else if value.translation.width > 0 {
+                        let shouldLeave = value.translation.width > 145 || value.predictedEndTranslation.width > 270
+                        if shouldLeave {
+                            withAnimation(.easeOut(duration: 0.2)) { roomSwipeOffset = 520 }
+                            Task {
+                                try? await Task.sleep(for: .milliseconds(190))
+                                guard !Task.isCancelled else { return }
+                                await MainActor.run { dismiss() }
+                            }
+                        } else {
+                            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { roomSwipeOffset = 0 }
+                        }
+                    }
+                }
+        )
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             var transaction = Transaction()
             transaction.disablesAnimations = true
@@ -351,27 +359,18 @@ struct RoomView: View {
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
     private func copyInviteCode() {
-        UIPasteboard.general.string = room.inviteCode
+        controlsHideTask?.cancel()
+        let code = room.inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+        UIPasteboard.general.setValue(code, forPasteboardType: "public.utf8-plain-text")
         copyFeedbackTick += 1
+        let feedbackTick = copyFeedbackTick
         withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) { copiedCode = true }
         Task {
             try? await Task.sleep(for: .seconds(1.6))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, feedbackTick == copyFeedbackTick else { return }
             await MainActor.run { withAnimation(.easeOut(duration: 0.22)) { copiedCode = false } }
         }
-    }
-    private func beginLeave() {
-        leaveTask?.cancel()
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) { leavePending = true }
-        leaveTask = Task {
-            try? await Task.sleep(for: .seconds(1.45))
-            guard !Task.isCancelled else { return }
-            await MainActor.run { dismiss() }
-        }
-    }
-    private func cancelLeave() {
-        leaveTask?.cancel()
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { leavePending = false }
     }
     @ViewBuilder private func playerControl(_ symbol: String, primary: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
