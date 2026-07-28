@@ -267,78 +267,82 @@ struct RoomView: View {
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
-        ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
-            VStack(spacing: 2) {
-                Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
-                    .frame(height: roomPlayerHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
-                    .contentShape(Rectangle())
-                    .onTapGesture { toggleControls() }
-                if controlsVisible {
-                    playerControls
-                        .padding(.horizontal, 2)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                        .zIndex(20)
-                }
-                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardInset: keyboardHeight, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
-                    .frame(maxHeight: .infinity)
-                    .layoutPriority(2)
-            }
-            .padding(.horizontal, 7)
-            .padding(.top, chatFocused ? -18 : -8)
-            .padding(.bottom, 2)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
-            .animation(.spring(response: 0.34, dampingFraction: 0.88), value: chatFocused)
-        }
-        // Only the chat extends into the bottom safe area. The player uses
-        // the spare space below the status bar without ever covering system
-        // indicators; keyboard focus lifts the stack only a little further.
-        .ignoresSafeArea(edges: .bottom)
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-        .offset(x: max(0, roomSwipeOffset))
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 12)
-                .onChanged { value in
-                    let horizontal = abs(value.translation.width)
-                    let vertical = abs(value.translation.height)
-                    let playerInteractionBottom: CGFloat = controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80
-                    guard !isScrubbingPlayer,
-                          value.startLocation.y > playerInteractionBottom,
-                          value.startLocation.x <= 44,
-                          value.translation.width > 0,
-                          horizontal > vertical * 1.25 else { return }
-                    roomSwipeOffset = min(value.translation.width, 420)
-                }
-                .onEnded { value in
-                    let horizontal = abs(value.translation.width)
-                    let vertical = abs(value.translation.height)
-                    let playerInteractionBottom: CGFloat = controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80
-                    let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
-                    let exitsFromLeftEdge = !isScrubbingPlayer && beganOutsidePlayer && value.startLocation.x <= 44 && value.translation.width > 0
-                    let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= UIScreen.main.bounds.width - 44 && value.translation.width < 0
-                    guard horizontal > vertical * 1.25, exitsFromLeftEdge || opensMembersFromRightEdge else {
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { roomSwipeOffset = 0 }
-                        return
+        GeometryReader { geometry in
+            let safeTop = geometry.safeAreaInsets.top
+            let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
+            ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
+                VStack(spacing: 0) {
+                    Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
+                        .frame(height: roomPlayerHeight)
+                        .contentShape(Rectangle())
+                        .onTapGesture { toggleControls() }
+                    if controlsVisible {
+                        playerControls
+                            .padding(.horizontal, 2)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .zIndex(20)
                     }
-                    if value.translation.width < -70 {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) { roomSwipeOffset = 0 }
-                        showMembers = true
-                    } else if value.translation.width > 0 {
-                        let shouldLeave = value.translation.width > 145 || value.predictedEndTranslation.width > 270
-                        if shouldLeave {
-                            withAnimation(.easeOut(duration: 0.2)) { roomSwipeOffset = 520 }
-                            Task {
-                                try? await Task.sleep(for: .milliseconds(190))
-                                guard !Task.isCancelled else { return }
-                                await MainActor.run { dismiss() }
+                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardInset: keyboardHeight, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                        .frame(maxHeight: .infinity)
+                        .layoutPriority(2)
+                }
+                .clipShape(roomShape)
+                .liquidCard(roomShape)
+                .padding(.horizontal, 7)
+                .padding(.top, safeTop + (chatFocused ? 8 : 18))
+                .padding(.bottom, 2)
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+                .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
+                .animation(.spring(response: 0.34, dampingFraction: 0.88), value: chatFocused)
+            }
+            .offset(x: max(0, roomSwipeOffset))
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 12)
+                    .onChanged { value in
+                        let horizontal = abs(value.translation.width)
+                        let vertical = abs(value.translation.height)
+                        let playerInteractionBottom: CGFloat = safeTop + (controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80)
+                        guard !isScrubbingPlayer,
+                              value.startLocation.y > playerInteractionBottom,
+                              value.startLocation.x <= 44,
+                              value.translation.width > 0,
+                              horizontal > vertical * 1.25 else { return }
+                        roomSwipeOffset = min(value.translation.width, 420)
+                    }
+                    .onEnded { value in
+                        let horizontal = abs(value.translation.width)
+                        let vertical = abs(value.translation.height)
+                        let playerInteractionBottom: CGFloat = safeTop + (controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80)
+                        let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
+                        let exitsFromLeftEdge = !isScrubbingPlayer && beganOutsidePlayer && value.startLocation.x <= 44 && value.translation.width > 0
+                        let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= geometry.size.width - 44 && value.translation.width < 0
+                        guard horizontal > vertical * 1.25, exitsFromLeftEdge || opensMembersFromRightEdge else {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { roomSwipeOffset = 0 }
+                            return
+                        }
+                        if value.translation.width < -70 {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) { roomSwipeOffset = 0 }
+                            showMembers = true
+                        } else if value.translation.width > 0 {
+                            let shouldLeave = value.translation.width > 145 || value.predictedEndTranslation.width > 270
+                            if shouldLeave {
+                                withAnimation(.easeOut(duration: 0.2)) { roomSwipeOffset = 520 }
+                                Task {
+                                    try? await Task.sleep(for: .milliseconds(190))
+                                    guard !Task.isCancelled else { return }
+                                    await MainActor.run { dismiss() }
+                                }
+                            } else {
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { roomSwipeOffset = 0 }
                             }
-                        } else {
-                            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { roomSwipeOffset = 0 }
                         }
                     }
-                }
-        )
+            )
+        }
+        // The container owns keyboard avoidance. Its top is clamped by the
+        // real safe-area inset, so it can never slide under system chrome.
+        .ignoresSafeArea(edges: .bottom)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
             keyboardHeight = max(0, min(360, UIScreen.main.bounds.maxY - frame.minY))
@@ -741,10 +745,10 @@ struct NativeChatPane: View {
         .padding(.horizontal, 12)
         .padding(.top, 12)
         .padding(.bottom, 18)
-        .liquidCard()
-        // Keep the glass edge attached to the composer. The keyboard inset
-        // belongs outside the card; placing it inside left a large empty glass
-        // tail below the input while the keyboard was visible.
+        // RoomView owns the single continuous glass surface around video and
+        // chat. A second card here created the visible seam and double corners.
+        // Keyboard avoidance stays outside the chat content so it cannot add a
+        // blank tail inside the message list.
         .padding(.bottom, inputFocused ? keyboardInset : 0)
         .animation(.easeOut(duration: 0.22), value: keyboardInset)
         .task {
