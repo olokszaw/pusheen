@@ -263,7 +263,7 @@ struct RoomView: View {
     @State private var controlsVisible = false
     @State private var isScrubbingPlayer = false
     @State private var controlsHideTask: Task<Void, Never>?
-    private let roomPlayerHeight: CGFloat = 164
+    private let roomPlayerHeight: CGFloat = 214
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
@@ -285,15 +285,15 @@ struct RoomView: View {
                     .layoutPriority(2)
             }
             .padding(.horizontal, 7)
-            .padding(.top, chatFocused ? -50 : 0)
+            .padding(.top, chatFocused ? -18 : -8)
             .padding(.bottom, 2)
             .frame(maxHeight: .infinity, alignment: .top)
             .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
             .animation(.spring(response: 0.34, dampingFraction: 0.88), value: chatFocused)
         }
-        // Only the chat extends into the bottom safe area. The player stays
-        // below the status bar; its compact height offsets that top inset so
-        // the chat keeps the same large viewport above the keyboard.
+        // Only the chat extends into the bottom safe area. The player uses
+        // the spare space below the status bar without ever covering system
+        // indicators; keyboard focus lifts the stack only a little further.
         .ignoresSafeArea(edges: .bottom)
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .offset(x: max(0, roomSwipeOffset))
