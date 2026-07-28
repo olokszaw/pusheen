@@ -274,24 +274,22 @@ struct RoomView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                     .contentShape(Rectangle())
                     .onTapGesture { toggleControls() }
+                if controlsVisible {
+                    playerControls
+                        .padding(.horizontal, 2)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .zIndex(20)
+                }
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardInset: keyboardHeight, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
                     .frame(maxHeight: .infinity)
                     .layoutPriority(2)
             }
             .padding(.horizontal, 7)
-            .padding(.top, 0)
+            .padding(.top, chatFocused ? -50 : 0)
             .padding(.bottom, 2)
             .frame(maxHeight: .infinity, alignment: .top)
-            .overlay(alignment: .top) {
-                if controlsVisible {
-                    playerControls
-                        .padding(.horizontal, 9)
-                        .offset(y: roomPlayerHeight + 8)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                        .zIndex(20)
-                }
-            }
             .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
+            .animation(.spring(response: 0.34, dampingFraction: 0.88), value: chatFocused)
         }
         // Only the chat extends into the bottom safe area. The player stays
         // below the status bar; its compact height offsets that top inset so
@@ -350,8 +348,10 @@ struct RoomView: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 keyboardHeight = 0
-                chatFocused = false
                 showMembers = false
+            }
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                chatFocused = false
             }
         }
         .onChange(of: chatFocused) { _, focused in
