@@ -1103,15 +1103,9 @@ private struct ActivityOrb: View {
 private struct GenrePreferenceOrb: View {
     let genres: [ViewingGenre]
     @Binding var selectedGenreID: String?
-    private var defaultGenre: ViewingGenre {
-        genres.first {
-            let value = $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return value != "другое" && value != "other"
-        } ?? genres[0]
-    }
     var body: some View {
         let total = max(1, genres.reduce(0) { $0 + $1.seconds })
-        let selected = genres.first(where: { $0.id == selectedGenreID }) ?? defaultGenre
+        let selected = genres.first(where: { $0.id == selectedGenreID })
         ZStack {
             ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
                 let before = genres.prefix(index).reduce(0) { $0 + $1.seconds }
@@ -1121,17 +1115,21 @@ private struct GenrePreferenceOrb: View {
                     }
                 } label: {
                     DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total))
-                        .fill(GenrePalette.color(for: genre.name).opacity(genre.id == selected.id ? 1 : 0.68))
-                        .scaleEffect(genre.id == selected.id ? 1.045 : 0.96)
+                        .fill(GenrePalette.color(for: genre.name).opacity(selected == nil || genre.id == selected?.id ? 1 : 0.48))
+                        .scaleEffect(genre.id == selected?.id ? 1.045 : 1)
                         .contentShape(DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total)))
                 }
                 .buttonStyle(.plain)
-                .animation(.spring(response: 0.34, dampingFraction: 0.76), value: selected.id)
+                .animation(.spring(response: 0.34, dampingFraction: 0.76), value: selectedGenreID)
             }
             Circle().fill(.ultraThinMaterial).frame(width: 86, height: 86)
             VStack(spacing: 2) {
-                Text(selected.name).font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
-                Text("\(selected.percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                Text(selected?.name ?? "Жанры").font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
+                if let selected {
+                    Text("\(selected.percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                } else {
+                    Text("Нажми на жанр").font(.caption2).foregroundStyle(.secondary)
+                }
             }.frame(width: 74)
         }
         .overlay(Circle().stroke(.white.opacity(0.24), lineWidth: 1))
