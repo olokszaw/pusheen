@@ -269,6 +269,12 @@ struct RoomView: View {
     var body: some View {
         GeometryReader { geometry in
             let safeTop = geometry.safeAreaInsets.top
+            let geometryTop = geometry.frame(in: .global).minY
+            // Depending on the parent container, GeometryReader may already
+            // start below the status bar. Add only the still-uncovered part of
+            // the top safe area so the inset is never applied twice.
+            let uncoveredSafeTop = max(0, safeTop - geometryTop)
+            let contentTop = uncoveredSafeTop + (chatFocused ? 8 : 18)
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
             ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
@@ -289,7 +295,7 @@ struct RoomView: View {
                 .clipShape(roomShape)
                 .liquidCard(roomShape)
                 .padding(.horizontal, 7)
-                .padding(.top, safeTop + (chatFocused ? 8 : 18))
+                .padding(.top, contentTop)
                 .padding(.bottom, 2)
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
                 .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
@@ -301,7 +307,7 @@ struct RoomView: View {
                     .onChanged { value in
                         let horizontal = abs(value.translation.width)
                         let vertical = abs(value.translation.height)
-                        let playerInteractionBottom: CGFloat = safeTop + (controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80)
+                        let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80)
                         guard !isScrubbingPlayer,
                               value.startLocation.y > playerInteractionBottom,
                               value.startLocation.x <= 44,
@@ -312,7 +318,7 @@ struct RoomView: View {
                     .onEnded { value in
                         let horizontal = abs(value.translation.width)
                         let vertical = abs(value.translation.height)
-                        let playerInteractionBottom: CGFloat = safeTop + (controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80)
+                        let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? roomPlayerHeight + 188 : roomPlayerHeight + 80)
                         let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
                         let exitsFromLeftEdge = !isScrubbingPlayer && beganOutsidePlayer && value.startLocation.x <= 44 && value.translation.width > 0
                         let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= geometry.size.width - 44 && value.translation.width < 0
