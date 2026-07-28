@@ -253,9 +253,13 @@ struct RoomView: View {
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
-            VStack(spacing: 12) {
-                ZStack(alignment: .bottom) {
+            VStack(spacing: 10) {
+                VStack(spacing: 10) {
                     Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
+                        .frame(height: 268)
+                        .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                        .contentShape(Rectangle())
+                        .onTapGesture { toggleControls() }
                     if controlsVisible {
                         VStack(spacing: 7) {
                             PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
@@ -265,7 +269,7 @@ struct RoomView: View {
                                 playerControl("goforward.10") { model.seek(min(model.duration, model.position + 10)) }
                                 Spacer(minLength: 6)
                                 Button { copyInviteCode() } label: {
-                                    Image(systemName: copiedCode ? "checkmark" : "doc.on.doc")
+                                    Image(systemName: copiedCode ? "checkmark" : "link")
                                         .font(.body.weight(.semibold))
                                         .frame(width: 38, height: 38)
                                         .contentTransition(.symbolEffect(.replace))
@@ -278,17 +282,17 @@ struct RoomView: View {
                             .padding(7).liquidCard(Capsule()).opacity(model.isOwner ? 1 : 0.62)
                         }
                         .padding(9)
-                        .background(LinearGradient(colors: [.black.opacity(0.02), .black.opacity(0.58)], startPoint: .top, endPoint: .bottom))
+                        .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
-                .frame(height: 238)
-                .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
-                .contentShape(Rectangle())
-                .onTapGesture { toggleControls() }
                 .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
-            }.padding(.horizontal, 7).padding(.vertical, 12).frame(maxHeight: .infinity, alignment: .top)
+            }
+            .padding(.horizontal, 7)
+            .padding(.top, 8)
+            .padding(.bottom, chatFocused ? 4 : 10)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         .simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { value in
             let horizontal = abs(value.translation.width)
@@ -304,7 +308,9 @@ struct RoomView: View {
                 showMembers = false
             }
         }
-        .navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true).toolbar(.hidden, for: .tabBar).task { await model.start() }.onDisappear { model.stop() }
+        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .tabBar)
+        .task { await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
@@ -1032,6 +1038,12 @@ private struct ViewingActivityCard: View {
         }
         .padding(15)
         .liquidCard(RoundedRectangle(cornerRadius: 26))
+        .contentShape(RoundedRectangle(cornerRadius: 26))
+        .onTapGesture {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
+                selectedGenreID = nil
+            }
+        }
     }
 }
 
