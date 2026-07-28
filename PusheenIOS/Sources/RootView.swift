@@ -278,7 +278,7 @@ struct RoomView: View {
             let playerHeight = chatFocused ? 176.0 : roomPlayerHeight
             let roomHeight = max(playerHeight + 180, geometry.size.height - (chatFocused ? keyboardHeight : 0))
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
-            ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
+            ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
                     Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
                         .frame(height: playerHeight)
