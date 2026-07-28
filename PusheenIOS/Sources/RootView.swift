@@ -261,6 +261,7 @@ struct RoomView: View {
     @State private var roomSwipeOffset: CGFloat = 0
     @State private var keyboardHeight: CGFloat = 0
     @State private var controlsVisible = false
+    @State private var isScrubbingPlayer = false
     @State private var controlsHideTask: Task<Void, Never>?
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
@@ -275,7 +276,13 @@ struct RoomView: View {
                         .onTapGesture { toggleControls() }
                     if controlsVisible {
                         VStack(spacing: 7) {
-                            PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
+                            PlaybackScrubber(
+                                position: model.position,
+                                duration: model.duration,
+                                enabled: model.isOwner,
+                                commit: { model.seek($0) },
+                                interactionChanged: { isScrubbingPlayer = $0 }
+                            )
                             HStack(spacing: 10) {
                                 playerControl("gobackward.10") { model.seek(max(0, model.position - 10)) }
                                 playerControl(model.isPlaying ? "pause.fill" : "play.fill", primary: true) { model.toggle() }
@@ -325,7 +332,10 @@ struct RoomView: View {
                 .onChanged { value in
                     let horizontal = abs(value.translation.width)
                     let vertical = abs(value.translation.height)
-                    guard value.startLocation.x <= 44,
+                    let playerInteractionBottom: CGFloat = controlsVisible ? 390 : 280
+                    guard !isScrubbingPlayer,
+                          value.startLocation.y > playerInteractionBottom,
+                          value.startLocation.x <= 44,
                           value.translation.width > 0,
                           horizontal > vertical * 1.25 else { return }
                     roomSwipeOffset = min(value.translation.width, 420)
@@ -333,8 +343,10 @@ struct RoomView: View {
                 .onEnded { value in
                     let horizontal = abs(value.translation.width)
                     let vertical = abs(value.translation.height)
-                    let exitsFromLeftEdge = value.startLocation.x <= 44 && value.translation.width > 0
-                    let opensMembersFromRightEdge = value.startLocation.x >= UIScreen.main.bounds.width - 44 && value.translation.width < 0
+                    let playerInteractionBottom: CGFloat = controlsVisible ? 390 : 280
+                    let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
+                    let exitsFromLeftEdge = !isScrubbingPlayer && beganOutsidePlayer && value.startLocation.x <= 44 && value.translation.width > 0
+                    let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= UIScreen.main.bounds.width - 44 && value.translation.width < 0
                     guard horizontal > vertical * 1.25, exitsFromLeftEdge || opensMembersFromRightEdge else {
                         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { roomSwipeOffset = 0 }
                         return
@@ -569,6 +581,7 @@ final class PlayerLayerView: UIView {
 
 struct PlaybackScrubber: View {
     let position: Double; let duration: Double; let enabled: Bool; let commit: (Double) -> Void
+    var interactionChanged: (Bool) -> Void = { _ in }
     @State private var dragging: Double?
     private var display: Double { dragging ?? position }
     var body: some View {
@@ -592,7 +605,24 @@ struct PlaybackScrubber: View {
                     .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
                     .offset(x: max(0, min(width - 20, width * ratio - 10)))
                 if let dragging { Text(scrubTime(dragging)).font(.caption2.monospacedDigit().weight(.bold)).padding(.horizontal, 8).padding(.vertical, 5).liquidCard(Capsule()).offset(x: max(0, min(width - 70, width * ratio - 35)), y: -31).transition(.opacity.combined(with: .scale)) }
-            }.frame(height: proxy.size.height).contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { value in guard enabled else { return }; dragging = min(duration, max(0, duration * value.location.x / width)) }.onEnded { _ in if let value = dragging { commit(value) }; dragging = nil })
+            }
+            .frame(height: proxy.size.height)
+            .contentShape(Rectangle())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        guard enabled else { return }
+                        interactionChanged(true)
+                        dragging = min(duration, max(0, duration * value.location.x / width))
+                    }
+                    .onEnded { _ in
+                        defer {
+                            dragging = nil
+                            interactionChanged(false)
+                        }
+                        if let value = dragging { commit(value) }
+                    }
+            )
         }.frame(height: 26).padding(.horizontal, 10).padding(.vertical, 5).liquidCard(Capsule()).opacity(enabled ? 1 : 0.58)
     }
     private func scrubTime(_ seconds: Double) -> String { let total = Int(seconds); return total >= 3600 ? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) : String(format: "%02d:%02d", total / 60, total % 60) }
