@@ -300,16 +300,14 @@ struct RoomView: View {
                     }
                 }
                 .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
-                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
-                    .frame(height: 520)
+                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardInset: keyboardHeight, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                    .frame(maxHeight: .infinity)
                     .layoutPriority(2)
             }
             .padding(.horizontal, 7)
             .padding(.top, 2)
             .padding(.bottom, 10)
             .frame(maxHeight: .infinity, alignment: .top)
-            .offset(y: chatFocused ? -keyboardHeight : 0)
-            .animation(.easeOut(duration: 0.22), value: keyboardHeight)
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .offset(x: max(0, roomSwipeOffset))
@@ -596,6 +594,7 @@ struct NativeChatPane: View {
     let currentUserID: Int?
     @Binding var draft: String
     @Binding var focused: Bool
+    let keyboardInset: CGFloat
     let send: (String, String) -> Void
     let react: (Int, String) -> Void
     // UIKit owns first-responder state for PersistentChatTextField. Using
@@ -656,6 +655,8 @@ struct NativeChatPane: View {
                 .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
             }
             .padding(.horizontal, 26)
+            .offset(y: inputFocused ? -keyboardInset : 0)
+            .animation(.easeOut(duration: 0.22), value: keyboardInset)
         }
         .padding(12)
         .liquidCard()
