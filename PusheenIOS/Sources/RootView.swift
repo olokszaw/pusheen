@@ -254,24 +254,41 @@ struct RoomView: View {
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
             VStack(spacing: 12) {
-                Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
-                    .frame(height: chatFocused ? 104 : 210).clipShape(RoundedRectangle(cornerRadius: 25)).contentShape(Rectangle()).onTapGesture { toggleControls() }.animation(.spring(response: 0.3, dampingFraction: 0.9), value: chatFocused)
-                if controlsVisible {
-                    VStack(spacing: 8) {
-                        PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
-                        HStack(spacing: 10) {
-                            playerControl("gobackward.10") { model.seek(max(0, model.position - 10)) }
-                            playerControl(model.isPlaying ? "pause.fill" : "play.fill", primary: true) { model.toggle() }
-                            playerControl("goforward.10") { model.seek(min(model.duration, model.position + 10)) }
-                            Spacer()
-                            Button { showTime = true } label: { Text(time(model.position)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 5).liquidCard(Capsule()) }.buttonStyle(.plain)
+                ZStack(alignment: .bottom) {
+                    Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
+                    if controlsVisible {
+                        VStack(spacing: 7) {
+                            PlaybackScrubber(position: model.position, duration: model.duration, enabled: model.isOwner) { model.seek($0) }
+                            HStack(spacing: 10) {
+                                playerControl("gobackward.10") { model.seek(max(0, model.position - 10)) }
+                                playerControl(model.isPlaying ? "pause.fill" : "play.fill", primary: true) { model.toggle() }
+                                playerControl("goforward.10") { model.seek(min(model.duration, model.position + 10)) }
+                                Spacer(minLength: 6)
+                                Button { copyInviteCode() } label: {
+                                    Image(systemName: copiedCode ? "checkmark" : "doc.on.doc")
+                                        .font(.body.weight(.semibold))
+                                        .frame(width: 38, height: 38)
+                                        .contentTransition(.symbolEffect(.replace))
+                                        .liquidCard(Circle())
+                                }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты")
+                                Button { showTime = true } label: {
+                                    Text(time(model.position)).font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 7).liquidCard(Capsule())
+                                }.buttonStyle(.plain)
+                            }
+                            .padding(7).liquidCard(Capsule()).opacity(model.isOwner ? 1 : 0.62)
                         }
-                        .padding(8).liquidCard(Capsule()).padding(.horizontal, 3).opacity(model.isOwner ? 1 : 0.42)
+                        .padding(9)
+                        .background(LinearGradient(colors: [.black.opacity(0.02), .black.opacity(0.58)], startPoint: .top, endPoint: .bottom))
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
+                .frame(height: 238)
+                .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                .contentShape(Rectangle())
+                .onTapGesture { toggleControls() }
+                .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
-            }.padding(.horizontal, 9).padding(.vertical, 12).frame(maxHeight: .infinity, alignment: .top)
+            }.padding(.horizontal, 7).padding(.vertical, 12).frame(maxHeight: .infinity, alignment: .top)
         }
         .simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { value in
             let horizontal = abs(value.translation.width)
@@ -287,7 +304,7 @@ struct RoomView: View {
                 showMembers = false
             }
         }
-        .navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).toolbar(.hidden, for: .tabBar).toolbar { ToolbarItem(placement: .topBarTrailing) { Button { copyInviteCode() } label: { Image(systemName: copiedCode ? "checkmark.circle.fill" : "link").foregroundStyle(.primary).contentTransition(.symbolEffect(.replace)) }.buttonStyle(.plain).accessibilityLabel("Скопировать код комнаты") } }.task { await model.start() }.onDisappear { model.stop() }
+        .navigationTitle(room.title).navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true).toolbar(.hidden, for: .tabBar).task { await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
     }
@@ -773,6 +790,8 @@ struct NativeMessageBubble: View {
     // one-word reply compact while giving a real sentence enough readable space.
     private var bubbleWidth: CGFloat {
         if !message.imageDataURL.isEmpty { return 230 }
+        if emojiOnly.count == 1 { return 72 }
+        if emojiOnly.count == 2 { return 112 }
         let count = message.text.trimmingCharacters(in: .whitespacesAndNewlines).count
         switch count {
         case 0...5: return 88
@@ -782,32 +801,62 @@ struct NativeMessageBubble: View {
         default: return 266
         }
     }
+    private var emojiOnly: [String] {
+        let characters = message.text.filter { !$0.isWhitespace }
+        guard !characters.isEmpty, characters.count <= 2 else { return [] }
+        guard characters.allSatisfy({ character in
+            String(character).unicodeScalars.contains {
+                (0x1F000...0x1FAFF).contains(Int($0.value)) || (0x2600...0x27FF).contains(Int($0.value))
+            }
+        }) else { return [] }
+        return characters.map { String($0) }
+    }
+    @ViewBuilder private var messageContent: some View {
+        if !message.text.isEmpty {
+            if !emojiOnly.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(emojiOnly, id: \.self) { emoji in
+                        FluentEmojiGlyph(emoji, size: emojiOnly.count == 1 ? 46 : 37)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 1)
+            } else if containsEmoji {
+                FluentInlineText(message.text).multilineTextAlignment(.leading).layoutPriority(1)
+            } else {
+                Text(message.text)
+                    .font(.subheadline)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+    @ViewBuilder private var bubble: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            messageContent
+            if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
+            if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
+        }
+        .padding(10)
+        .frame(width: bubbleWidth, alignment: .leading)
+        .background(isMine ? Color.indigo.opacity(0.28) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12)))
+        .contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } } }
+    }
     var body: some View {
         if message.isSystem {
             Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
         } else {
-        HStack(alignment: .top, spacing: 9) {
-            if !isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 36) }
-            if isMine { Spacer(minLength: 44) }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary).lineLimit(1)
-                if !message.text.isEmpty {
-                    if containsEmoji {
-                        FluentInlineText(message.text).multilineTextAlignment(.leading).layoutPriority(1)
-                    } else {
-                        Text(message.text)
-                            .font(.subheadline)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            HStack(alignment: .bottom, spacing: 9) {
+                if !isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38) }
+                if isMine { Spacer(minLength: 38) }
+                VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
+                    Text(message.nickname).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 240, alignment: isMine ? .trailing : .leading)
+                    bubble
                 }
-                if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
-                if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
-            }.padding(10).frame(width: bubbleWidth, alignment: .leading).background(isMine ? Color.indigo.opacity(0.28) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12))).contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } }
+                if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38) } else { Spacer(minLength: 18) }
             }
-            if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 36) } else { Spacer(minLength: 20) }
-        }
         }
     }
 }
@@ -890,8 +939,8 @@ struct AvatarView: View {
             }
         }
         .frame(width: size, height: size)
-        .overlay(Circle().stroke(LinearGradient(colors: [.white.opacity(0.58), .white.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
-        .shadow(color: .black.opacity(0.30), radius: 6, y: 3)
+        .clipShape(Circle())
+        .shadow(color: .black.opacity(0.26), radius: 7, y: 3)
     }
 }
 
@@ -954,6 +1003,7 @@ struct ProfileGlassView: View {
 
 private struct ViewingActivityCard: View {
     let stats: ViewingStats?
+    @State private var selectedGenreID: String?
     var body: some View {
         let genres = stats?.genres ?? []
         VStack(alignment: .leading, spacing: 12) {
@@ -974,10 +1024,10 @@ private struct ViewingActivityCard: View {
                         ActivityOrb(daily: stats?.dailySeconds ?? [:])
                         Text("Активность").font(.caption2).foregroundStyle(.secondary)
                     }
-                    GenrePreferenceOrb(genres: genres)
+                    GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
                         .frame(width: 164, height: 164)
                 }
-                GenreLegend(genres: genres)
+                GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
             }
         }
         .padding(15)
@@ -1010,18 +1060,30 @@ private struct ActivityOrb: View {
 
 private struct GenrePreferenceOrb: View {
     let genres: [ViewingGenre]
+    @Binding var selectedGenreID: String?
     var body: some View {
         let total = max(1, genres.reduce(0) { $0 + $1.seconds })
+        let selected = genres.first(where: { $0.id == selectedGenreID }) ?? genres[0]
         ZStack {
             ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
                 let before = genres.prefix(index).reduce(0) { $0 + $1.seconds }
-                DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total))
-                    .fill(GenrePalette.color(for: genre.name).opacity(0.88))
+                Button {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.76)) {
+                        selectedGenreID = genre.id
+                    }
+                } label: {
+                    DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total))
+                        .fill(GenrePalette.color(for: genre.name).opacity(genre.id == selected.id ? 1 : 0.68))
+                        .scaleEffect(genre.id == selected.id ? 1.045 : 0.96)
+                        .contentShape(DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total)))
+                }
+                .buttonStyle(.plain)
+                .animation(.spring(response: 0.34, dampingFraction: 0.76), value: selected.id)
             }
             Circle().fill(.ultraThinMaterial).frame(width: 86, height: 86)
             VStack(spacing: 2) {
-                Text(genres[0].name).font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
-                Text("\(genres[0].percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                Text(selected.name).font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
+                Text("\(selected.percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
             }.frame(width: 74)
         }
         .overlay(Circle().stroke(.white.opacity(0.24), lineWidth: 1))
@@ -1045,19 +1107,27 @@ private struct DonutSlice: Shape {
 
 private struct GenreLegend: View {
     let genres: [ViewingGenre]
+    @Binding var selectedGenreID: String?
     var body: some View {
         let smallText = genres.count > 6
         EmojiFlowLayout(spacing: 6) {
             ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
-                HStack(spacing: 4) {
-                    Circle().fill(GenrePalette.color(for: genre.name)).frame(width: 6, height: 6)
-                    Text("\(genre.name) \(genre.percent)%")
+                Button {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.76)) {
+                        selectedGenreID = genre.id
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Circle().fill(GenrePalette.color(for: genre.name)).frame(width: 6, height: 6)
+                        Text("\(genre.name) \(genre.percent)%")
+                    }
+                    .font(.system(size: smallText ? 9 : 11, weight: .medium))
+                    .foregroundStyle(selectedGenreID == genre.id ? .primary : .secondary)
+                    .padding(.horizontal, smallText ? 6 : 8)
+                    .padding(.vertical, 4)
+                    .background(selectedGenreID == genre.id ? GenrePalette.color(for: genre.name).opacity(0.22) : .white.opacity(0.055), in: Capsule())
                 }
-                .font(.system(size: smallText ? 9 : 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, smallText ? 6 : 8)
-                .padding(.vertical, 4)
-                .background(.white.opacity(0.055), in: Capsule())
+                .buttonStyle(.plain)
             }
         }
     }
