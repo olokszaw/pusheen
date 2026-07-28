@@ -103,6 +103,15 @@ extension View {
         if #available(iOS 26.0, *) { self.glassEffect(.regular.interactive(), in: shape) }
         else { self.background(.ultraThinMaterial, in: shape).overlay(shape.stroke(.white.opacity(0.16))) }
     }
+    @ViewBuilder func genreLiquidGlass<S: Shape>(_ color: Color, in shape: S) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular.tint(color.opacity(0.42)).interactive(), in: shape)
+        } else {
+            self
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(.white.opacity(0.16), lineWidth: 0.75))
+        }
+    }
 }
 
 struct AuthView: View {
@@ -1164,34 +1173,64 @@ private struct GenrePreferenceOrb: View {
     var body: some View {
         let total = max(1, genres.reduce(0) { $0 + $1.seconds })
         let selected = genres.first(where: { $0.id == selectedGenreID })
-        ZStack {
-            ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
-                let before = genres.prefix(index).reduce(0) { $0 + $1.seconds }
-                Button {
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.76)) {
-                        selectedGenreID = genre.id
-                    }
-                } label: {
-                    DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total))
-                        .fill(GenrePalette.color(for: genre.name).opacity(selected == nil || genre.id == selected?.id ? 1 : 0.48))
+        GeometryReader { proxy in
+            ZStack {
+                ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
+                    let before = genres.prefix(index).reduce(0) { $0 + $1.seconds }
+                    let slice = DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total))
+                    let color = GenrePalette.color(for: genre.name)
+                    slice
+                        .fill(color.opacity(selected == nil || genre.id == selected?.id ? 0.48 : 0.20))
+                        .overlay(slice.stroke(.white.opacity(genre.id == selected?.id ? 0.36 : 0.16), lineWidth: genre.id == selected?.id ? 1.15 : 0.7))
+                        .genreLiquidGlass(color, in: slice)
+                        .shadow(color: color.opacity(genre.id == selected?.id ? 0.42 : 0.16), radius: genre.id == selected?.id ? 10 : 4)
                         .scaleEffect(genre.id == selected?.id ? 1.045 : 1)
-                        .contentShape(DonutSlice(start: Double(before) / Double(total), end: Double(before + genre.seconds) / Double(total)))
                 }
-                .buttonStyle(.plain)
-                .animation(.spring(response: 0.34, dampingFraction: 0.76), value: selectedGenreID)
+                Circle().fill(.white.opacity(0.045)).frame(width: 86, height: 86).liquidCard(Circle())
+                VStack(spacing: 2) {
+                    Text(selected?.name ?? "Жанры").font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
+                    if let selected {
+                        Text("\(selected.percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    } else {
+                        Text("Зажми и проведи").font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                    }
+                }.frame(width: 74)
             }
-            Circle().fill(.ultraThinMaterial).frame(width: 86, height: 86)
-            VStack(spacing: 2) {
-                Text(selected?.name ?? "Жанры").font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
-                if let selected {
-                    Text("\(selected.percent)%").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                } else {
-                    Text("Нажми на жанр").font(.caption2).foregroundStyle(.secondary)
-                }
-            }.frame(width: 74)
+            .contentShape(Circle())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in updateSelection(at: value.location, size: proxy.size) }
+            )
+            .animation(.spring(response: 0.27, dampingFraction: 0.82), value: selectedGenreID)
+            .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 0.8).allowsHitTesting(false))
+            .shadow(color: GenrePalette.color(for: selected?.name ?? genres.first?.name ?? "").opacity(selected == nil ? 0.16 : 0.30), radius: selected == nil ? 8 : 13)
         }
-        .overlay(Circle().stroke(.white.opacity(0.24), lineWidth: 1))
-        .shadow(color: GenrePalette.color(for: genres.first?.name ?? "").opacity(0.22), radius: 12)
+    }
+    private func updateSelection(at location: CGPoint, size: CGSize) {
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let dx = location.x - center.x
+        let dy = location.y - center.y
+        let distance = hypot(dx, dy)
+        let outerRadius = min(size.width, size.height) / 2
+        guard distance >= outerRadius - 42, distance <= outerRadius + 10 else { return }
+        var angle = atan2(dy, dx) + .pi / 2
+        if angle < 0 { angle += 2 * .pi }
+        let fraction = angle / (2 * .pi)
+        let total = max(1, genres.reduce(0) { $0 + $1.seconds })
+        var upperBound = 0.0
+        for genre in genres {
+            upperBound += Double(genre.seconds) / Double(total)
+            if fraction <= upperBound {
+                guard selectedGenreID != genre.id else { return }
+                selectedGenreID = genre.id
+                UISelectionFeedbackGenerator().selectionChanged()
+                return
+            }
+        }
+        if let last = genres.last, selectedGenreID != last.id {
+            selectedGenreID = last.id
+            UISelectionFeedbackGenerator().selectionChanged()
+        }
     }
 }
 
