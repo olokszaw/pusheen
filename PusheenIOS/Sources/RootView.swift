@@ -683,10 +683,12 @@ struct NativeChatPane: View {
                 LazyVStack(spacing: 8) {
                     ForEach(messages) { message in
                         NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
+                            .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
                             .id(message.id)
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.top, 2)
+                .padding(.bottom, 2)
                 .scrollTargetLayout()
             }
             .defaultScrollAnchor(.bottom)
@@ -746,7 +748,7 @@ struct NativeChatPane: View {
                 .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
             }
             .padding(.horizontal, 26)
-            .offset(y: -8)
+            .offset(y: -14)
         }
         .padding(.horizontal, 12)
         .padding(.top, 12)
