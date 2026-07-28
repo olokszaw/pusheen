@@ -256,8 +256,10 @@ struct RoomView: View {
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
-            VStack(spacing: 6) {
-                VStack(spacing: 8) {
+            ScrollViewReader { roomProxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 6) {
+                        VStack(spacing: 8) {
                     Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
                         .frame(height: 252)
                         .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
@@ -271,7 +273,7 @@ struct RoomView: View {
                                 playerControl(model.isPlaying ? "pause.fill" : "play.fill", primary: true) { model.toggle() }
                                 playerControl("goforward.10") { model.seek(min(model.duration, model.position + 10)) }
                                 Spacer(minLength: 6)
-                                Button(action: copyInviteCode) {
+                                ZStack {
                                     Image(systemName: copiedCode ? "checkmark" : "link")
                                         .font(.body.weight(.semibold))
                                         .frame(width: 48, height: 44)
@@ -280,9 +282,13 @@ struct RoomView: View {
                                         .symbolEffect(.bounce, value: copyFeedbackTick)
                                         .liquidCard(Circle())
                                 }
-                                .buttonStyle(.plain)
+                                .frame(width: 52, height: 48)
                                 .contentShape(Rectangle())
+                                .highPriorityGesture(TapGesture().onEnded { copyInviteCode() })
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityAddTraits(.isButton)
                                 .accessibilityLabel("Скопировать код комнаты")
+                                .accessibilityAction { copyInviteCode() }
                                 Button { showTime = true } label: {
                                     Text(time(model.position)).font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.vertical, 7).liquidCard(Capsule())
                                 }.buttonStyle(.plain)
@@ -293,16 +299,29 @@ struct RoomView: View {
                         .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
+                        }
+                        .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
+                        NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                            .frame(height: 520)
+                            .layoutPriority(2)
+                        Color.clear.frame(height: 1).id("room-chat-bottom")
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.top, 2)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
-                .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
-                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
-                    .frame(minHeight: chatFocused ? 272 : 0, maxHeight: .infinity)
-                    .layoutPriority(2)
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: chatFocused) { _, focused in
+                    guard focused else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(210))
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            roomProxy.scrollTo("room-chat-bottom", anchor: .bottom)
+                        }
+                    }
+                }
             }
-            .padding(.horizontal, 7)
-            .padding(.top, 2)
-            .padding(.bottom, chatFocused ? 4 : 10)
-            .frame(maxHeight: .infinity, alignment: .top)
         }
         .offset(x: max(0, roomSwipeOffset))
         .simultaneousGesture(
@@ -362,7 +381,8 @@ struct RoomView: View {
         controlsHideTask?.cancel()
         let code = room.inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty else { return }
-        UIPasteboard.general.setValue(code, forPasteboardType: "public.utf8-plain-text")
+        UIPasteboard.general.setItems([["public.utf8-plain-text": code]], options: [:])
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         copyFeedbackTick += 1
         let feedbackTick = copyFeedbackTick
         withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) { copiedCode = true }
