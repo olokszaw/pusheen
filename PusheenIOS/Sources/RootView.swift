@@ -280,7 +280,7 @@ struct RoomView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                         .zIndex(20)
                 }
-                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardInset: keyboardHeight, layoutRevision: controlsVisible, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardInset: keyboardHeight, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
                     .frame(maxHeight: .infinity)
                     .layoutPriority(2)
             }
@@ -653,7 +653,6 @@ struct NativeChatPane: View {
     @Binding var draft: String
     @Binding var focused: Bool
     let keyboardInset: CGFloat
-    let layoutRevision: Bool
     let send: (String, String) -> Void
     let react: (Int, String) -> Void
     // UIKit owns first-responder state for PersistentChatTextField. Using
@@ -665,53 +664,42 @@ struct NativeChatPane: View {
     @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
     @State private var bottomScrollRequest = 0
-    private let bottomAnchorID = Int.min
+    @State private var visibleMessageID: Int?
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Чат").font(.headline)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(messages) { message in
-                            NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
-                                .id(message.id)
-                        }
-                        Color.clear
-                            .frame(height: 1)
-                            .id(bottomAnchorID)
-                    }
-                    .padding(.vertical, 2)
-                }
-                .defaultScrollAnchor(.bottom)
-                .contentShape(Rectangle())
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 3)
-                        .onChanged { _ in sticksToBottom = false }
-                )
-                .onTapGesture { focused = false; inputFocused = false }
-                .onChange(of: focused) { _, active in
-                    if active {
-                        sticksToBottom = true
-                        scrollToBottom(proxy, animated: false)
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(messages) { message in
+                        NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
+                            .id(message.id)
                     }
                 }
-                .onChange(of: keyboardInset) { _, _ in
-                    if inputFocused {
-                        sticksToBottom = true
-                        scrollToBottom(proxy, animated: false)
-                    }
-                }
-                .onChange(of: layoutRevision) { _, _ in
-                    if sticksToBottom { scrollToBottom(proxy, animated: false) }
-                }
-                .onChange(of: bottomScrollRequest) { _, _ in
-                    sticksToBottom = true
-                    scrollToBottom(proxy, animated: true)
-                }
-                .onChange(of: messages.last?.id) { _, _ in
-                    if sticksToBottom { scrollToBottom(proxy, animated: true) }
-                }
+                .padding(.vertical, 2)
+                .scrollTargetLayout()
+            }
+            .defaultScrollAnchor(.bottom)
+            .scrollPosition(id: $visibleMessageID, anchor: .bottom)
+            .contentShape(Rectangle())
+            .onTapGesture { focused = false; inputFocused = false }
+            .onChange(of: visibleMessageID) { _, target in
+                guard let target else { return }
+                sticksToBottom = messages.suffix(3).contains { $0.id == target }
+            }
+            .onChange(of: bottomScrollRequest) { _, _ in
+                sticksToBottom = true
+                scrollToLatestMessage(animated: true)
+            }
+            .onChange(of: messages.last?.id) { _, _ in
+                if sticksToBottom { scrollToLatestMessage(animated: true) }
+            }
+            .onAppear {
+                if visibleMessageID == nil { visibleMessageID = messages.last?.id }
+            }
+            .onChange(of: messages.isEmpty) { _, isEmpty in
+                if isEmpty { visibleMessageID = nil }
+                else if visibleMessageID == nil { visibleMessageID = messages.last?.id }
             }
             .frame(maxHeight: .infinity)
             HStack(alignment: .bottom, spacing: 10) {
@@ -748,6 +736,7 @@ struct NativeChatPane: View {
                 .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
             }
             .padding(.horizontal, 26)
+            .offset(y: -8)
         }
         .padding(.horizontal, 12)
         .padding(.top, 12)
@@ -812,19 +801,14 @@ struct NativeChatPane: View {
         if jpeg.count > 1_850_000, let smaller = normalized.jpegData(compressionQuality: 0.56) { jpeg = smaller }
         return "data:image/jpeg;base64," + jpeg.base64EncodedString()
     }
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
-        DispatchQueue.main.async {
-            if animated {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
-                }
-            } else {
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
-                }
-            }
+    private func scrollToLatestMessage(animated: Bool) {
+        guard let lastID = messages.last?.id else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.18)) { visibleMessageID = lastID }
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { visibleMessageID = lastID }
         }
     }
 }
