@@ -263,13 +263,14 @@ struct RoomView: View {
     @State private var controlsVisible = false
     @State private var isScrubbingPlayer = false
     @State private var controlsHideTask: Task<Void, Never>?
+    private let roomPlayerHeight: CGFloat = 214
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
             VStack(spacing: 6) {
                 Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
-                    .frame(height: 252)
+                    .frame(height: roomPlayerHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                     .contentShape(Rectangle())
                     .onTapGesture { toggleControls() }
@@ -278,14 +279,14 @@ struct RoomView: View {
                     .layoutPriority(2)
             }
             .padding(.horizontal, 7)
-            .padding(.top, 2)
-            .padding(.bottom, 10)
+            .padding(.top, 0)
+            .padding(.bottom, 2)
             .frame(maxHeight: .infinity, alignment: .top)
             .overlay(alignment: .top) {
                 if controlsVisible {
                     playerControls
                         .padding(.horizontal, 9)
-                        .offset(y: 260)
+                        .offset(y: roomPlayerHeight + 8)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                         .zIndex(20)
                 }
@@ -299,7 +300,7 @@ struct RoomView: View {
                 .onChanged { value in
                     let horizontal = abs(value.translation.width)
                     let vertical = abs(value.translation.height)
-                    let playerInteractionBottom: CGFloat = controlsVisible ? 390 : 280
+                    let playerInteractionBottom: CGFloat = controlsVisible ? roomPlayerHeight + 138 : roomPlayerHeight + 28
                     guard !isScrubbingPlayer,
                           value.startLocation.y > playerInteractionBottom,
                           value.startLocation.x <= 44,
@@ -310,7 +311,7 @@ struct RoomView: View {
                 .onEnded { value in
                     let horizontal = abs(value.translation.width)
                     let vertical = abs(value.translation.height)
-                    let playerInteractionBottom: CGFloat = controlsVisible ? 390 : 280
+                    let playerInteractionBottom: CGFloat = controlsVisible ? roomPlayerHeight + 138 : roomPlayerHeight + 28
                     let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
                     let exitsFromLeftEdge = !isScrubbingPlayer && beganOutsidePlayer && value.startLocation.x <= 44 && value.translation.width > 0
                     let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= UIScreen.main.bounds.width - 44 && value.translation.width < 0
@@ -736,7 +737,9 @@ struct NativeChatPane: View {
             .offset(y: inputFocused ? -keyboardInset : 0)
             .animation(.easeOut(duration: 0.22), value: keyboardInset)
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
         .liquidCard()
         .task {
             FluentEmojiCache.shared.warmCommonEmoji()
