@@ -250,16 +250,15 @@ struct RoomView: View {
     @State private var copiedCode = false
     @State private var copyFeedbackTick = 0
     @State private var roomSwipeOffset: CGFloat = 0
+    @State private var keyboardHeight: CGFloat = 0
     @State private var controlsVisible = false
     @State private var controlsHideTask: Task<Void, Never>?
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
-            ScrollViewReader { roomProxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 6) {
-                        VStack(spacing: 8) {
+            VStack(spacing: 6) {
+                VStack(spacing: 8) {
                     Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
                         .frame(height: 252)
                         .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
@@ -299,43 +298,37 @@ struct RoomView: View {
                         .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
-                        }
-                        .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
-                        NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
-                            .frame(height: 520)
-                            .layoutPriority(2)
-                        Color.clear.frame(height: 1).id("room-chat-bottom")
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.top, 2)
-                    .padding(.bottom, 10)
-                    .frame(maxWidth: .infinity, alignment: .top)
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: chatFocused) { _, focused in
-                    guard focused else { return }
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(210))
-                        withAnimation(.easeOut(duration: 0.18)) {
-                            roomProxy.scrollTo("room-chat-bottom", anchor: .bottom)
-                        }
-                    }
-                }
+                .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
+                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                    .frame(height: 520)
+                    .layoutPriority(2)
             }
+            .padding(.horizontal, 7)
+            .padding(.top, 2)
+            .padding(.bottom, 10)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .offset(y: chatFocused ? -keyboardHeight : 0)
+            .animation(.easeOut(duration: 0.22), value: keyboardHeight)
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .offset(x: max(0, roomSwipeOffset))
         .simultaneousGesture(
             DragGesture(minimumDistance: 12)
                 .onChanged { value in
                     let horizontal = abs(value.translation.width)
                     let vertical = abs(value.translation.height)
-                    guard value.translation.width > 0, horizontal > vertical * 1.25 else { return }
+                    guard value.startLocation.x <= 44,
+                          value.translation.width > 0,
+                          horizontal > vertical * 1.25 else { return }
                     roomSwipeOffset = min(value.translation.width, 420)
                 }
                 .onEnded { value in
                     let horizontal = abs(value.translation.width)
                     let vertical = abs(value.translation.height)
-                    guard horizontal > vertical * 1.25 else {
+                    let exitsFromLeftEdge = value.startLocation.x <= 44 && value.translation.width > 0
+                    let opensMembersFromRightEdge = value.startLocation.x >= UIScreen.main.bounds.width - 44 && value.translation.width < 0
+                    guard horizontal > vertical * 1.25, exitsFromLeftEdge || opensMembersFromRightEdge else {
                         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { roomSwipeOffset = 0 }
                         return
                     }
@@ -357,10 +350,15 @@ struct RoomView: View {
                     }
                 }
         )
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            keyboardHeight = max(0, min(360, UIScreen.main.bounds.maxY - frame.minY))
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
+                keyboardHeight = 0
                 chatFocused = false
                 showMembers = false
             }
@@ -571,9 +569,21 @@ struct PlaybackScrubber: View {
             let width = max(1, proxy.size.width)
             let ratio = min(1, max(0, display / max(1, duration)))
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.13)).frame(height: 6)
-                Capsule().fill(LinearGradient(colors: [.mint, .cyan.opacity(0.82), .indigo.opacity(0.86)], startPoint: .leading, endPoint: .trailing)).frame(width: max(10, width * ratio), height: 6)
-                Circle().fill(.white).shadow(color: .cyan.opacity(0.45), radius: 7).frame(width: 18, height: 18).offset(x: max(0, min(width - 18, width * ratio - 9)))
+                Capsule()
+                    .fill(.white.opacity(0.07))
+                    .overlay(Capsule().stroke(.white.opacity(0.13), lineWidth: 0.7))
+                    .frame(height: 5)
+                Capsule()
+                    .fill(.white.opacity(0.34))
+                    .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 0.6))
+                    .frame(width: max(10, width * ratio), height: 5)
+                Circle()
+                    .fill(.white.opacity(0.10))
+                    .overlay(Circle().stroke(.white.opacity(0.48), lineWidth: 0.8))
+                    .frame(width: 20, height: 20)
+                    .liquidCard(Circle())
+                    .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
+                    .offset(x: max(0, min(width - 20, width * ratio - 10)))
                 if let dragging { Text(scrubTime(dragging)).font(.caption2.monospacedDigit().weight(.bold)).padding(.horizontal, 8).padding(.vertical, 5).liquidCard(Capsule()).offset(x: max(0, min(width - 70, width * ratio - 35)), y: -31).transition(.opacity.combined(with: .scale)) }
             }.frame(height: proxy.size.height).contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).onChanged { value in guard enabled else { return }; dragging = min(duration, max(0, duration * value.location.x / width)) }.onEnded { _ in if let value = dragging { commit(value) }; dragging = nil })
         }.frame(height: 26).padding(.horizontal, 10).padding(.vertical, 5).liquidCard(Capsule()).opacity(enabled ? 1 : 0.58)
