@@ -292,7 +292,9 @@ struct RoomView: View {
                     }
                 }
                 .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
-                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
+                NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                    .frame(minHeight: chatFocused ? 272 : 0, maxHeight: .infinity)
+                    .layoutPriority(2)
             }
             .padding(.horizontal, 7)
             .padding(.top, 2)
