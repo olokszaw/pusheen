@@ -664,6 +664,7 @@ struct NativeChatPane: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
+    @State private var bottomScrollRequest = 0
     private let bottomAnchorID = Int.min
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
@@ -703,6 +704,10 @@ struct NativeChatPane: View {
                 }
                 .onChange(of: layoutRevision) { _, _ in
                     if sticksToBottom { scrollToBottom(proxy, animated: false) }
+                }
+                .onChange(of: bottomScrollRequest) { _, _ in
+                    sticksToBottom = true
+                    scrollToBottom(proxy, animated: true)
                 }
                 .onChange(of: messages.last?.id) { _, _ in
                     if sticksToBottom { scrollToBottom(proxy, animated: true) }
@@ -763,6 +768,7 @@ struct NativeChatPane: View {
             } send: {
                 sticksToBottom = true
                 send("", photo.dataURL)
+                bottomScrollRequest += 1
                 pendingPhoto = nil
             }
         }
@@ -773,6 +779,7 @@ struct NativeChatPane: View {
         sticksToBottom = true
         send(text, "")
         draft = ""
+        bottomScrollRequest += 1
     }
     private func preparePhoto(_ item: PhotosPickerItem?) async {
         guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
