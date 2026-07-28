@@ -771,7 +771,7 @@ struct NativeChatPane: View {
         sticksToBottom = true
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction { scrollTarget = bottomAnchorID }
+        withTransaction(transaction) { scrollTarget = bottomAnchorID }
     }
 }
 
