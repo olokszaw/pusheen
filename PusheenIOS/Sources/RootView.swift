@@ -254,10 +254,10 @@ struct RoomView: View {
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
     var body: some View {
         ZStack { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
-            VStack(spacing: 10) {
-                VStack(spacing: 10) {
+            VStack(spacing: 6) {
+                VStack(spacing: 8) {
                     Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
-                        .frame(height: 268)
+                        .frame(height: 252)
                         .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
                         .contentShape(Rectangle())
                         .onTapGesture { toggleControls() }
@@ -291,9 +291,29 @@ struct RoomView: View {
                 NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }).frame(maxHeight: .infinity).layoutPriority(1)
             }
             .padding(.horizontal, 7)
-            .padding(.top, 8)
+            .padding(.top, 2)
             .padding(.bottom, chatFocused ? 4 : 10)
             .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button { copyInviteCode() } label: {
+                ZStack {
+                    Image(systemName: "link")
+                        .opacity(copiedCode ? 0 : 1)
+                        .scaleEffect(copiedCode ? 0.62 : 1)
+                    Image(systemName: "checkmark")
+                        .opacity(copiedCode ? 1 : 0)
+                        .scaleEffect(copiedCode ? 1 : 0.62)
+                }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(copiedCode ? Color.teal : Color.primary)
+                .frame(width: 42, height: 42)
+                .liquidCard(Circle())
+                .animation(.spring(response: 0.28, dampingFraction: 0.72), value: copiedCode)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 9)
+            .padding(.trailing, 14)
         }
         .simultaneousGesture(DragGesture(minimumDistance: 22).onEnded { value in
             let horizontal = abs(value.translation.width)
@@ -311,6 +331,11 @@ struct RoomView: View {
             withTransaction(transaction) {
                 chatFocused = false
                 showMembers = false
+            }
+        }
+        .onChange(of: chatFocused) { _, focused in
+            if focused && controlsVisible {
+                withAnimation(.easeOut(duration: 0.18)) { controlsVisible = false }
             }
         }
         .toolbar(.hidden, for: .navigationBar)
