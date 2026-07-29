@@ -1343,7 +1343,7 @@ private struct ViewingHeatmapCard: View {
             }
             Text(selectedDay.map(activityDetail(for:)) ?? "Нажми на день, чтобы увидеть дату и время.")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(selectedDay == nil ? .secondary : .cyan)
+                .foregroundStyle(selectedDay == nil ? Color.secondary : Color.cyan)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 8)
