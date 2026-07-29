@@ -1366,7 +1366,7 @@ private struct ViewingInsightsPager: View {
                 .frame(width: width, alignment: .leading)
                 .clipped()
                 .contentShape(Rectangle())
-                .simultaneousGesture(
+                .gesture(
                     DragGesture(minimumDistance: 8)
                         .updating($dragTranslation) { value, state, _ in
                             guard abs(value.translation.width) > abs(value.translation.height) else { return }
@@ -1433,6 +1433,13 @@ private struct GenreOnlyCard: View {
     }
 }
 
+private struct HeatmapMonthSection: Identifiable {
+    let start: Date
+    let label: String
+    let columns: [[Date?]]
+    var id: Date { start }
+}
+
 private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
     private let calendar = Calendar.current
@@ -1441,20 +1448,35 @@ private struct ViewingHeatmapCard: View {
     @State private var pinchScale: CGFloat = 1
 
     private var today: Date { calendar.startOfDay(for: Date()) }
-    private var visibleWeekCount: Int { visibleMonths == 1 ? 5 : 13 }
-    private var gridStart: Date {
-        // A continuous range keeps every square meaningful: no leading or
-        // trailing calendar placeholders are needed at either zoom level.
-        calendar.date(byAdding: .day, value: -(visibleWeekCount * 7 - 1), to: today) ?? today
-    }
-    private var columnCount: Int { visibleWeekCount }
-    private var columns: [[Date]] {
-        (0..<visibleWeekCount).map { column in
-            (0..<7).map { row in
-                calendar.date(byAdding: .day, value: column * 7 + row, to: gridStart) ?? today
+    private var monthSections: [HeatmapMonthSection] {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "LLL"
+        let currentComponents = calendar.dateComponents([.year, .month], from: today)
+        let currentStart = calendar.date(from: currentComponents) ?? today
+
+        return (0..<visibleMonths).compactMap { offset in
+            guard let start = calendar.date(byAdding: .month, value: -(visibleMonths - 1) + offset, to: currentStart),
+                  let interval = calendar.dateInterval(of: .month, for: start) else { return nil }
+            let naturalEnd = calendar.date(byAdding: .day, value: -1, to: interval.end) ?? today
+            let end = min(today, naturalEnd)
+            let count = max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
+            let days = (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+            let columnCount = Int(ceil(Double(days.count) / 7.0))
+            let columns: [[Date?]] = (0..<columnCount).map { column in
+                (0..<7).map { row in
+                    let index = column * 7 + row
+                    return index < days.count ? days[index] : nil
+                }
             }
+            return HeatmapMonthSection(
+                start: start,
+                label: formatter.string(from: start).replacingOccurrences(of: ".", with: ""),
+                columns: columns
+            )
         }
     }
+    private var columnCount: Int { monthSections.reduce(0) { $0 + $1.columns.count } }
 
     private var maximum: Int { max(1, daily.values.max() ?? 1) }
 
@@ -1478,45 +1500,44 @@ private struct ViewingHeatmapCard: View {
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
                 let spacing: CGFloat = visibleMonths == 1 ? 6 : 3
-                let fitted = (proxy.size.width - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount)
+                let monthGap: CGFloat = visibleMonths == 1 ? 0 : 8
+                let totalGaps = CGFloat(max(0, columnCount - visibleMonths)) * spacing + CGFloat(max(0, visibleMonths - 1)) * monthGap
+                let fitted = (proxy.size.width - totalGaps) / CGFloat(max(1, columnCount))
                 let labelAllowance: CGFloat = 23
                 let verticalFit = max(8, (proxy.size.height - labelAllowance - 6 * spacing) / 7)
                 let tile = min(visibleMonths == 1 ? 30 : 20, fitted, verticalFit)
-                let chartWidth = CGFloat(columnCount) * tile + CGFloat(columnCount - 1) * spacing
-                VStack(spacing: 9) {
-                    HStack(spacing: spacing) {
-                        ForEach(columns.indices, id: \.self) { columnIndex in
-                            VStack(spacing: spacing) {
-                                ForEach(columns[columnIndex].indices, id: \.self) { rowIndex in
-                                    let day = columns[columnIndex][rowIndex]
-                                    RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                        .fill(color(for: day))
-                                        .frame(width: tile, height: tile)
-                                        .overlay {
-                                            if let selectedDay, day == selectedDay {
-                                                RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                                    .stroke(.white.opacity(0.94), lineWidth: 1.8)
-                                                    .shadow(color: .cyan.opacity(0.8), radius: 6)
-                                            }
+                HStack(alignment: .top, spacing: monthGap) {
+                    ForEach(monthSections) { section in
+                        VStack(alignment: .leading, spacing: 9) {
+                            HStack(spacing: spacing) {
+                                ForEach(section.columns.indices, id: \.self) { columnIndex in
+                                    VStack(spacing: spacing) {
+                                        ForEach(section.columns[columnIndex].indices, id: \.self) { rowIndex in
+                                            let day = section.columns[columnIndex][rowIndex]
+                                            RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                .fill(color(for: day))
+                                                .frame(width: tile, height: tile)
+                                                .overlay {
+                                                    if let selectedDay, day == selectedDay {
+                                                        RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                            .stroke(.white.opacity(0.94), lineWidth: 1.8)
+                                                            .shadow(color: .cyan.opacity(0.8), radius: 6)
+                                                    }
+                                                }
+                                                .contentShape(Rectangle())
+                                                .onTapGesture {
+                                                    guard let day else { return }
+                                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
+                                                }
                                         }
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
-                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
-                    .frame(width: chartWidth)
-                    HStack(spacing: 0) {
-                        ForEach(monthLabels, id: \.self) { month in
-                            Text(month)
+                            Text(section.label)
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    .frame(width: chartWidth)
                 }
                 .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -1527,19 +1548,8 @@ private struct ViewingHeatmapCard: View {
         .simultaneousGesture(heatmapMagnification)
     }
 
-    private var monthLabels: [String] {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
-        formatter.dateFormat = "LLL"
-        if visibleMonths == 1 {
-            return [formatter.string(from: today).replacingOccurrences(of: ".", with: "")]
-        }
-        return (0..<visibleMonths).compactMap { offset in
-            calendar.date(byAdding: .month, value: -(visibleMonths - 1) + offset, to: today).map { formatter.string(from: $0).replacingOccurrences(of: ".", with: "") }
-        }
-    }
-
-    private func color(for day: Date) -> Color {
+    private func color(for day: Date?) -> Color {
+        guard let day else { return .clear }
         let key = ISO8601DateFormatter().string(from: day).prefix(10)
         let value = daily[String(key)] ?? 0
         guard value > 0 else { return .white.opacity(0.11) }
