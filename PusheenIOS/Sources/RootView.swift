@@ -1260,7 +1260,7 @@ private struct ViewingInsightsPager: View {
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
                     Capsule()
-                        .fill(index == page ? .primary.opacity(0.72) : .white.opacity(0.16))
+                        .fill(index == page ? Color.primary.opacity(0.72) : Color.white.opacity(0.16))
                         .frame(width: index == page ? 18 : 6, height: 6)
                         .animation(.spring(response: 0.32, dampingFraction: 0.78), value: page)
                 }
