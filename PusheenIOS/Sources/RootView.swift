@@ -1484,9 +1484,9 @@ private struct ViewingHeatmapCard: View {
             let end = min(today, naturalEnd)
             let count = max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
             let days = (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
-            // Keep the original stable grid geometry so month sections never
-            // collapse or reflow. Slots after today are layout-only and are
-            // rendered fully transparent below.
+            // Keep a stable visual grid so month sections never collapse or
+            // reflow. Dates after today are never created here: their cells
+            // are decorative background only and have no data or interaction.
             let columnCount = visibleMonths == 1 ? 7 : 5
             let rowCount = visibleMonths == 1 ? 5 : 7
             let columns: [[Date?]] = (0..<columnCount).map { column in
@@ -1555,9 +1555,11 @@ private struct ViewingHeatmapCard: View {
                                                         withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
                                                     }
                                             } else {
-                                                // Preserve the original calendar coordinate only.
-                                                // There is deliberately no tile View for future days.
-                                                Color.clear
+                                                // A visual part of the heatmap background, not a
+                                                // future activity day. It has no date, tap target,
+                                                // selection state or accessibility representation.
+                                                RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                    .fill(.white.opacity(0.10))
                                                     .frame(width: tile, height: tile)
                                                     .allowsHitTesting(false)
                                                     .accessibilityHidden(true)
