@@ -1246,18 +1246,61 @@ private struct ViewingInsightsPager: View {
     let stats: ViewingStats?
     let friends: [FriendProfile]
     @State private var page = 0
+    @GestureState private var dragTranslation: CGFloat = 0
+
+    private var pages: [AnyView] {
+        [
+            AnyView(GenreOnlyCard(stats: stats)),
+            AnyView(ViewingHeatmapCard(daily: stats?.dailySeconds ?? [:])),
+            AnyView(SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends)),
+        ]
+    }
 
     var body: some View {
         VStack(spacing: 10) {
-            TabView(selection: $page) {
-                GenreOnlyCard(stats: stats).tag(0)
-                ViewingHeatmapCard(daily: stats?.dailySeconds ?? [:]).tag(1)
-                SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends).tag(2)
+            GeometryReader { proxy in
+                let width = max(1, proxy.size.width)
+                let isHorizontalDrag = abs(dragTranslation) > 0
+                HStack(spacing: 0) {
+                    ForEach(pages.indices, id: \.self) { index in
+                        pages[index]
+                            .frame(width: width, height: proxy.size.height)
+                    }
+                }
+                // A real interactive offset fixes the old UIPageViewController
+                // bounce: returning the finger right now follows it continuously
+                // instead of waiting for the system pager to settle first.
+                .offset(x: -CGFloat(page) * width + dragTranslation)
+                .animation(isHorizontalDrag ? nil : .interactiveSpring(response: 0.36, dampingFraction: 0.88, blendDuration: 0.06), value: page)
+                .frame(width: width, alignment: .leading)
+                .clipped()
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8)
+                        .updating($dragTranslation) { value, state, _ in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            let proposed = value.translation.width
+                            let atLeadingEdge = page == 0 && proposed > 0
+                            let atTrailingEdge = page == pages.count - 1 && proposed < 0
+                            // Keep a small elastic edge only; it cannot make a
+                            // reverse swipe appear stuck at either end.
+                            state = (atLeadingEdge || atTrailingEdge) ? proposed * 0.16 : proposed
+                        }
+                        .onEnded { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            let predicted = value.predictedEndTranslation.width
+                            let threshold = width * 0.18
+                            var next = page
+                            if predicted < -threshold { next += 1 }
+                            if predicted > threshold { next -= 1 }
+                            next = min(max(next, 0), pages.count - 1)
+                            guard next != page else { return }
+                            withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.88, blendDuration: 0.06)) {
+                                page = next
+                            }
+                        }
+                )
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            // The genre legend needs a little breathing room above the page dots.
-            // Keeping this height inside the single outer card prevents the bottom
-            // row from visually escaping the card on compact iPhones.
             .frame(height: 278)
 
             HStack(spacing: 6) {
