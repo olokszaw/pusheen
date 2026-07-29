@@ -432,9 +432,10 @@ struct RoomView: View {
             .opacity(model.isOwner ? 1 : 0.62)
         }
         .padding(9)
-        .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        // Keep the controls part of the same dark glass surface as the chat.
+        // The previous blue wash made this read as a separate, unrelated card.
+        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .tint(.cyan)
     }
     private func copyInviteCode() {
         controlsHideTask?.cancel()
@@ -455,7 +456,7 @@ struct RoomView: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(primary ? .title3.weight(.semibold) : .body.weight(.semibold))
-                .foregroundStyle(.cyan)
+                .foregroundStyle(.primary)
                 .frame(width: primary ? 48 : 42, height: 42)
                 .contentShape(Circle())
                 .liquidCard(Circle())
@@ -694,6 +695,8 @@ struct NativeChatPane: View {
     @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
     @State private var didInitialScroll = false
+    @State private var forceScrollOnNextMessage = false
+    @State private var latestDistanceToBottom: CGFloat = 0
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -716,13 +719,21 @@ struct NativeChatPane: View {
                 .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
                     max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
                 }, action: { _, distanceToBottom in
-                    sticksToBottom = distanceToBottom < 44
+                    // A keyboard/control resize also changes this distance, but it
+                    // is not a user scroll. Keep it only as a measurement and
+                    // commit the reading position when scrolling actually ends.
+                    latestDistanceToBottom = distanceToBottom
                 })
+                .onScrollPhaseChange { _, phase in
+                    guard !phase.isScrolling else { return }
+                    sticksToBottom = latestDistanceToBottom < 44
+                }
                 .onChange(of: messages.last?.id) { oldID, newID in
                     guard newID != nil, newID != oldID else { return }
-                    if !didInitialScroll || sticksToBottom {
+                    if forceScrollOnNextMessage || !didInitialScroll || sticksToBottom {
                         scrollToLatestMessage(proxy, animated: didInitialScroll)
                         didInitialScroll = true
+                        forceScrollOnNextMessage = false
                     }
                 }
                 .onAppear {
@@ -797,6 +808,7 @@ struct NativeChatPane: View {
                 pendingPhoto = nil
             } send: {
                 sticksToBottom = true
+                forceScrollOnNextMessage = true
                 send("", photo.dataURL)
                 pendingPhoto = nil
             }
@@ -806,6 +818,7 @@ struct NativeChatPane: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         sticksToBottom = true
+        forceScrollOnNextMessage = true
         send(text, "")
         draft = ""
     }
