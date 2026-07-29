@@ -2180,9 +2180,11 @@ private struct FriendSwipeRow: View {
     @State private var removing = false
     @State private var showDeleteConfirmation = false
     @State private var deletePromptTriggeredByDrag = false
+    @State private var deletePromptHoldOffset: CGFloat?
 
     private let settledOffset: CGFloat = -104
     private var offset: CGFloat {
+        if let deletePromptHoldOffset { return deletePromptHoldOffset }
         let settled = revealed ? settledOffset : 0
         return min(0, max(-148, settled + swipeGesture.horizontalTranslation))
     }
@@ -2292,15 +2294,18 @@ private struct FriendSwipeRow: View {
                     // row to its resting offset: that produced a second, automatic
                     // left swipe before the dialog appeared.
                     deletePromptTriggeredByDrag = true
+                    // Freeze the card exactly where the user's finger crossed
+                    // the threshold. Presentation cancels the drag gesture, but
+                    // this retained offset prevents a close/reopen flicker.
+                    deletePromptHoldOffset = min(0, max(-148, value.translation.width))
                     showDeleteConfirmation = true
                 }
                 .onEnded { value in
                     guard person.isFriend else { return }
                     if deletePromptTriggeredByDrag {
-                        // Presentation cancels the active drag and the row returns
-                        // directly to its normal shape behind the dialog.
+                        // The confirmation owns the retained offset now. Do not
+                        // run another settle animation after the gesture ends.
                         deletePromptTriggeredByDrag = false
-                        revealed = false
                         return
                     }
                     guard swipeGesture.isHorizontal || abs(value.translation.width) >= abs(value.translation.height) else { return }
@@ -2322,10 +2327,21 @@ private struct FriendSwipeRow: View {
         .confirmationDialog("Удалить \(person.nickname) из друзей?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
             Button("Удалить", role: .destructive) { performRemove() }
             Button("Отмена", role: .cancel) {
-                withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88)) { revealed = false }
+                withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88)) {
+                    deletePromptHoldOffset = nil
+                    revealed = false
+                }
             }
         } message: {
             Text("Пользователь исчезнет из списка друзей.")
+        }
+        .onChange(of: showDeleteConfirmation) { _, isPresented in
+            guard !isPresented, !removing else { return }
+            deletePromptTriggeredByDrag = false
+            withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88)) {
+                deletePromptHoldOffset = nil
+                revealed = false
+            }
         }
     }
 
@@ -2342,7 +2358,10 @@ private struct FriendSwipeRow: View {
             await remove()
             await MainActor.run {
                 removing = false
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { revealed = false }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                    deletePromptHoldOffset = nil
+                    revealed = false
+                }
             }
         }
     }
