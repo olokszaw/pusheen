@@ -612,52 +612,100 @@ struct MembersSheet: View {
     let moderate: (RoomMember, String) async -> Void
     @State private var selected: RoomMember?
     var body: some View {
-        ZStack { AcrylicBackground(); VStack(alignment: .leading, spacing: 12) {
-            Text("Участники").font(.title2.bold())
-            ForEach(members) { member in
-                HStack(spacing: 11) {
-                    AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 46)
-                    VStack(alignment: .leading) {
-                        HStack { Text(member.nickname).bold(); if member.isOwner { Image(systemName: "crown.fill").font(.caption).foregroundStyle(.yellow) }; if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
-                        Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer(); if member.isMuted { Image(systemName: "speaker.slash.fill").font(.caption).foregroundStyle(.orange) }; Circle().fill(member.isOnline ? .green : .gray).frame(width: 8, height: 8)
-                }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 17))
-                    .contentShape(RoundedRectangle(cornerRadius: 17))
-                    .onLongPressGesture { guard canModerate && !member.isOwner else { return }; selected = member }
-            }; Spacer()
-        }.padding(20) }
+        ZStack {
+            AcrylicBackground()
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Участники").font(.title2.bold())
+                ForEach(members) { member in
+                    HStack(spacing: 11) {
+                        AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 46)
+                        VStack(alignment: .leading) {
+                            HStack { Text(member.nickname).bold(); if member.isOwner { Image(systemName: "crown.fill").font(.caption).foregroundStyle(.yellow) }; if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
+                            Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(); if member.isMuted { Image(systemName: "speaker.slash.fill").font(.caption).foregroundStyle(.orange) }; Circle().fill(member.isOnline ? .green : .gray).frame(width: 8, height: 8)
+                    }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 17))
+                        .contentShape(RoundedRectangle(cornerRadius: 17))
+                        .onLongPressGesture { guard canModerate && !member.isOwner else { return }; withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { selected = member } }
+                }; Spacer()
+            }
+            .padding(20)
+            .blur(radius: selected == nil ? 0 : 13)
+            .scaleEffect(selected == nil ? 1 : 0.985)
+            .allowsHitTesting(selected == nil)
+
+            if let member = selected {
+                Color.black.opacity(0.34)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { closeModerationMenu() }
+                    .transition(.opacity)
+                MemberModerationOverlay(member: member) { action in
+                    closeModerationMenu()
+                    Task { await moderate(member, action) }
+                }
+                .padding(.horizontal, 24)
+                .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                .zIndex(2)
+            }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.84), value: selected?.id)
         .presentationDetents([.medium, .large]).presentationBackground(.clear)
-        .sheet(item: $selected) { member in MemberModerationSheet(member: member) { action in
-            selected = nil
-            Task { await moderate(member, action) }
-        } }
+    }
+
+    private func closeModerationMenu() {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { selected = nil }
     }
 }
 
-private struct MemberModerationSheet: View {
-    @Environment(\.dismiss) private var dismiss
+private struct MemberModerationOverlay: View {
     let member: RoomMember
     let action: (String) -> Void
     var body: some View {
-        VStack(spacing: 14) {
-            AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 66)
-            Text(member.nickname).font(.title3.bold())
-            Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
-            VStack(spacing: 9) {
-                moderationButton("speaker.slash", "Замутить", "mute", color: .orange)
-                moderationButton("person.crop.circle.badge.xmark", "Кикнуть из комнаты", "kick", color: .primary)
-                moderationButton("crown", "Передать лидерство", "transfer", color: .yellow)
-                moderationButton("hand.raised.fill", "Забанить", "ban", color: .red)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(member.nickname).font(.headline)
+                    Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(15)
+
+            Divider().overlay(.white.opacity(0.08))
+
+            VStack(spacing: 0) {
+                moderationButton("speaker.slash.fill", member.isMuted ? "Размутить" : "Замутить", "mute", color: .orange)
+                menuDivider
+                moderationButton("rectangle.portrait.and.arrow.right", "Выгнать", "kick", color: .primary)
+                menuDivider
+                moderationButton("crown.fill", "Передать управление", "transfer", color: .yellow)
+                menuDivider
+                moderationButton("person.crop.circle.badge.xmark", "Заблокировать", "ban", color: .red)
             }
         }
-        .padding(22).presentationDetents([.height(390)]).presentationBackground(.ultraThinMaterial).presentationCornerRadius(30)
+        .frame(maxWidth: 340)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 27, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 27, style: .continuous).stroke(.white.opacity(0.16), lineWidth: 0.8))
+        .shadow(color: .black.opacity(0.38), radius: 28, y: 16)
     }
     private func moderationButton(_ icon: String, _ title: String, _ key: String, color: Color) -> some View {
-        Button { action(key); dismiss() } label: {
-            Label(title, systemImage: icon).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 14).foregroundStyle(color).liquidCard(RoundedRectangle(cornerRadius: 17))
-        }.buttonStyle(.plain)
+        Button { action(key) } label: {
+            HStack(spacing: 13) {
+                Image(systemName: icon).font(.system(size: 17, weight: .semibold)).frame(width: 23)
+                Text(title).font(.body.weight(.medium))
+                Spacer()
+            }
+            .foregroundStyle(color)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
+
+    private var menuDivider: some View { Divider().padding(.leading, 52).overlay(.white.opacity(0.07)) }
 }
 
 struct BarePlayerSurface: UIViewRepresentable {
@@ -1439,9 +1487,11 @@ private struct ViewingHeatmapCard: View {
                 .padding(.vertical, 8)
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
-                let spacing: CGFloat = visibleMonths == 1 ? 7 : 4
+                let spacing: CGFloat = visibleMonths == 1 ? 5 : 3
                 let fitted = (proxy.size.width - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount)
-                let tile = min(visibleMonths == 1 ? 30 : 20, fitted)
+                let labelAllowance: CGFloat = 23
+                let verticalFit = max(8, (proxy.size.height - labelAllowance - 6 * spacing) / 7)
+                let tile = min(visibleMonths == 1 ? 23 : 20, fitted, verticalFit)
                 let chartWidth = CGFloat(columnCount) * tile + CGFloat(columnCount - 1) * spacing
                 VStack(spacing: 9) {
                     HStack(spacing: spacing) {
@@ -1482,17 +1532,10 @@ private struct ViewingHeatmapCard: View {
                 .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
-            .frame(height: visibleMonths == 1 ? 225 : 195)
-            .simultaneousGesture(MagnificationGesture()
-                .onChanged { pinchScale = min(1.18, max(0.84, $0)) }
-                .onEnded { value in
-                    let next = value > 1.06 ? 1 : (value < 0.94 ? 3 : visibleMonths)
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
-                        visibleMonths = next
-                        pinchScale = 1
-                    }
-                })
+            .frame(height: 184)
         }
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .simultaneousGesture(heatmapMagnification)
     }
 
     private var monthLabels: [String] {
@@ -1505,11 +1548,33 @@ private struct ViewingHeatmapCard: View {
     }
 
     private func color(for day: Date?) -> Color {
-        guard let day else { return .clear }
+        guard let day else { return .white.opacity(0.065) }
         let key = ISO8601DateFormatter().string(from: day).prefix(10)
         let value = daily[String(key)] ?? 0
         guard value > 0 else { return .white.opacity(0.11) }
         return Color.cyan.opacity(0.30 + 0.70 * Double(value) / Double(maximum))
+    }
+
+    private var heatmapMagnification: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                pinchScale = min(1.16, max(0.86, value))
+            }
+            .onEnded { value in
+                let next: Int
+                if value > 1.04 {
+                    next = 1
+                } else if value < 0.96 {
+                    next = 3
+                } else {
+                    next = visibleMonths
+                }
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
+                    visibleMonths = next
+                    selectedDay = nil
+                    pinchScale = 1
+                }
+            }
     }
 
     private func activityDetail(for day: Date) -> String {
