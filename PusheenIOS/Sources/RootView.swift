@@ -1458,7 +1458,7 @@ private struct GenreOnlyCard: View {
 private struct HeatmapMonthSection: Identifiable {
     let start: Date
     let label: String
-    let columns: [[Date]]
+    let columns: [[Date?]]
     var id: Date { start }
 }
 
@@ -1484,27 +1484,15 @@ private struct ViewingHeatmapCard: View {
             let end = min(today, naturalEnd)
             let count = max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
             let days = (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
-            // Build the grid from elapsed days only. Future dates must not be
-            // rendered as placeholder tiles, while the existing dates still
-            // expand to consume the full available width.
-            let columns: [[Date]]
-            if visibleMonths == 1 {
-                let columnCount = min(7, max(1, days.count))
-                let rowCount = max(1, Int(ceil(Double(days.count) / Double(columnCount))))
-                columns = (0..<columnCount).map { column in
-                    (0..<rowCount).compactMap { row in
-                        let index = row * columnCount + column
-                        return index < days.count ? days[index] : nil
-                    }
-                }
-            } else {
-                let rowCount = 7
-                let columnCount = max(1, Int(ceil(Double(days.count) / Double(rowCount))))
-                columns = (0..<columnCount).map { column in
-                    (0..<rowCount).compactMap { row in
-                        let index = column * rowCount + row
-                        return index < days.count ? days[index] : nil
-                    }
+            // Keep the original stable grid geometry so month sections never
+            // collapse or reflow. Slots after today are layout-only and are
+            // rendered fully transparent below.
+            let columnCount = visibleMonths == 1 ? 7 : 5
+            let rowCount = visibleMonths == 1 ? 5 : 7
+            let columns: [[Date?]] = (0..<columnCount).map { column in
+                (0..<rowCount).map { row in
+                    let index = visibleMonths == 1 ? row * columnCount + column : column * rowCount + row
+                    return index < days.count ? days[index] : nil
                 }
             }
             return HeatmapMonthSection(
@@ -1555,7 +1543,7 @@ private struct ViewingHeatmapCard: View {
                                                 .fill(color(for: day))
                                                 .frame(width: tile, height: tile)
                                                 .overlay {
-                                                    if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
+                                                    if let day, let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
                                                         RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
                                                             .stroke(.white.opacity(0.94), lineWidth: 1.8)
                                                             .shadow(color: .cyan.opacity(0.8), radius: 6)
@@ -1563,6 +1551,7 @@ private struct ViewingHeatmapCard: View {
                                                 }
                                                 .contentShape(Rectangle())
                                                 .onTapGesture {
+                                                    guard let day else { return }
                                                     withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
                                                 }
                                         }
@@ -1587,7 +1576,10 @@ private struct ViewingHeatmapCard: View {
         .simultaneousGesture(heatmapMagnification)
     }
 
-    private func color(for day: Date) -> Color {
+    private func color(for day: Date?) -> Color {
+        // Future days reserve their old coordinates but are not visible and
+        // cannot be selected. This prevents the jagged/repacked layout.
+        guard let day else { return .clear }
         let key = ISO8601DateFormatter().string(from: day).prefix(10)
         let value = daily[String(key)] ?? 0
         guard value > 0 else { return .white.opacity(0.10) }
