@@ -112,6 +112,14 @@ extension View {
                 .overlay(shape.stroke(.white.opacity(0.16), lineWidth: 0.75))
         }
     }
+
+    /// Liquid Glass without the system press deformation. Use this for views
+    /// that already have their own drag interaction, otherwise iOS 26 pushes
+    /// the whole surface inward while the finger is held down.
+    @ViewBuilder func passiveLiquidCard<S: Shape>(_ shape: S = RoundedRectangle(cornerRadius: 26)) -> some View {
+        if #available(iOS 26.0, *) { self.glassEffect(.regular, in: shape) }
+        else { self.background(.ultraThinMaterial, in: shape).overlay(shape.stroke(.white.opacity(0.16))) }
+    }
 }
 
 struct AuthView: View {
@@ -2250,7 +2258,7 @@ private struct FriendSwipeRow: View {
             }
             .padding(11)
             .background(.clear)
-            .liquidCard(RoundedRectangle(cornerRadius: 20))
+            .passiveLiquidCard(RoundedRectangle(cornerRadius: 20))
             .offset(x: offset)
             .contentShape(RoundedRectangle(cornerRadius: 20))
             .zIndex(1)
@@ -2277,12 +2285,19 @@ private struct FriendSwipeRow: View {
                     guard swipeGesture.isHorizontal || abs(value.translation.width) >= abs(value.translation.height) else { return }
                     let wasRevealed = revealed
                     let projected = value.predictedEndTranslation.width + (wasRevealed ? settledOffset : 0)
-                    withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08)) {
-                        if !wasRevealed && projected < -132 {
+                    let actual = value.translation.width + (wasRevealed ? settledOffset : 0)
+                    if !wasRevealed && actual <= -64 {
+                        // Present immediately on release. Keeping this state out
+                        // of the spring transaction prevents SwiftUI from waiting
+                        // for the row's automatic settle animation to finish.
+                        showDeleteConfirmation = true
+                        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.90, blendDuration: 0.04)) {
                             revealed = true
-                            showDeleteConfirmation = true
-                            return
-                        } else if wasRevealed {
+                        }
+                        return
+                    }
+                    withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08)) {
+                        if wasRevealed {
                             // Once the row visibly follows a deliberate reverse
                             // gesture, let it close instead of snapping back left.
                             revealed = !(value.translation.width > 8 || value.predictedEndTranslation.width > 18)
