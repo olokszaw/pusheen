@@ -1309,10 +1309,12 @@ private struct ViewingHeatmapCard: View {
         return (0..<numberOfDays).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
     }
 
+    private var gridColumnCount: Int { visibleMonths == 1 ? 8 : 15 }
+
     private var weeks: [[Date?]] {
-        stride(from: 0, to: days.count, by: 7).map { start in
-            let week: [Date?] = Array(days[start..<min(start + 7, days.count)]).map(Optional.some)
-            return week + Array(repeating: nil, count: 7 - week.count)
+        stride(from: 0, to: days.count, by: gridColumnCount).map { start in
+            let row: [Date?] = Array(days[start..<min(start + gridColumnCount, days.count)]).map(Optional.some)
+            return row + Array(repeating: nil, count: gridColumnCount - row.count)
         }
     }
 
@@ -1349,19 +1351,19 @@ private struct ViewingHeatmapCard: View {
                 .padding(.vertical, 8)
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
-                let tile = visibleMonths == 1
-                    ? max(13, min(15, (proxy.size.width - CGFloat(weeks.count - 1) * 3) / CGFloat(max(1, weeks.count))))
-                    : max(9, min(13, (proxy.size.width - CGFloat(weeks.count - 1) * 2) / CGFloat(max(1, weeks.count))))
-                HStack(alignment: .top, spacing: visibleMonths == 1 ? 3 : 2) {
-                    ForEach(weeks.indices, id: \.self) { weekIndex in
-                        let week = weeks[weekIndex]
-                        VStack(spacing: visibleMonths == 1 ? 3 : 2) {
-                            ForEach(week.indices, id: \.self) { dayIndex in
+                let spacing: CGFloat = visibleMonths == 1 ? 5 : 3
+                let fitted = (proxy.size.width - CGFloat(gridColumnCount - 1) * spacing) / CGFloat(gridColumnCount)
+                let tile = visibleMonths == 1 ? min(24, fitted) : min(17, fitted)
+                VStack(alignment: .leading, spacing: spacing) {
+                    ForEach(weeks.indices, id: \.self) { rowIndex in
+                        let row = weeks[rowIndex]
+                        HStack(spacing: spacing) {
+                            ForEach(row.indices, id: \.self) { dayIndex in
                                 RoundedRectangle(cornerRadius: max(2.2, tile * 0.27), style: .continuous)
-                                    .fill(color(for: week[dayIndex]))
+                                    .fill(color(for: row[dayIndex]))
                                     .frame(width: tile, height: tile)
                                     .overlay {
-                                        if week[dayIndex] == selectedDay {
+                                        if row[dayIndex] == selectedDay {
                                             RoundedRectangle(cornerRadius: max(2.2, tile * 0.27), style: .continuous)
                                                 .stroke(Color.white.opacity(0.92), lineWidth: 1.6)
                                                 .shadow(color: .cyan.opacity(0.7), radius: 5)
@@ -1369,16 +1371,16 @@ private struct ViewingHeatmapCard: View {
                                     }
                                     .contentShape(Rectangle())
                                     .onTapGesture {
-                                        guard let day = week[dayIndex] else { return }
+                                        guard let day = row[dayIndex] else { return }
                                         withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { selectedDay = day }
                                     }
                             }
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
-            .frame(height: visibleMonths == 1 ? 118 : 94)
+            .frame(height: 118)
             .simultaneousGesture(MagnificationGesture().onEnded { value in
                 let next = value > 1.05 ? 1 : (value < 0.95 ? 3 : visibleMonths)
                 guard next != visibleMonths else { return }
@@ -1408,7 +1410,7 @@ private struct ViewingHeatmapCard: View {
         guard let day else { return .clear }
         let key = ISO8601DateFormatter().string(from: day).prefix(10)
         let value = daily[String(key)] ?? 0
-        guard value > 0 else { return .white.opacity(0.055) }
+        guard value > 0 else { return .white.opacity(0.11) }
         return Color.cyan.opacity(0.30 + 0.70 * Double(value) / Double(maximum))
     }
 
