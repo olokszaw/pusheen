@@ -419,19 +419,37 @@ def moderate_member(request, room_id, user_id):
             return Response({"detail": "Только создатель управляет участниками"}, status=403)
         if user_id == request.user.id:
             return Response({"detail": "Нельзя применить это действие к себе"}, status=400)
-        member = get_object_or_404(RoomMember.objects.select_for_update(), room=room, user_id=user_id)
+        member = get_object_or_404(
+            RoomMember.objects.select_for_update().select_related(
+                "user", "user__watch_profile", "user__client_identity"
+            ),
+            room=room,
+            user_id=user_id,
+        )
+        actor_name = public_profile(request.user)["nickname"]
+        target_name = public_profile(member.user)["nickname"]
         action = str(request.data.get("action") or "")
+        muted = member.is_muted
         if action == "mute":
             member.is_muted = not member.is_muted
             member.save(update_fields=["is_muted"])
+            muted = member.is_muted
+            system_text = (
+                f"{actor_name} заглушил(а) {target_name}"
+                if muted
+                else f"{actor_name} разрешил(а) писать {target_name}"
+            )
         elif action == "kick":
             member.delete()
+            system_text = f"{actor_name} выгнал(а) {target_name}"
         elif action == "ban":
             RoomBan.objects.get_or_create(room=room, user_id=user_id)
             member.delete()
+            system_text = f"{actor_name} заблокировал(а) {target_name}"
         elif action == "transfer":
             room.owner_id = user_id
             room.save(update_fields=["owner"])
+            system_text = f"{actor_name} передал(а) управление {target_name}"
         else:
             return Response({"detail": "Неизвестное действие"}, status=400)
     # REST changes also need to reach people who are already in the room.  Do
@@ -444,10 +462,16 @@ def moderate_member(request, room_id, user_id):
                 "action": action,
                 "user_id": user_id,
                 "owner_id": room.owner_id,
+                "muted": muted,
+                "actor_name": actor_name,
+                "target_name": target_name,
+                "system_text": system_text,
             },
         },
     )
-    return Response({"ok": True, "action": action})
+    return Response(
+        {"ok": True, "action": action, "muted": muted, "system_text": system_text}
+    )
 
 
 @api_view(["GET"])

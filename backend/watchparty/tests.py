@@ -21,6 +21,37 @@ class RoomApiTests(APITestCase):
     def authenticate(self, token):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
 
+    def test_moderation_returns_realtime_system_event_and_muted_state(self):
+        UserProfile.objects.create(user=self.owner, nickname="Создатель")
+        UserProfile.objects.create(user=self.guest, nickname="Гость")
+        room = Room.objects.create(owner=self.owner, title="Модерация")
+        RoomMember.objects.create(room=room, user=self.owner)
+        member = RoomMember.objects.create(room=room, user=self.guest)
+        self.authenticate(self.owner_token)
+
+        muted = self.client.post(
+            f"/api/rooms/{room.id}/members/{self.guest.id}/moderate/",
+            {"action": "mute"},
+            format="json",
+        )
+        self.assertEqual(muted.status_code, 200)
+        self.assertTrue(muted.data["muted"])
+        self.assertEqual(muted.data["system_text"], "Создатель заглушил(а) Гость")
+        member.refresh_from_db()
+        self.assertTrue(member.is_muted)
+
+        unmuted = self.client.post(
+            f"/api/rooms/{room.id}/members/{self.guest.id}/moderate/",
+            {"action": "mute"},
+            format="json",
+        )
+        self.assertEqual(unmuted.status_code, 200)
+        self.assertFalse(unmuted.data["muted"])
+        self.assertEqual(
+            unmuted.data["system_text"],
+            "Создатель разрешил(а) писать Гость",
+        )
+
     def test_registration_separates_unique_username_and_repeatable_nickname(self):
         first = self.client.post(
             "/api/auth/register/",

@@ -307,7 +307,7 @@ struct RoomView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                             .zIndex(20)
                     }
-                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, isMuted: model.isMuted, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
                         .frame(maxHeight: .infinity)
                         .layoutPriority(2)
                 }
@@ -676,7 +676,7 @@ private struct MemberModerationOverlay: View {
             Divider().overlay(.white.opacity(0.08))
 
             VStack(spacing: 0) {
-                moderationButton("speaker.slash.fill", member.isMuted ? "Размутить" : "Замутить", "mute", color: .orange)
+                moderationButton("speaker.slash.fill", member.isMuted ? "Снять заглушение" : "Заглушить", "mute", color: .orange)
                 menuDivider
                 moderationButton("rectangle.portrait.and.arrow.right", "Выгнать", "kick", color: .primary)
                 menuDivider
@@ -775,6 +775,7 @@ struct NativeChatPane: View {
     let currentUserID: Int?
     @Binding var draft: String
     @Binding var focused: Bool
+    let isMuted: Bool
     let send: (String, String) -> Void
     let react: (Int, String) -> Void
     // UIKit owns first-responder state for PersistentChatTextField. Using
@@ -843,6 +844,8 @@ struct NativeChatPane: View {
                         .liquidCard(Circle())
                 }
                 .buttonStyle(.plain)
+                .disabled(isMuted)
+                .opacity(isMuted ? 0.42 : 1)
                 .onChange(of: selectedPhoto) { _, item in Task { await preparePhoto(item) } }
 
                 HStack(alignment: .bottom, spacing: 7) {
@@ -850,6 +853,8 @@ struct NativeChatPane: View {
                         text: $draft,
                         isFocused: Binding(get: { inputFocused }, set: { inputFocused = $0 }),
                         height: $inputHeight,
+                        isEnabled: !isMuted,
+                        placeholder: isMuted ? "Вас заглушили" : "Сообщение…",
                         onSubmit: submit
                     )
                         .frame(height: inputHeight)
@@ -861,6 +866,8 @@ struct NativeChatPane: View {
                         .frame(width: 38, height: 38)
                         .contentShape(Circle())
                         .onTapGesture { submit() }
+                        .allowsHitTesting(!isMuted)
+                        .opacity(isMuted ? 0.42 : 1)
                         .accessibilityAddTraits(.isButton)
                 }
                 .padding(.leading, 14)
@@ -885,6 +892,12 @@ struct NativeChatPane: View {
             // RoomView can explicitly close the keyboard before presenting
             // participants; keep UIKit and SwiftUI focus in sync.
             if !roomFocused { inputFocused = false }
+        }
+        .onChange(of: isMuted) { _, muted in
+            guard muted else { return }
+            draft = ""
+            focused = false
+            inputFocused = false
         }
         .task {
             FluentEmojiCache.shared.warmCommonEmoji()
@@ -1009,6 +1022,8 @@ private struct PersistentChatTextField: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
     @Binding var height: CGFloat
+    let isEnabled: Bool
+    let placeholder: String
     let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -1023,6 +1038,7 @@ private struct PersistentChatTextField: UIViewRepresentable {
         view.enablesReturnKeyAutomatically = true
         view.autocorrectionType = .yes
         view.backgroundColor = .clear
+        view.isEditable = isEnabled
         view.isScrollEnabled = false
         view.showsVerticalScrollIndicator = true
         view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
@@ -1037,6 +1053,8 @@ private struct PersistentChatTextField: UIViewRepresentable {
     func updateUIView(_ field: ChatTextView, context: Context) {
         context.coordinator.parent = self
         if field.text != text { field.text = text }
+        field.isEditable = isEnabled
+        field.placeholderText = placeholder
         field.updatePlaceholder()
         DispatchQueue.main.async {
             let measured = field.refreshLayout()
@@ -1044,7 +1062,7 @@ private struct PersistentChatTextField: UIViewRepresentable {
                 context.coordinator.parent.height = measured
             }
         }
-        if isFocused && !field.isFirstResponder { field.becomeFirstResponder() }
+        if isFocused && isEnabled && !field.isFirstResponder { field.becomeFirstResponder() }
         if !isFocused && field.isFirstResponder { field.resignFirstResponder() }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ChatTextView, context: Context) -> CGSize? {
@@ -1072,9 +1090,10 @@ private struct PersistentChatTextField: UIViewRepresentable {
     }
     final class ChatTextView: UITextView {
         private let placeholderLabel = UILabel()
+        var placeholderText = "Сообщение…"
         override init(frame: CGRect, textContainer: NSTextContainer?) {
             super.init(frame: frame, textContainer: textContainer)
-            placeholderLabel.text = "Сообщение…"
+            placeholderLabel.text = placeholderText
             placeholderLabel.textColor = .placeholderText
             placeholderLabel.font = .preferredFont(forTextStyle: .body)
             placeholderLabel.adjustsFontForContentSizeCategory = true
@@ -1086,7 +1105,10 @@ private struct PersistentChatTextField: UIViewRepresentable {
             ])
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-        func updatePlaceholder() { placeholderLabel.isHidden = !text.isEmpty }
+        func updatePlaceholder() {
+            placeholderLabel.text = placeholderText
+            placeholderLabel.isHidden = !text.isEmpty
+        }
         @discardableResult
         func refreshLayout() -> CGFloat {
             guard bounds.width > 1 else { return 38 }

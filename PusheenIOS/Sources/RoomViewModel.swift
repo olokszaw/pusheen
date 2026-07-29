@@ -7,6 +7,7 @@ final class RoomViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var members: [RoomMember] = []
     @Published var isOwner = false
+    @Published var isMuted = false
     @Published var isPlaying = false
     @Published var position: Double = 0
     @Published var duration: Double = 1
@@ -37,6 +38,7 @@ final class RoomViewModel: ObservableObject {
             let stream = try await api.stream(roomID: room.id)
             streamGenres = stream.genres
             messages = try await history; members = try await people
+            isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
             guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
             let assetOptions: [String: Any] = stream.headers.isEmpty ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": stream.headers]
             let item = AVPlayerItem(asset: AVURLAsset(url: streamURL, options: assetOptions))
@@ -121,6 +123,7 @@ final class RoomViewModel: ObservableObject {
     func seek(_ value: Double) { guard isOwner else { return }; player?.seek(to: CMTime(seconds: value, preferredTimescale: 600)); position = value; socket.playback(action: "seek", isPlaying: isPlaying, position: value) }
     func send(_ text: String, as profile: Profile?) { send(text: text, image: "", as: profile) }
     func send(text: String, image: String, as profile: Profile?) {
+        guard !isMuted else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !image.isEmpty else { return }
         // Render immediately; the server confirmation replaces this temporary
         // message with its permanent id a moment later.
@@ -203,9 +206,25 @@ final class RoomViewModel: ObservableObject {
             if let ownerID = (event["owner_id"] as? NSNumber)?.intValue {
                 isOwner = ownerID == currentUserID
             }
-            Task { self.members = (try? await self.api.members(roomID: self.room.id)) ?? self.members }
+            let targetID = (event["user_id"] as? NSNumber)?.intValue
+            if event["action"] as? String == "mute", targetID == currentUserID {
+                isMuted = event["muted"] as? Bool ?? isMuted
+            }
+            if let systemText = event["system_text"] as? String, !systemText.isEmpty {
+                let timestamp = Int(Date().timeIntervalSince1970 * 1_000_000)
+                messages.append(ChatMessage(id: -timestamp, authorId: 0, nickname: "", text: systemText, imageDataURL: "", avatarDataURL: "", reactions: [], isSystem: true))
+            }
+            Task {
+                let refreshed = (try? await self.api.members(roomID: self.room.id)) ?? self.members
+                self.members = refreshed
+                self.isMuted = refreshed.first(where: { $0.userId == self.currentUserID })?.isMuted ?? self.isMuted
+            }
         case "room_removed":
             error = "Вас удалили из комнаты"
+        case "error":
+            if event["code"] as? String == "muted" {
+                isMuted = true
+            }
         default: break
         }
     }
