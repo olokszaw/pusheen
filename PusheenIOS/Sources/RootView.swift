@@ -1458,7 +1458,7 @@ private struct GenreOnlyCard: View {
 private struct HeatmapMonthSection: Identifiable {
     let start: Date
     let label: String
-    let columns: [[Date?]]
+    let columns: [[Date]]
     var id: Date { start }
 }
 
@@ -1477,27 +1477,34 @@ private struct ViewingHeatmapCard: View {
         let currentComponents = calendar.dateComponents([.year, .month], from: today)
         let currentStart = calendar.date(from: currentComponents) ?? today
 
-        return (0..<visibleMonths).compactMap { offset in
-            guard let start = calendar.date(byAdding: .month, value: -(visibleMonths - 1) + offset, to: currentStart),
-                  let interval = calendar.dateInterval(of: .month, for: start) else { return nil }
-            let naturalEnd = calendar.date(byAdding: .day, value: -1, to: interval.end) ?? today
-            let end = min(today, naturalEnd)
-            let count = max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
-            let days = (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
-            // Keep a stable visual grid so month sections never collapse or
-            // reflow. Dates after today are never created here: their cells
-            // are decorative background only and have no data or interaction.
+        // The heatmap is a rolling window ending today. Every visible tile is
+        // a real elapsed day: there are no future dates, nil placeholders or
+        // decorative fake cells. A fixed number of real days keeps the exact
+        // full-width geometry in both zoom levels.
+        let sectionCount = visibleMonths == 1 ? 1 : 3
+        let daysPerSection = 35
+        let totalDays = sectionCount * daysPerSection
+        let windowStart = calendar.date(byAdding: .day, value: -(totalDays - 1), to: today) ?? today
+
+        return (0..<sectionCount).compactMap { offset in
+            guard let sectionStart = calendar.date(byAdding: .day, value: offset * daysPerSection, to: windowStart),
+                  let labelDate = calendar.date(byAdding: .month, value: -(sectionCount - 1) + offset, to: currentStart) else {
+                return nil
+            }
+            let days = (0..<daysPerSection).compactMap {
+                calendar.date(byAdding: .day, value: $0, to: sectionStart)
+            }
             let columnCount = visibleMonths == 1 ? 7 : 5
             let rowCount = visibleMonths == 1 ? 5 : 7
-            let columns: [[Date?]] = (0..<columnCount).map { column in
+            let columns: [[Date]] = (0..<columnCount).map { column in
                 (0..<rowCount).map { row in
                     let index = visibleMonths == 1 ? row * columnCount + column : column * rowCount + row
-                    return index < days.count ? days[index] : nil
+                    return days[index]
                 }
             }
             return HeatmapMonthSection(
-                start: start,
-                label: formatter.string(from: start).replacingOccurrences(of: ".", with: ""),
+                start: sectionStart,
+                label: formatter.string(from: labelDate).replacingOccurrences(of: ".", with: ""),
                 columns: columns
             )
         }
@@ -1539,31 +1546,20 @@ private struct ViewingHeatmapCard: View {
                                     VStack(spacing: spacing) {
                                         ForEach(section.columns[columnIndex].indices, id: \.self) { rowIndex in
                                             let day = section.columns[columnIndex][rowIndex]
-                                            if let day {
-                                                RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                                    .fill(color(for: day))
-                                                    .frame(width: tile, height: tile)
-                                                    .overlay {
-                                                        if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
-                                                            RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                                                .stroke(.white.opacity(0.94), lineWidth: 1.8)
-                                                                .shadow(color: .cyan.opacity(0.8), radius: 6)
-                                                        }
+                                            RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                .fill(color(for: day))
+                                                .frame(width: tile, height: tile)
+                                                .overlay {
+                                                    if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
+                                                        RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                            .stroke(.white.opacity(0.94), lineWidth: 1.8)
+                                                            .shadow(color: .cyan.opacity(0.8), radius: 6)
                                                     }
-                                                    .contentShape(Rectangle())
-                                                    .onTapGesture {
-                                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
-                                                    }
-                                            } else {
-                                                // A visual part of the heatmap background, not a
-                                                // future activity day. It has no date, tap target,
-                                                // selection state or accessibility representation.
-                                                RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                                    .fill(.white.opacity(0.10))
-                                                    .frame(width: tile, height: tile)
-                                                    .allowsHitTesting(false)
-                                                    .accessibilityHidden(true)
-                                            }
+                                                }
+                                                .contentShape(Rectangle())
+                                                .onTapGesture {
+                                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
+                                                }
                                         }
                                     }
                                 }
