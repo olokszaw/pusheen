@@ -14,6 +14,7 @@ final class RoomViewModel: ObservableObject {
     private let room: Room
     private let api: APIClient
     private let token: String
+    private var currentUserID: Int?
     private let socket = RoomSocket()
     private var timer: Any?
     private var itemStatusObservation: NSKeyValueObservation?
@@ -22,6 +23,7 @@ final class RoomViewModel: ObservableObject {
     private var streamGenres: [String] = []
 
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token }
+    func setCurrentUserID(_ id: Int?) { currentUserID = id }
     deinit {
         // `deinit` is nonisolated under Swift 6. The player/socket are released
         // with the view model; cancelling explicitly here would cross actors.
@@ -129,6 +131,13 @@ final class RoomViewModel: ObservableObject {
         socket.chat(text: text, image: image)
     }
     func react(messageID: Int, emoji: String) { socket.reaction(messageID: messageID, emoji: emoji) }
+    func moderate(member: RoomMember, action: String) async {
+        guard isOwner, !member.isOwner else { return }
+        do {
+            try await api.moderateMember(roomID: room.id, userID: member.userId, action: action)
+            members = try await api.members(roomID: room.id)
+        } catch { self.error = error.localizedDescription }
+    }
     private func apply(_ event: [String: Any]) {
         switch event["type"] as? String {
         case "playback_state":
@@ -136,9 +145,12 @@ final class RoomViewModel: ObservableObject {
             let remote = (event["position_seconds"] as? NSNumber)?.doubleValue ?? 0
             // The creator receives their own broadcast too. Never seek it back to
             // an older server snapshot: that was the visible forward/back loop.
-            if !isOwner && abs(position - remote) > 2.5 {
-                player?.seek(to: CMTime(seconds: remote, preferredTimescale: 600))
-                position = remote
+            let authoritative = compensatedPosition(remote: remote, isPlaying: isPlaying, event: event)
+            // Correct actual drift promptly, but do not chase normal network
+            // jitter frame-by-frame. This keeps participants within ~1 sec.
+            if !isOwner && abs(position - authoritative) > 0.85 {
+                player?.seek(to: CMTime(seconds: authoritative, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                position = authoritative
             }
             // Apply the authoritative play/pause state to every client,
             // including the room creator on the initial socket snapshot.
@@ -185,7 +197,24 @@ final class RoomViewModel: ObservableObject {
             // The event updates the UI immediately; a lightweight fetch then
             // reconciles the list in case the client missed a prior event.
             Task { self.members = (try? await self.api.members(roomID: self.room.id)) ?? self.members }
+        case "members_changed":
+            // Owner transfer, mute, kick and ban arrive through the room socket
+            // so every open client reflects the change without reopening room.
+            if let ownerID = (event["owner_id"] as? NSNumber)?.intValue {
+                isOwner = ownerID == currentUserID
+            }
+            Task { self.members = (try? await self.api.members(roomID: self.room.id)) ?? self.members }
+        case "room_removed":
+            error = "Вас удалили из комнаты"
         default: break
         }
+    }
+    private func compensatedPosition(remote: Double, isPlaying: Bool, event: [String: Any]) -> Double {
+        guard isPlaying,
+              let value = event["server_updated_at"] as? String,
+              let date = ISO8601DateFormatter().date(from: value) else { return remote }
+        // The server timestamp is authoritative; compensate transit time so a
+        // remote player starts at the live position instead of 1–2 sec behind.
+        return max(0, remote + min(2.0, Date().timeIntervalSince(date)))
     }
 }

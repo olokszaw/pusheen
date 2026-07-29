@@ -42,9 +42,22 @@ struct ChatMessage: Codable, Identifiable, Hashable {
 }
 
 struct RoomMember: Codable, Identifiable, Hashable {
-    let userId: Int; let username: String; let nickname: String; let avatarDataURL: String; let isOwner: Bool; let isOnline: Bool
+    let userId: Int; let username: String; let nickname: String; let avatarDataURL: String; let isOwner: Bool; let isOnline: Bool; let isMuted: Bool
     var id: Int { userId }
-    enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isOwner = "is_owner"; case isOnline = "is_online" }
+    enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isOwner = "is_owner"; case isOnline = "is_online"; case isMuted = "is_muted" }
+    init(userId: Int, username: String, nickname: String, avatarDataURL: String, isOwner: Bool, isOnline: Bool, isMuted: Bool = false) { self.userId = userId; self.username = username; self.nickname = nickname; self.avatarDataURL = avatarDataURL; self.isOwner = isOwner; self.isOnline = isOnline; self.isMuted = isMuted }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try values.decode(Int.self, forKey: .userId)
+        username = try values.decode(String.self, forKey: .username)
+        nickname = try values.decode(String.self, forKey: .nickname)
+        avatarDataURL = try values.decodeIfPresent(String.self, forKey: .avatarDataURL) ?? ""
+        isOwner = try values.decodeIfPresent(Bool.self, forKey: .isOwner) ?? false
+        isOnline = try values.decodeIfPresent(Bool.self, forKey: .isOnline) ?? false
+        // Lets a freshly built IPA still open a room while an old backend is
+        // being replaced; the new server always supplies this field.
+        isMuted = try values.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+    }
 }
 
 struct VideoStream: Codable, Hashable {

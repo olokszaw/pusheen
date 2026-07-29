@@ -390,9 +390,9 @@ struct RoomView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .task { await model.start() }.onDisappear { model.stop() }
+        .task { model.setCurrentUserID(session.profile?.userId); await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
-            .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId) }
+            .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
     private var playerControls: some View {
@@ -608,6 +608,9 @@ struct SeekTimePickerSheet: View {
 struct MembersSheet: View {
     let members: [RoomMember]
     let currentID: Int?
+    let canModerate: Bool
+    let moderate: (RoomMember, String) async -> Void
+    @State private var selected: RoomMember?
     var body: some View {
         ZStack { AcrylicBackground(); VStack(alignment: .leading, spacing: 12) {
             Text("Участники").font(.title2.bold())
@@ -618,10 +621,42 @@ struct MembersSheet: View {
                         HStack { Text(member.nickname).bold(); if member.isOwner { Image(systemName: "crown.fill").font(.caption).foregroundStyle(.yellow) }; if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
                         Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
                     }
-                    Spacer(); Circle().fill(member.isOnline ? .green : .gray).frame(width: 8, height: 8)
+                    Spacer(); if member.isMuted { Image(systemName: "speaker.slash.fill").font(.caption).foregroundStyle(.orange) }; Circle().fill(member.isOnline ? .green : .gray).frame(width: 8, height: 8)
                 }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 17))
+                    .contentShape(RoundedRectangle(cornerRadius: 17))
+                    .onLongPressGesture { guard canModerate && !member.isOwner else { return }; selected = member }
             }; Spacer()
-        }.padding(20) }.presentationDetents([.medium, .large]).presentationBackground(.clear)
+        }.padding(20) }
+        .presentationDetents([.medium, .large]).presentationBackground(.clear)
+        .sheet(item: $selected) { member in MemberModerationSheet(member: member) { action in
+            selected = nil
+            Task { await moderate(member, action) }
+        } }
+    }
+}
+
+private struct MemberModerationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let member: RoomMember
+    let action: (String) -> Void
+    var body: some View {
+        VStack(spacing: 14) {
+            AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 66)
+            Text(member.nickname).font(.title3.bold())
+            Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
+            VStack(spacing: 9) {
+                moderationButton("speaker.slash", "Замутить", "mute", color: .orange)
+                moderationButton("person.crop.circle.badge.xmark", "Кикнуть из комнаты", "kick", color: .primary)
+                moderationButton("crown", "Передать лидерство", "transfer", color: .yellow)
+                moderationButton("hand.raised.fill", "Забанить", "ban", color: .red)
+            }
+        }
+        .padding(22).presentationDetents([.height(390)]).presentationBackground(.ultraThinMaterial).presentationCornerRadius(30)
+    }
+    private func moderationButton(_ icon: String, _ title: String, _ key: String, color: Color) -> some View {
+        Button { action(key); dismiss() } label: {
+            Label(title, systemImage: icon).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 14).foregroundStyle(color).liquidCard(RoundedRectangle(cornerRadius: 17))
+        }.buttonStyle(.plain)
     }
 }
 
@@ -1355,23 +1390,31 @@ private struct ViewingHeatmapCard: View {
     private let calendar = Calendar.current
     @State private var selectedDay: Date?
     @State private var visibleMonths = 3
+    @State private var pinchScale: CGFloat = 1
 
-    private var days: [Date] {
-        let today = calendar.startOfDay(for: Date())
-        // A one-month view must still contain a full recent month.  Previously the
-        // start date equalled `today` for this mode, which left a lone row of cells.
-        let monthsBack = visibleMonths == 1 ? -1 : -(visibleMonths - 1)
-        let start = calendar.date(byAdding: .month, value: monthsBack, to: today) ?? today
-        let numberOfDays = max(1, calendar.dateComponents([.day], from: start, to: today).day ?? 0) + 1
-        return (0..<numberOfDays).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+    private var today: Date { calendar.startOfDay(for: Date()) }
+    private var firstVisibleDay: Date {
+        let components = calendar.dateComponents([.year, .month], from: today)
+        let monthStart = calendar.date(from: components) ?? today
+        return calendar.date(byAdding: .month, value: -(visibleMonths - 1), to: monthStart) ?? monthStart
     }
-
-    private var gridColumnCount: Int { visibleMonths == 1 ? 8 : 15 }
-
-    private var weeks: [[Date?]] {
-        stride(from: 0, to: days.count, by: gridColumnCount).map { start in
-            let row: [Date?] = Array(days[start..<min(start + gridColumnCount, days.count)]).map(Optional.some)
-            return row + Array(repeating: nil, count: gridColumnCount - row.count)
+    private var gridStart: Date {
+        let weekday = calendar.component(.weekday, from: firstVisibleDay)
+        // Calendar weekday is 1 on Sunday. Start every heatmap on Monday so a
+        // month label always sits under a stable group of seven-day columns.
+        let offset = (weekday + 5) % 7
+        return calendar.date(byAdding: .day, value: -offset, to: firstVisibleDay) ?? firstVisibleDay
+    }
+    private var columnCount: Int {
+        max(1, Int(ceil(Double((calendar.dateComponents([.day], from: gridStart, to: today).day ?? 0) + 1) / 7.0)))
+    }
+    private var columns: [[Date?]] {
+        (0..<columnCount).map { column in
+            (0..<7).map { row in
+                let day = calendar.date(byAdding: .day, value: column * 7 + row, to: gridStart)
+                guard let day, day >= firstVisibleDay, day <= today else { return nil }
+                return day
+            }
         }
     }
 
@@ -1387,18 +1430,6 @@ private struct ViewingHeatmapCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                        visibleMonths = visibleMonths == 1 ? 3 : 1
-                    }
-                } label: {
-                    Image(systemName: visibleMonths == 1 ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.cyan)
-                        .frame(width: 34, height: 30)
-                        .background(.white.opacity(0.07), in: Capsule())
-                }
-                .buttonStyle(.plain)
             }
             Text(selectedDay.map(activityDetail(for:)) ?? "Нажми на день, чтобы увидеть дату и время.")
                 .font(.caption.weight(.medium))
@@ -1408,49 +1439,59 @@ private struct ViewingHeatmapCard: View {
                 .padding(.vertical, 8)
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
-                let spacing: CGFloat = visibleMonths == 1 ? 5 : 3
-                let fitted = (proxy.size.width - CGFloat(gridColumnCount - 1) * spacing) / CGFloat(gridColumnCount)
-                let tile = visibleMonths == 1 ? min(24, fitted) : min(17, fitted)
-                VStack(alignment: .leading, spacing: spacing) {
-                    ForEach(weeks.indices, id: \.self) { rowIndex in
-                        let row = weeks[rowIndex]
-                        HStack(spacing: spacing) {
-                            ForEach(row.indices, id: \.self) { dayIndex in
-                                RoundedRectangle(cornerRadius: max(2.2, tile * 0.27), style: .continuous)
-                                    .fill(color(for: row[dayIndex]))
-                                    .frame(width: tile, height: tile)
-                                    .overlay {
-                                        // `nil == nil` is true. Without unwrapping this drew a
-                                        // bright selection outline around every padding cell.
-                                        if let selectedDay, row[dayIndex] == selectedDay {
-                                            RoundedRectangle(cornerRadius: max(2.2, tile * 0.27), style: .continuous)
-                                                .stroke(Color.white.opacity(0.92), lineWidth: 1.6)
-                                                .shadow(color: .cyan.opacity(0.7), radius: 5)
+                let spacing: CGFloat = visibleMonths == 1 ? 7 : 4
+                let fitted = (proxy.size.width - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount)
+                let tile = min(visibleMonths == 1 ? 30 : 20, fitted)
+                let chartWidth = CGFloat(columnCount) * tile + CGFloat(columnCount - 1) * spacing
+                VStack(spacing: 9) {
+                    HStack(spacing: spacing) {
+                        ForEach(columns.indices, id: \.self) { columnIndex in
+                            VStack(spacing: spacing) {
+                                ForEach(columns[columnIndex].indices, id: \.self) { rowIndex in
+                                    let day = columns[columnIndex][rowIndex]
+                                    RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                        .fill(color(for: day))
+                                        .frame(width: tile, height: tile)
+                                        .overlay {
+                                            if let selectedDay, day == selectedDay {
+                                                RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                    .stroke(.white.opacity(0.94), lineWidth: 1.8)
+                                                    .shadow(color: .cyan.opacity(0.8), radius: 6)
+                                            }
                                         }
-                                    }
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        guard let day = row[dayIndex] else { return }
-                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { selectedDay = day }
-                                    }
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            guard let day else { return }
+                                            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
+                                        }
+                                }
                             }
                         }
                     }
+                    .frame(width: chartWidth)
+                    HStack(spacing: 0) {
+                        ForEach(monthLabels, id: \.self) { month in
+                            Text(month)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .frame(width: chartWidth)
                 }
+                .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
-            .frame(height: 118)
-            .simultaneousGesture(MagnificationGesture().onEnded { value in
-                let next = value > 1.05 ? 1 : (value < 0.95 ? 3 : visibleMonths)
-                guard next != visibleMonths else { return }
-                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { visibleMonths = next }
-            })
-            HStack {
-                ForEach(monthLabels, id: \.self) { month in
-                    Text(month).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
-                    if month != monthLabels.last { Spacer(minLength: 0) }
-                }
-            }
+            .frame(height: visibleMonths == 1 ? 225 : 195)
+            .simultaneousGesture(MagnificationGesture()
+                .onChanged { pinchScale = min(1.18, max(0.84, $0)) }
+                .onEnded { value in
+                    let next = value > 1.06 ? 1 : (value < 0.94 ? 3 : visibleMonths)
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                        visibleMonths = next
+                        pinchScale = 1
+                    }
+                })
         }
     }
 
@@ -1459,7 +1500,7 @@ private struct ViewingHeatmapCard: View {
         formatter.locale = Locale(identifier: "ru_RU")
         formatter.dateFormat = "LLL"
         return (0..<visibleMonths).compactMap { offset in
-            calendar.date(byAdding: .month, value: -(visibleMonths - 1) + offset, to: Date()).map { formatter.string(from: $0).replacingOccurrences(of: ".", with: "") }
+            calendar.date(byAdding: .month, value: -(visibleMonths - 1) + offset, to: today).map { formatter.string(from: $0).replacingOccurrences(of: ".", with: "") }
         }
     }
 

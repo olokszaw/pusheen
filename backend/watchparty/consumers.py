@@ -90,6 +90,9 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         )
 
     async def broadcast_chat(self, text, image_data_url):
+        if await self.is_muted():
+            await self.send_json({"type": "error", "code": "muted", "detail": "Вы не можете писать в этой комнате"})
+            return
         text = text.strip()[:500]
         image_data_url = image_data_url.strip()
         if len(image_data_url) > 2_800_000:
@@ -124,6 +127,15 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     async def room_presence(self, event):
         await self.send_json({"type": "presence", **event["payload"]})
 
+    async def room_moderation(self, event):
+        """Refresh membership in real time and close a removed participant."""
+        payload = event["payload"]
+        if payload["action"] in {"kick", "ban"} and payload["user_id"] == self.scope["user"].id:
+            await self.send_json({"type": "room_removed", "reason": payload["action"]})
+            await self.close(code=4403)
+            return
+        await self.send_json({"type": "members_changed", **payload})
+
     @database_sync_to_async
     def is_member(self):
         return RoomMember.objects.filter(room_id=self.room_id, user=self.scope["user"]).exists()
@@ -131,6 +143,10 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def is_owner(self):
         return Room.objects.filter(id=self.room_id, owner=self.scope["user"]).exists()
+
+    @database_sync_to_async
+    def is_muted(self):
+        return RoomMember.objects.filter(room_id=self.room_id, user=self.scope["user"], is_muted=True).exists()
 
     @database_sync_to_async
     def current_state(self):

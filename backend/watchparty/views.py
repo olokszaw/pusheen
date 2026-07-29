@@ -1,5 +1,7 @@
 import re
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.db import transaction
@@ -22,6 +24,7 @@ from .models import (
     FriendRequest,
     PlaybackState,
     Room,
+    RoomBan,
     RoomMember,
     UserProfile,
     ViewingActivity,
@@ -388,6 +391,8 @@ def join_room(request):
     data = JoinSerializer(data=request.data)
     data.is_valid(raise_exception=True)
     room = get_object_or_404(Room, invite_code=data.validated_data["invite_code"])
+    if RoomBan.objects.filter(room=room, user=request.user).exists():
+        return Response({"detail": "Вы заблокированы в этой комнате"}, status=403)
     if room.members.count() >= room.max_members and not RoomMember.objects.filter(room=room, user=request.user).exists():
         return Response({"detail": "Комната заполнена"}, status=409)
     RoomMember.objects.get_or_create(room=room, user=request.user)
@@ -403,6 +408,46 @@ def room_members(request, room_id):
         "user", "user__watch_profile", "user__client_identity", "room__owner"
     ).order_by("joined_at")
     return Response(RoomMemberSerializer(members, many=True).data)
+
+
+@api_view(["POST"])
+def moderate_member(request, room_id, user_id):
+    """Room owner can mute, kick, ban, or transfer ownership in one atomic endpoint."""
+    with transaction.atomic():
+        room = get_object_or_404(Room.objects.select_for_update(), id=room_id)
+        if room.owner_id != request.user.id:
+            return Response({"detail": "Только создатель управляет участниками"}, status=403)
+        if user_id == request.user.id:
+            return Response({"detail": "Нельзя применить это действие к себе"}, status=400)
+        member = get_object_or_404(RoomMember.objects.select_for_update(), room=room, user_id=user_id)
+        action = str(request.data.get("action") or "")
+        if action == "mute":
+            member.is_muted = not member.is_muted
+            member.save(update_fields=["is_muted"])
+        elif action == "kick":
+            member.delete()
+        elif action == "ban":
+            RoomBan.objects.get_or_create(room=room, user_id=user_id)
+            member.delete()
+        elif action == "transfer":
+            room.owner_id = user_id
+            room.save(update_fields=["owner"])
+        else:
+            return Response({"detail": "Неизвестное действие"}, status=400)
+    # REST changes also need to reach people who are already in the room.  Do
+    # not make them leave and re-enter just to see a mute, kick or new owner.
+    async_to_sync(get_channel_layer().group_send)(
+        f"watch_room_{room_id}",
+        {
+            "type": "room.moderation",
+            "payload": {
+                "action": action,
+                "user_id": user_id,
+                "owner_id": room.owner_id,
+            },
+        },
+    )
+    return Response({"ok": True, "action": action})
 
 
 @api_view(["GET"])

@@ -85,7 +85,7 @@ class RoomMemberSerializer(serializers.ModelSerializer):
         model = RoomMember
         fields = (
             "user_id", "username", "nickname", "avatar_data_url",
-            "is_owner", "is_online", "joined_at",
+            "is_owner", "is_online", "is_muted", "joined_at",
         )
 
     def get_nickname(self, member):

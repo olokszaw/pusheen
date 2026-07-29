@@ -34,6 +34,16 @@ class RoomMember(models.Model):
         unique_together = ("room", "user")
 
 
+class RoomBan(models.Model):
+    """A room-local ban. It deliberately does not affect the user's account."""
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="bans")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="room_bans")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("room", "user"), name="unique_room_ban")]
+
+
 class PlaybackState(models.Model):
     room = models.OneToOneField(Room, on_delete=models.CASCADE, related_name="playback")
     is_playing = models.BooleanField(default=False)

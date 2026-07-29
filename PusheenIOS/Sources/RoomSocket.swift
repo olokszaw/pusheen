@@ -11,6 +11,7 @@ final class RoomSocket: ObservableObject {
     private var heartbeatTask: Task<Void, Never>?
     private var wasClosedByView = false
     private var reconnectDelay: UInt64 = 1
+    private var heartbeatCount = 0
 
     func connect(baseURL: URL, roomID: Int, token: String) {
         close()
@@ -55,6 +56,7 @@ final class RoomSocket: ObservableObject {
         socket.resume()
         connected = true
         reconnectDelay = 1
+        heartbeatCount = 0
         receive(from: socket)
         startHeartbeat()
     }
@@ -64,7 +66,15 @@ final class RoomSocket: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled else { return }
-                self?.send(["type": "heartbeat"])
+                guard let self else { return }
+                self.heartbeatCount += 1
+                self.send(["type": "heartbeat"])
+                // A lightweight authoritative snapshot periodically removes
+                // the 1–2 second drift that can build up on another device
+                // without changing the owner's playback logic.
+                if self.heartbeatCount.isMultiple(of: 2) {
+                    self.send(["type": "request_state"])
+                }
             }
         }
     }
