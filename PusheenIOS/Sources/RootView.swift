@@ -1539,21 +1539,29 @@ private struct ViewingHeatmapCard: View {
                                     VStack(spacing: spacing) {
                                         ForEach(section.columns[columnIndex].indices, id: \.self) { rowIndex in
                                             let day = section.columns[columnIndex][rowIndex]
-                                            RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                                .fill(color(for: day))
-                                                .frame(width: tile, height: tile)
-                                                .overlay {
-                                                    if let day, let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
-                                                        RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                                            .stroke(.white.opacity(0.94), lineWidth: 1.8)
-                                                            .shadow(color: .cyan.opacity(0.8), radius: 6)
+                                            if let day {
+                                                RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                    .fill(color(for: day))
+                                                    .frame(width: tile, height: tile)
+                                                    .overlay {
+                                                        if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
+                                                            RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                                .stroke(.white.opacity(0.94), lineWidth: 1.8)
+                                                                .shadow(color: .cyan.opacity(0.8), radius: 6)
+                                                        }
                                                     }
-                                                }
-                                                .contentShape(Rectangle())
-                                                .onTapGesture {
-                                                    guard let day else { return }
-                                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
-                                                }
+                                                    .contentShape(Rectangle())
+                                                    .onTapGesture {
+                                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
+                                                    }
+                                            } else {
+                                                // Preserve the original calendar coordinate only.
+                                                // There is deliberately no tile View for future days.
+                                                Color.clear
+                                                    .frame(width: tile, height: tile)
+                                                    .allowsHitTesting(false)
+                                                    .accessibilityHidden(true)
+                                            }
                                         }
                                     }
                                 }
@@ -1576,10 +1584,7 @@ private struct ViewingHeatmapCard: View {
         .simultaneousGesture(heatmapMagnification)
     }
 
-    private func color(for day: Date?) -> Color {
-        // Future days reserve their old coordinates but are not visible and
-        // cannot be selected. This prevents the jagged/repacked layout.
-        guard let day else { return .clear }
+    private func color(for day: Date) -> Color {
         let key = ISO8601DateFormatter().string(from: day).prefix(10)
         let value = daily[String(key)] ?? 0
         guard value > 0 else { return .white.opacity(0.10) }
