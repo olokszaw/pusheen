@@ -1300,10 +1300,13 @@ private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
     private let calendar = Calendar.current
     @State private var selectedDay: Date?
+    @State private var visibleMonths = 3
 
     private var days: [Date] {
         let today = calendar.startOfDay(for: Date())
-        return (0..<364).compactMap { calendar.date(byAdding: .day, value: -363 + $0, to: today) }
+        let start = calendar.date(byAdding: .month, value: -(visibleMonths - 1), to: today) ?? today
+        let numberOfDays = max(1, calendar.dateComponents([.day], from: start, to: today).day ?? 0) + 1
+        return (0..<numberOfDays).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
     }
 
     private var weeks: [[Date?]] {
@@ -1320,21 +1323,50 @@ private struct ViewingHeatmapCard: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Активность").font(.headline)
-                    Text("Последние 12 месяцев").font(.caption).foregroundStyle(.secondary)
+                    Text(visibleMonths == 1 ? "Последний месяц" : "Последние 3 месяца")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Image(systemName: "chart.dots.scatter").foregroundStyle(.cyan)
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                        visibleMonths = visibleMonths == 1 ? 3 : 1
+                    }
+                } label: {
+                    Image(systemName: visibleMonths == 1 ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.cyan)
+                        .frame(width: 34, height: 30)
+                        .background(.white.opacity(0.07), in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
+            Text(selectedDay.map(activityDetail(for:)) ?? "Нажми на день, чтобы увидеть дату и время.")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(selectedDay == nil ? .secondary : .cyan)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 8)
+                .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
-                let tile = max(5, min(8, (proxy.size.width - CGFloat(weeks.count - 1)) / CGFloat(weeks.count)))
-                HStack(alignment: .top, spacing: 1) {
+                let tile = visibleMonths == 1
+                    ? max(13, min(15, (proxy.size.width - CGFloat(weeks.count - 1) * 3) / CGFloat(max(1, weeks.count))))
+                    : max(9, min(13, (proxy.size.width - CGFloat(weeks.count - 1) * 2) / CGFloat(max(1, weeks.count))))
+                HStack(alignment: .top, spacing: visibleMonths == 1 ? 3 : 2) {
                     ForEach(weeks.indices, id: \.self) { weekIndex in
                         let week = weeks[weekIndex]
-                        VStack(spacing: 1) {
+                        VStack(spacing: visibleMonths == 1 ? 3 : 2) {
                             ForEach(week.indices, id: \.self) { dayIndex in
-                                RoundedRectangle(cornerRadius: max(1.2, tile * 0.27), style: .continuous)
+                                RoundedRectangle(cornerRadius: max(2.2, tile * 0.27), style: .continuous)
                                     .fill(color(for: week[dayIndex]))
                                     .frame(width: tile, height: tile)
+                                    .overlay {
+                                        if week[dayIndex] == selectedDay {
+                                            RoundedRectangle(cornerRadius: max(2.2, tile * 0.27), style: .continuous)
+                                                .stroke(Color.white.opacity(0.92), lineWidth: 1.6)
+                                                .shadow(color: .cyan.opacity(0.7), radius: 5)
+                                        }
+                                    }
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         guard let day = week[dayIndex] else { return }
@@ -1346,7 +1378,12 @@ private struct ViewingHeatmapCard: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(height: 74)
+            .frame(height: visibleMonths == 1 ? 118 : 94)
+            .simultaneousGesture(MagnificationGesture().onEnded { value in
+                let next = value > 1.05 ? 1 : (value < 0.95 ? 3 : visibleMonths)
+                guard next != visibleMonths else { return }
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { visibleMonths = next }
+            })
             HStack {
                 ForEach(monthLabels, id: \.self) { month in
                     Text(month).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
@@ -1362,8 +1399,8 @@ private struct ViewingHeatmapCard: View {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "ru_RU")
         formatter.dateFormat = "LLL"
-        return [0, 2, 4, 6, 8, 10].compactMap { offset in
-            calendar.date(byAdding: .month, value: -10 + offset, to: Date()).map { formatter.string(from: $0).replacingOccurrences(of: ".", with: "") }
+        return (0..<visibleMonths).compactMap { offset in
+            calendar.date(byAdding: .month, value: -(visibleMonths - 1) + offset, to: Date()).map { formatter.string(from: $0).replacingOccurrences(of: ".", with: "") }
         }
     }
 
@@ -1373,6 +1410,20 @@ private struct ViewingHeatmapCard: View {
         let value = daily[String(key)] ?? 0
         guard value > 0 else { return .white.opacity(0.055) }
         return Color.cyan.opacity(0.30 + 0.70 * Double(value) / Double(maximum))
+    }
+
+    private func activityDetail(for day: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "d MMMM"
+        let key = String(ISO8601DateFormatter().string(from: day).prefix(10))
+        let totalMinutes = (daily[key] ?? 0) / 60
+        guard totalMinutes > 0 else { return "\(formatter.string(from: day)): активности нет" }
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        return hours == 0
+            ? "\(formatter.string(from: day)): \(minutes) мин"
+            : "\(formatter.string(from: day)): \(hours) ч \(minutes) мин"
     }
 
     private func activityText(for day: Date) -> String {
