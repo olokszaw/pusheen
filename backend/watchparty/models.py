@@ -122,6 +122,20 @@ class ViewingActivity(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class CompanionActivity(models.Model):
+    """Private aggregate of actual time two confirmed friends watched together."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="companion_activity")
+    companion = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="companion_of_activity")
+    seconds = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("user", "companion"), name="unique_user_companion_activity"),
+            models.CheckConstraint(condition=~models.Q(user=models.F("companion")), name="companion_activity_not_self"),
+        ]
+
+
 class ChatMessage(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="messages")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)

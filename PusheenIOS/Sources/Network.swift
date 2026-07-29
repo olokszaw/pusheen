@@ -133,8 +133,10 @@ final class APIClient {
     }
     func friendRequests() async throws -> FriendRequestsResponse { let data = try await request("/api/friends/requests/"); return try decoder.decode(FriendRequestsResponse.self, from: data) }
     func viewingStats() async throws -> ViewingStats { let data = try await request("/api/activity/"); return try decoder.decode(ViewingStats.self, from: data) }
-    func reportActivity(appSeconds: Int = 0, watchedSeconds: Int = 0, durationSeconds: Int = 0, genres: [String] = []) async throws -> ViewingStats {
-        let data = try await request("/api/activity/", method: "POST", body: ["app_seconds": appSeconds, "watched_seconds": watchedSeconds, "duration_seconds": durationSeconds, "genres": genres])
+    func reportActivity(appSeconds: Int = 0, watchedSeconds: Int = 0, durationSeconds: Int = 0, genres: [String] = [], roomID: Int? = nil) async throws -> ViewingStats {
+        var body: [String: Any] = ["app_seconds": appSeconds, "watched_seconds": watchedSeconds, "duration_seconds": durationSeconds, "genres": genres]
+        if let roomID { body["room_id"] = roomID }
+        let data = try await request("/api/activity/", method: "POST", body: body)
         return try decoder.decode(ViewingStats.self, from: data)
     }
     func respondToFriendRequest(id: Int, accept: Bool) async throws { _ = try await request("/api/friends/requests/", method: "POST", body: ["request_id": id, "action": accept ? "accept" : "decline"]) }

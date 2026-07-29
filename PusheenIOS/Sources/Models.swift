@@ -70,18 +70,34 @@ struct ViewingGenre: Codable, Hashable, Identifiable {
     var id: String { name }
 }
 
+struct ViewingCompanion: Codable, Hashable, Identifiable {
+    let userId: Int
+    let username: String
+    let nickname: String
+    let avatarDataURL: String
+    let seconds: Int
+    var id: Int { userId }
+    enum CodingKeys: String, CodingKey {
+        case username, nickname, seconds
+        case userId = "user_id"
+        case avatarDataURL = "avatar_data_url"
+    }
+}
+
 struct ViewingStats: Codable, Hashable {
     let appSeconds: Int
     let watchedSeconds: Int
     let longestMovieSeconds: Int
     let genres: [ViewingGenre]
     let dailySeconds: [String: Int]
+    let topCompanion: ViewingCompanion?
     enum CodingKeys: String, CodingKey {
         case genres
         case appSeconds = "app_seconds"
         case watchedSeconds = "watched_seconds"
         case longestMovieSeconds = "longest_movie_seconds"
         case dailySeconds = "daily_seconds"
+        case topCompanion = "top_companion"
     }
 }
 

@@ -80,7 +80,8 @@ final class RoomViewModel: ObservableObject {
                 let stats = try? await self.api.reportActivity(
                     watchedSeconds: 30,
                     durationSeconds: Int(self.duration),
-                    genres: self.streamGenres
+                    genres: self.streamGenres,
+                    roomID: self.room.id
                 )
                 guard !Task.isCancelled else { return }
                 // Stats are fetched by Profile when it appears; this preserves

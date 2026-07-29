@@ -17,6 +17,7 @@ from .media_sources import detect_media_source
 from .models import (
     ChatMessage,
     ClientIdentity,
+    CompanionActivity,
     FriendLink,
     FriendRequest,
     PlaybackState,
@@ -55,12 +56,22 @@ def activity_payload(activity):
         {"name": name, "seconds": int(seconds), "percent": round((int(seconds) / total * 100) if total else 0)}
         for name, seconds in sorted(genres.items(), key=lambda item: item[1], reverse=True)[:5]
     ]
+    companion = (
+        CompanionActivity.objects.filter(user=activity.user)
+        .select_related("companion", "companion__watch_profile")
+        .order_by("-seconds")
+        .first()
+    )
+    top_companion = None
+    if companion:
+        top_companion = {**public_profile(companion.companion), "seconds": companion.seconds}
     return {
         "app_seconds": activity.app_seconds,
         "watched_seconds": activity.watched_seconds,
         "longest_movie_seconds": activity.longest_movie_seconds,
         "genres": genre_rows,
         "daily_seconds": activity.daily_seconds or {},
+        "top_companion": top_companion,
     }
 
 
@@ -76,6 +87,7 @@ def activity(request):
     watched_seconds = max(0, min(int(request.data.get("watched_seconds") or 0), 90))
     duration_seconds = max(0, min(int(request.data.get("duration_seconds") or 0), 86_400))
     genres = request.data.get("genres") or []
+    room_id = request.data.get("room_id")
     if not isinstance(genres, list):
         genres = []
     day = timezone.localdate().isoformat()
@@ -93,6 +105,24 @@ def activity(request):
                 counts[genre.strip()[:32]] = int(counts.get(genre.strip()[:32], 0)) + watched_seconds
         activity_obj.genre_counts = counts
         activity_obj.save()
+        if watched_seconds and room_id:
+            room = Room.objects.filter(pk=room_id).first()
+            if room:
+                active_friend_ids = RoomMember.objects.filter(
+                    room=room,
+                    active_connections__gt=0,
+                ).exclude(user=request.user).values_list("user_id", flat=True)
+                friend_ids = FriendLink.objects.filter(
+                    user=request.user,
+                    friend_id__in=active_friend_ids,
+                ).values_list("friend_id", flat=True)
+                for friend_id in friend_ids:
+                    pair, _ = CompanionActivity.objects.get_or_create(
+                        user=request.user,
+                        companion_id=friend_id,
+                    )
+                    pair.seconds += watched_seconds
+                    pair.save(update_fields=["seconds", "updated_at"])
     return Response(activity_payload(activity_obj))
 
 
