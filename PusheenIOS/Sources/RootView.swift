@@ -1255,17 +1255,19 @@ private struct ViewingInsightsPager: View {
                 SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends).tag(2)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 286)
+            .frame(height: 258)
 
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
                     Capsule()
                         .fill(index == page ? Color.primary.opacity(0.72) : Color.white.opacity(0.16))
-                        .frame(width: index == page ? 18 : 6, height: 6)
+                        .frame(width: index == page ? 20 : 8, height: 8)
                         .animation(.spring(response: 0.32, dampingFraction: 0.78), value: page)
                 }
             }
         }
+        .padding(15)
+        .liquidCard(RoundedRectangle(cornerRadius: 26))
         .accessibilityLabel("Страницы статистики")
     }
 }
@@ -1288,8 +1290,6 @@ private struct GenreOnlyCard: View {
                 GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
             }
         }
-        .padding(15)
-        .liquidCard(RoundedRectangle(cornerRadius: 26))
         .contentShape(RoundedRectangle(cornerRadius: 26))
         .onTapGesture { withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { selectedGenreID = nil } }
         .onAppear { selectedGenreID = nil }
@@ -1299,6 +1299,7 @@ private struct GenreOnlyCard: View {
 private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
     private let calendar = Calendar.current
+    @State private var selectedDay: Date?
 
     private var days: [Date] {
         let today = calendar.startOfDay(for: Date())
@@ -1325,15 +1326,20 @@ private struct ViewingHeatmapCard: View {
                 Image(systemName: "chart.dots.scatter").foregroundStyle(.cyan)
             }
             GeometryReader { proxy in
-                let tile = max(4, min(7, (proxy.size.width - CGFloat(weeks.count - 1) * 2) / CGFloat(weeks.count)))
-                HStack(alignment: .top, spacing: 2) {
+                let tile = max(5, min(8, (proxy.size.width - CGFloat(weeks.count - 1)) / CGFloat(weeks.count)))
+                HStack(alignment: .top, spacing: 1) {
                     ForEach(weeks.indices, id: \.self) { weekIndex in
                         let week = weeks[weekIndex]
-                        VStack(spacing: 2) {
+                        VStack(spacing: 1) {
                             ForEach(week.indices, id: \.self) { dayIndex in
                                 RoundedRectangle(cornerRadius: max(1.2, tile * 0.27), style: .continuous)
                                     .fill(color(for: week[dayIndex]))
                                     .frame(width: tile, height: tile)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        guard let day = week[dayIndex] else { return }
+                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { selectedDay = day }
+                                    }
                             }
                         }
                     }
@@ -1347,11 +1353,9 @@ private struct ViewingHeatmapCard: View {
                     if month != monthLabels.last { Spacer(minLength: 0) }
                 }
             }
-            Text("Чем ярче клетка — тем больше времени в приложении в этот день.")
-                .font(.caption2).foregroundStyle(.secondary)
+            Text(selectedDay.map(activityText(for:)) ?? "Нажми на день — покажу дату и время просмотра.")
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
-        .padding(15)
-        .liquidCard(RoundedRectangle(cornerRadius: 26))
     }
 
     private var monthLabels: [String] {
@@ -1370,6 +1374,15 @@ private struct ViewingHeatmapCard: View {
         guard value > 0 else { return .white.opacity(0.055) }
         return Color.cyan.opacity(0.30 + 0.70 * Double(value) / Double(maximum))
     }
+
+    private func activityText(for day: Date) -> String {
+        let dayFormatter = DateFormatter()
+        dayFormatter.locale = Locale(identifier: "ru_RU")
+        dayFormatter.dateFormat = "d MMMM"
+        let key = String(ISO8601DateFormatter().string(from: day).prefix(10))
+        let minutes = (daily[key] ?? 0) / 60
+        return minutes > 0 ? "\(dayFormatter.string(from: day)): \(minutes) мин в приложении" : "\(dayFormatter.string(from: day)): активности нет"
+    }
 }
 
 private struct SharedWatchingCard: View {
@@ -1379,61 +1392,40 @@ private struct SharedWatchingCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Вместе смотрите").font(.headline)
-                    Text("Твой самый близкий зритель").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "person.2.fill").foregroundStyle(.cyan)
-            }
             if let companion {
                 Button {
                     withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) { showsDetail.toggle() }
                 } label: {
-                    HStack(spacing: 15) {
-                        AvatarView(dataURL: companion.avatarDataURL, name: companion.nickname, size: 74)
-                            .padding(5)
+                    VStack(spacing: 9) {
+                        AvatarView(dataURL: companion.avatarDataURL, name: companion.nickname, size: 104)
+                            .padding(7)
                             .liquidCard(Circle())
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(companion.nickname).font(.title3.bold()).lineLimit(1)
-                            Text("@\(companion.username)").font(.caption).foregroundStyle(.secondary)
-                            Text(showsDetail ? "Вместе посмотрели \(formattedHours(companion.seconds))" : "Нажми, чтобы увидеть статистику")
-                                .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                        Text(showsDetail ? companion.nickname : "Нажми на аватар")
+                            .font(.subheadline.weight(.semibold))
+                        if showsDetail {
+                            Text("@\(companion.username) · \(formattedHours(companion.seconds)) вместе")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
-                        Spacer(minLength: 0)
-                        Image(systemName: showsDetail ? "chevron.up" : "chevron.down").foregroundStyle(.secondary)
                     }
-                    .padding(12)
-                    .liquidCard(RoundedRectangle(cornerRadius: 22))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
                 }
                 .buttonStyle(.plain)
-                if showsDetail {
-                    Text("Вместе в комнатах: \(formattedHours(companion.seconds)). Считается только время, когда вы оба подключены к одному просмотру.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
             } else if let friend = fallbackFriends.first(where: \.isFriend) {
-                HStack(spacing: 15) {
-                    AvatarView(dataURL: friend.avatarDataURL, name: friend.nickname, size: 74)
+                VStack(spacing: 8) {
+                    AvatarView(dataURL: friend.avatarDataURL, name: friend.nickname, size: 96)
                         .padding(5)
                         .liquidCard(Circle())
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(friend.nickname).font(.title3.bold())
-                        Text("@\(friend.username)").font(.caption).foregroundStyle(.secondary)
-                        Text("Совместные часы появятся после общего просмотра").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
+                    Text(friend.nickname).font(.subheadline.weight(.semibold))
+                    Text("Совместные часы появятся после общего просмотра").font(.caption2).foregroundStyle(.secondary)
                 }
-                .padding(12)
-                .liquidCard(RoundedRectangle(cornerRadius: 22))
+                .frame(maxWidth: .infinity)
             } else {
                 ContentUnavailableView("Добавь друга", systemImage: "person.badge.plus", description: Text("Здесь появится человек, с которым вы чаще всего смотрите вместе."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(15)
-        .liquidCard(RoundedRectangle(cornerRadius: 26))
     }
 
     private func formattedHours(_ seconds: Int) -> String {
