@@ -2128,11 +2128,10 @@ private struct FriendSwipeRow: View {
                     ZStack(alignment: .leading) {
                         Capsule()
                             .fill(.ultraThinMaterial)
-                            .overlay {
-                                Capsule().fill(
-                                    Color.red.opacity(0.72)
-                                )
-                            }
+                            // Material remains visible through the destructive tint:
+                            // this keeps the action a glass control rather than a
+                            // solid red banner.
+                            .overlay { Capsule().fill(Color.red.opacity(0.38)) }
                             .overlay {
                                 Capsule().stroke(
                                     LinearGradient(colors: [.white.opacity(0.48), .white.opacity(0.08)], startPoint: .top, endPoint: .bottom),
@@ -2142,12 +2141,10 @@ private struct FriendSwipeRow: View {
                         Group {
                             if removing { ProgressView().tint(.white) }
                             else {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 17, weight: .semibold))
-                                    .frame(width: 36, height: 36)
-                                    .background(.white.opacity(0.13), in: Circle())
-                                    .overlay(Circle().stroke(.white.opacity(0.20), lineWidth: 0.7))
-                                    .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+                                Image(systemName: "trash.fill")
+                                    .symbolRenderingMode(.hierarchical)
+                                    .font(.system(size: 19, weight: .semibold))
+                                    .frame(width: 42, height: 42)
                             }
                         }
                         .foregroundStyle(.white)
@@ -2163,9 +2160,9 @@ private struct FriendSwipeRow: View {
                 .frame(width: deleteWidth, height: 64)
                 .padding(.trailing, 3)
                 .opacity(min(1, deleteReveal * 2.2))
-                // This must be above the shifted friend row so the first tap is
-                // never swallowed by the row's drag recogniser.
-                .zIndex(3)
+                // The action stays behind the row. It is revealed by movement,
+                // never drawn on top of the friend's card.
+                .zIndex(0)
             }
             HStack(spacing: 11) {
                 AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
@@ -2189,7 +2186,9 @@ private struct FriendSwipeRow: View {
             .offset(x: offset)
             .contentShape(RoundedRectangle(cornerRadius: 20))
             .zIndex(1)
-            .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .local)
+            // A simultaneous gesture preserves the delete button's own tap
+            // handling once it is exposed, while still tracking the swipe.
+            .simultaneousGesture(DragGesture(minimumDistance: 6, coordinateSpace: .local)
                 .onChanged { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { return }
