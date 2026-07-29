@@ -1255,7 +1255,10 @@ private struct ViewingInsightsPager: View {
                 SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends).tag(2)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 258)
+            // The genre legend needs a little breathing room above the page dots.
+            // Keeping this height inside the single outer card prevents the bottom
+            // row from visually escaping the card on compact iPhones.
+            .frame(height: 278)
 
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
@@ -1304,7 +1307,10 @@ private struct ViewingHeatmapCard: View {
 
     private var days: [Date] {
         let today = calendar.startOfDay(for: Date())
-        let start = calendar.date(byAdding: .month, value: -(visibleMonths - 1), to: today) ?? today
+        // A one-month view must still contain a full recent month.  Previously the
+        // start date equalled `today` for this mode, which left a lone row of cells.
+        let monthsBack = visibleMonths == 1 ? -1 : -(visibleMonths - 1)
+        let start = calendar.date(byAdding: .month, value: monthsBack, to: today) ?? today
         let numberOfDays = max(1, calendar.dateComponents([.day], from: start, to: today).day ?? 0) + 1
         return (0..<numberOfDays).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
     }
@@ -1363,7 +1369,9 @@ private struct ViewingHeatmapCard: View {
                                     .fill(color(for: row[dayIndex]))
                                     .frame(width: tile, height: tile)
                                     .overlay {
-                                        if row[dayIndex] == selectedDay {
+                                        // `nil == nil` is true. Without unwrapping this drew a
+                                        // bright selection outline around every padding cell.
+                                        if let selectedDay, row[dayIndex] == selectedDay {
                                             RoundedRectangle(cornerRadius: max(2.2, tile * 0.27), style: .continuous)
                                                 .stroke(Color.white.opacity(0.92), lineWidth: 1.6)
                                                 .shadow(color: .cyan.opacity(0.7), radius: 5)
@@ -1392,8 +1400,6 @@ private struct ViewingHeatmapCard: View {
                     if month != monthLabels.last { Spacer(minLength: 0) }
                 }
             }
-            Text(selectedDay.map(activityText(for:)) ?? "Нажми на день — покажу дату и время просмотра.")
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 
