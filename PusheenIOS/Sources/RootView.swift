@@ -700,7 +700,6 @@ struct NativeChatPane: View {
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Чат").font(.headline)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -778,12 +777,13 @@ struct NativeChatPane: View {
                 .padding(.vertical, 6)
                 .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
             }
-            .padding(.horizontal, 26)
-            .offset(y: inputFocused ? 0 : -14)
+            // Keep the composer in the unified chat surface.  The old negative
+            // offset could make it protrude beyond the lower rounded edge.
+            .padding(.horizontal, 20)
         }
         .padding(.horizontal, 12)
-        .padding(.top, 12)
-        .padding(.bottom, inputFocused ? 6 : 18)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
         // RoomView owns the single continuous glass surface around video and
         // chat. A second card here created the visible seam and double corners.
         // RoomView shortens the unified surface to the keyboard edge. No
@@ -2108,41 +2108,29 @@ private struct FriendSwipeRow: View {
     @State private var revealed = false
     @State private var dragOffset: CGFloat = 0
     @State private var removing = false
+    @State private var showDeleteConfirmation = false
 
-    private let settledOffset: CGFloat = -122
+    private let settledOffset: CGFloat = -104
     private var offset: CGFloat { dragOffset == 0 ? (revealed ? settledOffset : 0) : dragOffset }
     private var deleteReveal: CGFloat {
         min(1, max(0, (-offset) / (-settledOffset)))
     }
     /// The action grows exactly with the revealed part of the row. There is no
     /// fixed oversized pill that can cover the friend card.
-    private var deleteWidth: CGFloat { max(58, min(164, -offset)) }
+    private var deleteWidth: CGFloat { max(60, min(148, -offset)) }
 
     var body: some View {
         ZStack(alignment: .trailing) {
             if person.isFriend && (revealed || dragOffset < -4) {
                 Button {
-                    guard !removing else { return }
-                    removing = true
-                    Task {
-                        await remove()
-                        await MainActor.run {
-                            removing = false
-                            withAnimation(.spring(response: 0.26, dampingFraction: 0.9)) { revealed = false }
-                        }
-                    }
+                    requestDeleteConfirmation()
                 } label: {
                     ZStack(alignment: .leading) {
                         Capsule()
                             .fill(.ultraThinMaterial)
                             .overlay {
                                 Capsule().fill(
-                                    LinearGradient(
-                                        colors: [Color(red: 1.0, green: 0.25, blue: 0.29).opacity(0.96),
-                                                 Color(red: 0.78, green: 0.04, blue: 0.12).opacity(0.92)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
+                                    Color.red.opacity(0.72)
                                 )
                             }
                             .overlay {
@@ -2151,11 +2139,10 @@ private struct FriendSwipeRow: View {
                                     lineWidth: 0.8
                                 )
                             }
-                            .shadow(color: .red.opacity(0.27), radius: 10, y: 4)
                         Group {
                             if removing { ProgressView().tint(.white) }
                             else {
-                                Image(systemName: "trash.fill")
+                                Image(systemName: "trash")
                                     .font(.system(size: 17, weight: .semibold))
                                     .frame(width: 36, height: 36)
                                     .background(.white.opacity(0.13), in: Circle())
@@ -2176,7 +2163,9 @@ private struct FriendSwipeRow: View {
                 .frame(width: deleteWidth, height: 64)
                 .padding(.trailing, 3)
                 .opacity(min(1, deleteReveal * 2.2))
-                .zIndex(0)
+                // This must be above the shifted friend row so the first tap is
+                // never swallowed by the row's drag recogniser.
+                .zIndex(3)
             }
             HStack(spacing: 11) {
                 AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
@@ -2204,15 +2193,20 @@ private struct FriendSwipeRow: View {
                 .onChanged { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                    dragOffset = min(0, max(-164, value.translation.width + (revealed ? settledOffset : 0)))
+                    dragOffset = min(0, max(-148, value.translation.width + (revealed ? settledOffset : 0)))
                 }
                 .onEnded { value in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { dragOffset = 0; return }
                     let wasRevealed = revealed
                     let projected = value.predictedEndTranslation.width + (wasRevealed ? settledOffset : 0)
-                    withAnimation(.interactiveSpring(response: 0.25, dampingFraction: 0.91, blendDuration: 0.06)) {
-                        if wasRevealed {
+                    withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08)) {
+                        if !wasRevealed && projected < -132 {
+                            revealed = true
+                            dragOffset = 0
+                            showDeleteConfirmation = true
+                            return
+                        } else if wasRevealed {
                             // A deliberate reverse swipe closes the action even
                             // if the finger did not travel all the way back.
                             revealed = !(value.translation.width > 16 || value.predictedEndTranslation.width > 30)
@@ -2225,7 +2219,33 @@ private struct FriendSwipeRow: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 70)
-        .animation(.interactiveSpring(response: 0.26, dampingFraction: 0.91, blendDuration: 0.08), value: revealed)
+        .animation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08), value: revealed)
+        .confirmationDialog("Удалить \(person.nickname) из друзей?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+            Button("Удалить", role: .destructive) { performRemove() }
+            Button("Отмена", role: .cancel) {
+                withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88)) { revealed = false }
+            }
+        } message: {
+            Text("Пользователь исчезнет из списка друзей.")
+        }
+    }
+
+    private func requestDeleteConfirmation() {
+        guard !removing else { return }
+        withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88)) { revealed = true }
+        showDeleteConfirmation = true
+    }
+
+    private func performRemove() {
+        guard !removing else { return }
+        removing = true
+        Task {
+            await remove()
+            await MainActor.run {
+                removing = false
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { revealed = false }
+            }
+        }
     }
 }
 
