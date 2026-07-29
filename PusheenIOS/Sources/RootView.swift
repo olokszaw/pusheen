@@ -1462,10 +1462,14 @@ private struct ViewingHeatmapCard: View {
             let end = min(today, naturalEnd)
             let count = max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
             let days = (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
-            let columnCount = Int(ceil(Double(days.count) / 7.0))
+            let columnCount = visibleMonths == 1 ? 7 : 5
+            let rowCount = visibleMonths == 1 ? 5 : 7
             let columns: [[Date?]] = (0..<columnCount).map { column in
-                (0..<7).map { row in
-                    let index = column * 7 + row
+                (0..<rowCount).map { row in
+                    // One month is deliberately horizontal (7 x 5). In the
+                    // three-month view every month owns five columns, so a
+                    // month boundary can never share a column with the next.
+                    let index = visibleMonths == 1 ? row * columnCount + column : column * rowCount + row
                     return index < days.count ? days[index] : nil
                 }
             }
@@ -1500,11 +1504,12 @@ private struct ViewingHeatmapCard: View {
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
                 let spacing: CGFloat = visibleMonths == 1 ? 6 : 3
-                let monthGap: CGFloat = visibleMonths == 1 ? 0 : 8
+                let monthGap: CGFloat = visibleMonths == 1 ? 0 : spacing
                 let totalGaps = CGFloat(max(0, columnCount - visibleMonths)) * spacing + CGFloat(max(0, visibleMonths - 1)) * monthGap
                 let fitted = (proxy.size.width - totalGaps) / CGFloat(max(1, columnCount))
                 let labelAllowance: CGFloat = 23
-                let verticalFit = max(8, (proxy.size.height - labelAllowance - 6 * spacing) / 7)
+                let rowCount: CGFloat = visibleMonths == 1 ? 5 : 7
+                let verticalFit = max(8, (proxy.size.height - labelAllowance - (rowCount - 1) * spacing) / rowCount)
                 let tile = min(visibleMonths == 1 ? 30 : 20, fitted, verticalFit)
                 HStack(alignment: .top, spacing: monthGap) {
                     ForEach(monthSections) { section in
@@ -1549,7 +1554,9 @@ private struct ViewingHeatmapCard: View {
     }
 
     private func color(for day: Date?) -> Color {
-        guard let day else { return .clear }
+        // Empty tail positions only complete the visual month rectangle; they
+        // have no date and remain non-interactive.
+        guard let day else { return .white.opacity(0.11) }
         let key = ISO8601DateFormatter().string(from: day).prefix(10)
         let value = daily[String(key)] ?? 0
         guard value > 0 else { return .white.opacity(0.11) }
