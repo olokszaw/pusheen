@@ -2149,15 +2149,18 @@ private struct FriendSwipeRow: View {
     let add: () async -> Void
     let remove: () async -> Void
     @State private var revealed = false
-    // `nil` means there is no finger on the row. Zero is a real drag position
-    // while the user returns the row to the right, so it must not be used as a
-    // sentinel value.
-    @State private var dragOffset: CGFloat?
+    // Keep the live finger movement separate from the settled open/closed state.
+    // `GestureState` is reset in the same gesture transaction, so returning an
+    // open row to the right cannot pause between two competing state updates.
+    @GestureState private var dragTranslation: CGFloat = 0
     @State private var removing = false
     @State private var showDeleteConfirmation = false
 
     private let settledOffset: CGFloat = -104
-    private var offset: CGFloat { dragOffset ?? (revealed ? settledOffset : 0) }
+    private var offset: CGFloat {
+        let settled = revealed ? settledOffset : 0
+        return min(0, max(-148, settled + dragTranslation))
+    }
     private var deleteReveal: CGFloat {
         min(1, max(0, (-offset) / (-settledOffset)))
     }
@@ -2167,7 +2170,10 @@ private struct FriendSwipeRow: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            if person.isFriend && (revealed || (dragOffset ?? 0) < -4) {
+            // Keep the glass action in the hierarchy while the row closes so
+            // its width and opacity can animate back with the card instead of
+            // disappearing one frame before the return animation.
+            if person.isFriend {
                 Button {
                     requestDeleteConfirmation()
                 } label: {
@@ -2235,36 +2241,33 @@ private struct FriendSwipeRow: View {
             // A simultaneous gesture preserves the delete button's own tap
             // handling once it is exposed, while still tracking the swipe.
             .simultaneousGesture(DragGesture(minimumDistance: 6, coordinateSpace: .local)
-                .onChanged { value in
+                .updating($dragTranslation) { value, state, _ in
                     guard person.isFriend else { return }
                     guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                    dragOffset = min(0, max(-148, value.translation.width + (revealed ? settledOffset : 0)))
+                    state = value.translation.width
                 }
                 .onEnded { value in
                     guard person.isFriend else { return }
-                    guard abs(value.translation.width) > abs(value.translation.height) else { dragOffset = nil; return }
+                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
                     let wasRevealed = revealed
                     let projected = value.predictedEndTranslation.width + (wasRevealed ? settledOffset : 0)
                     withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08)) {
                         if !wasRevealed && projected < -132 {
                             revealed = true
-                            dragOffset = nil
                             showDeleteConfirmation = true
                             return
                         } else if wasRevealed {
-                            // A deliberate reverse swipe closes the action even
-                            // if the finger did not travel all the way back.
-                            revealed = !(value.translation.width > 16 || value.predictedEndTranslation.width > 30)
+                            // Once the row visibly follows a deliberate reverse
+                            // gesture, let it close instead of snapping back left.
+                            revealed = !(value.translation.width > 8 || value.predictedEndTranslation.width > 18)
                         } else {
                             revealed = projected < -54
                         }
-                        dragOffset = nil
                     }
                 })
         }
         .frame(maxWidth: .infinity)
         .frame(height: 70)
-        .animation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08), value: revealed)
         .confirmationDialog("Удалить \(person.nickname) из друзей?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
             Button("Удалить", role: .destructive) { performRemove() }
             Button("Отмена", role: .cancel) {
