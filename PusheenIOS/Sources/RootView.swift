@@ -2143,23 +2143,39 @@ private struct RequestHeaderButton: View {
 }
 
 private struct FriendSwipeRow: View {
+    private enum SwipeGestureState: Equatable {
+        case inactive
+        case horizontal(CGFloat)
+        case vertical
+
+        var horizontalTranslation: CGFloat {
+            if case let .horizontal(value) = self { return value }
+            return 0
+        }
+
+        var isHorizontal: Bool {
+            if case .horizontal = self { return true }
+            return false
+        }
+    }
+
     let person: FriendProfile
     let showAdd: Bool
     let pending: Bool
     let add: () async -> Void
     let remove: () async -> Void
     @State private var revealed = false
-    // Keep the live finger movement separate from the settled open/closed state.
-    // `GestureState` is reset in the same gesture transaction, so returning an
-    // open row to the right cannot pause between two competing state updates.
-    @GestureState private var dragTranslation: CGFloat = 0
+    // Lock the gesture axis once, at the beginning of the drag. Re-evaluating
+    // X versus Y on every frame makes a reversing horizontal swipe stall when
+    // its X translation crosses zero and tiny vertical finger noise wins.
+    @GestureState private var swipeGesture: SwipeGestureState = .inactive
     @State private var removing = false
     @State private var showDeleteConfirmation = false
 
     private let settledOffset: CGFloat = -104
     private var offset: CGFloat {
         let settled = revealed ? settledOffset : 0
-        return min(0, max(-148, settled + dragTranslation))
+        return min(0, max(-148, settled + swipeGesture.horizontalTranslation))
     }
     private var deleteReveal: CGFloat {
         min(1, max(0, (-offset) / (-settledOffset)))
@@ -2241,14 +2257,24 @@ private struct FriendSwipeRow: View {
             // A simultaneous gesture preserves the delete button's own tap
             // handling once it is exposed, while still tracking the swipe.
             .simultaneousGesture(DragGesture(minimumDistance: 6, coordinateSpace: .local)
-                .updating($dragTranslation) { value, state, _ in
+                .updating($swipeGesture) { value, state, _ in
                     guard person.isFriend else { return }
-                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                    state = value.translation.width
+                    switch state {
+                    case .inactive:
+                        state = abs(value.translation.width) >= abs(value.translation.height)
+                            ? .horizontal(value.translation.width)
+                            : .vertical
+                    case .horizontal:
+                        // Once horizontal, stay horizontal even while the finger
+                        // reverses and total X translation passes through zero.
+                        state = .horizontal(value.translation.width)
+                    case .vertical:
+                        break
+                    }
                 }
                 .onEnded { value in
                     guard person.isFriend else { return }
-                    guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                    guard swipeGesture.isHorizontal || abs(value.translation.width) >= abs(value.translation.height) else { return }
                     let wasRevealed = revealed
                     let projected = value.predictedEndTranslation.width + (wasRevealed ? settledOffset : 0)
                     withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08)) {
