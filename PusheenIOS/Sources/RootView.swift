@@ -1307,7 +1307,7 @@ private struct ViewingHeatmapCard: View {
 
     private var weeks: [[Date?]] {
         stride(from: 0, to: days.count, by: 7).map { start in
-            let week: [Date?] = Array(days[start..<min(start + 7, days.count)]).map { $0 }
+            let week: [Date?] = Array(days[start..<min(start + 7, days.count)]).map(Optional.some)
             return week + Array(repeating: nil, count: 7 - week.count)
         }
     }
@@ -1327,11 +1327,12 @@ private struct ViewingHeatmapCard: View {
             GeometryReader { proxy in
                 let tile = max(4, min(7, (proxy.size.width - CGFloat(weeks.count - 1) * 2) / CGFloat(weeks.count)))
                 HStack(alignment: .top, spacing: 2) {
-                    ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                    ForEach(weeks.indices, id: \.self) { weekIndex in
+                        let week = weeks[weekIndex]
                         VStack(spacing: 2) {
-                            ForEach(Array(week.enumerated()), id: \.offset) { _, day in
+                            ForEach(week.indices, id: \.self) { dayIndex in
                                 RoundedRectangle(cornerRadius: max(1.2, tile * 0.27), style: .continuous)
-                                    .fill(color(for: day))
+                                    .fill(color(for: week[dayIndex]))
                                     .frame(width: tile, height: tile)
                             }
                         }
