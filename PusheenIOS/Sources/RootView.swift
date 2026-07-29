@@ -1441,27 +1441,17 @@ private struct ViewingHeatmapCard: View {
     @State private var pinchScale: CGFloat = 1
 
     private var today: Date { calendar.startOfDay(for: Date()) }
-    private var firstVisibleDay: Date {
-        let components = calendar.dateComponents([.year, .month], from: today)
-        let monthStart = calendar.date(from: components) ?? today
-        return calendar.date(byAdding: .month, value: -(visibleMonths - 1), to: monthStart) ?? monthStart
-    }
+    private var visibleWeekCount: Int { visibleMonths == 1 ? 5 : 13 }
     private var gridStart: Date {
-        let weekday = calendar.component(.weekday, from: firstVisibleDay)
-        // Calendar weekday is 1 on Sunday. Start every heatmap on Monday so a
-        // month label always sits under a stable group of seven-day columns.
-        let offset = (weekday + 5) % 7
-        return calendar.date(byAdding: .day, value: -offset, to: firstVisibleDay) ?? firstVisibleDay
+        // A continuous range keeps every square meaningful: no leading or
+        // trailing calendar placeholders are needed at either zoom level.
+        calendar.date(byAdding: .day, value: -(visibleWeekCount * 7 - 1), to: today) ?? today
     }
-    private var columnCount: Int {
-        max(1, Int(ceil(Double((calendar.dateComponents([.day], from: gridStart, to: today).day ?? 0) + 1) / 7.0)))
-    }
-    private var columns: [[Date?]] {
-        (0..<columnCount).map { column in
+    private var columnCount: Int { visibleWeekCount }
+    private var columns: [[Date]] {
+        (0..<visibleWeekCount).map { column in
             (0..<7).map { row in
-                let day = calendar.date(byAdding: .day, value: column * 7 + row, to: gridStart)
-                guard let day, day >= firstVisibleDay, day <= today else { return nil }
-                return day
+                calendar.date(byAdding: .day, value: column * 7 + row, to: gridStart) ?? today
             }
         }
     }
@@ -1487,11 +1477,11 @@ private struct ViewingHeatmapCard: View {
                 .padding(.vertical, 8)
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
-                let spacing: CGFloat = visibleMonths == 1 ? 5 : 3
+                let spacing: CGFloat = visibleMonths == 1 ? 6 : 3
                 let fitted = (proxy.size.width - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount)
                 let labelAllowance: CGFloat = 23
                 let verticalFit = max(8, (proxy.size.height - labelAllowance - 6 * spacing) / 7)
-                let tile = min(visibleMonths == 1 ? 23 : 20, fitted, verticalFit)
+                let tile = min(visibleMonths == 1 ? 30 : 20, fitted, verticalFit)
                 let chartWidth = CGFloat(columnCount) * tile + CGFloat(columnCount - 1) * spacing
                 VStack(spacing: 9) {
                     HStack(spacing: spacing) {
@@ -1511,7 +1501,6 @@ private struct ViewingHeatmapCard: View {
                                         }
                                         .contentShape(Rectangle())
                                         .onTapGesture {
-                                            guard let day else { return }
                                             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
                                         }
                                 }
@@ -1532,7 +1521,7 @@ private struct ViewingHeatmapCard: View {
                 .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
-            .frame(height: 184)
+            .frame(height: visibleMonths == 1 ? 225 : 184)
         }
         .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .simultaneousGesture(heatmapMagnification)
@@ -1542,13 +1531,15 @@ private struct ViewingHeatmapCard: View {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "ru_RU")
         formatter.dateFormat = "LLL"
+        if visibleMonths == 1 {
+            return [formatter.string(from: today).replacingOccurrences(of: ".", with: "")]
+        }
         return (0..<visibleMonths).compactMap { offset in
             calendar.date(byAdding: .month, value: -(visibleMonths - 1) + offset, to: today).map { formatter.string(from: $0).replacingOccurrences(of: ".", with: "") }
         }
     }
 
-    private func color(for day: Date?) -> Color {
-        guard let day else { return .white.opacity(0.065) }
+    private func color(for day: Date) -> Color {
         let key = ISO8601DateFormatter().string(from: day).prefix(10)
         let value = daily[String(key)] ?? 0
         guard value > 0 else { return .white.opacity(0.11) }
