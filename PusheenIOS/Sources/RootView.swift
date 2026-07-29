@@ -1458,7 +1458,7 @@ private struct GenreOnlyCard: View {
 private struct HeatmapMonthSection: Identifiable {
     let start: Date
     let label: String
-    let columns: [[Date?]]
+    let columns: [[Date]]
     var id: Date { start }
 }
 
@@ -1484,15 +1484,27 @@ private struct ViewingHeatmapCard: View {
             let end = min(today, naturalEnd)
             let count = max(1, (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1)
             let days = (0..<count).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
-            let columnCount = visibleMonths == 1 ? 7 : 5
-            let rowCount = visibleMonths == 1 ? 5 : 7
-            let columns: [[Date?]] = (0..<columnCount).map { column in
-                (0..<rowCount).map { row in
-                    // One month is deliberately horizontal (7 x 5). In the
-                    // three-month view every month owns five columns, so a
-                    // month boundary can never share a column with the next.
-                    let index = visibleMonths == 1 ? row * columnCount + column : column * rowCount + row
-                    return index < days.count ? days[index] : nil
+            // Build the grid from elapsed days only. Future dates must not be
+            // rendered as placeholder tiles, while the existing dates still
+            // expand to consume the full available width.
+            let columns: [[Date]]
+            if visibleMonths == 1 {
+                let columnCount = min(7, max(1, days.count))
+                let rowCount = max(1, Int(ceil(Double(days.count) / Double(columnCount))))
+                columns = (0..<columnCount).map { column in
+                    (0..<rowCount).compactMap { row in
+                        let index = row * columnCount + column
+                        return index < days.count ? days[index] : nil
+                    }
+                }
+            } else {
+                let rowCount = 7
+                let columnCount = max(1, Int(ceil(Double(days.count) / Double(rowCount))))
+                columns = (0..<columnCount).map { column in
+                    (0..<rowCount).compactMap { row in
+                        let index = column * rowCount + row
+                        return index < days.count ? days[index] : nil
+                    }
                 }
             }
             return HeatmapMonthSection(
@@ -1503,8 +1515,6 @@ private struct ViewingHeatmapCard: View {
         }
     }
     private var columnCount: Int { monthSections.reduce(0) { $0 + $1.columns.count } }
-
-    private var maximum: Int { max(1, daily.values.max() ?? 1) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1545,7 +1555,7 @@ private struct ViewingHeatmapCard: View {
                                                 .fill(color(for: day))
                                                 .frame(width: tile, height: tile)
                                                 .overlay {
-                                                    if let selectedDay, day == selectedDay {
+                                                    if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
                                                         RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
                                                             .stroke(.white.opacity(0.94), lineWidth: 1.8)
                                                             .shadow(color: .cyan.opacity(0.8), radius: 6)
@@ -1553,7 +1563,6 @@ private struct ViewingHeatmapCard: View {
                                                 }
                                                 .contentShape(Rectangle())
                                                 .onTapGesture {
-                                                    guard let day else { return }
                                                     withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
                                                 }
                                         }
@@ -1563,6 +1572,9 @@ private struct ViewingHeatmapCard: View {
                             Text(section.label)
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .frame(height: 14, alignment: .leading)
                         }
                     }
                 }
@@ -1575,14 +1587,16 @@ private struct ViewingHeatmapCard: View {
         .simultaneousGesture(heatmapMagnification)
     }
 
-    private func color(for day: Date?) -> Color {
-        // Empty tail positions only complete the visual month rectangle; they
-        // have no date and remain non-interactive.
-        guard let day else { return .white.opacity(0.11) }
+    private func color(for day: Date) -> Color {
         let key = ISO8601DateFormatter().string(from: day).prefix(10)
         let value = daily[String(key)] ?? 0
-        guard value > 0 else { return .white.opacity(0.11) }
-        return Color.cyan.opacity(0.30 + 0.70 * Double(value) / Double(maximum))
+        guard value > 0 else { return .white.opacity(0.10) }
+        // Use an absolute time scale instead of comparing a day with the
+        // current maximum. A short session stays subtle and translucent;
+        // three hours and above reaches the clear light-cyan level.
+        let threeHours = 3.0 * 60.0 * 60.0
+        let progress = min(1, Double(value) / threeHours)
+        return Color.cyan.opacity(0.12 + 0.68 * progress)
     }
 
     private var heatmapMagnification: some Gesture {
