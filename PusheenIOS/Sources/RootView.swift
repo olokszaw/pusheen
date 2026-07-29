@@ -280,7 +280,16 @@ struct RoomView: View {
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
             ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
-                    Group { if let player = model.player { BarePlayerSurface(player: player) } else { ProgressView() } }
+                    Group {
+                        if let player = model.player {
+                            BarePlayerSurface(player: player)
+                        } else {
+                            ZStack {
+                                Color.black
+                                ProgressView().tint(.white)
+                            }
+                        }
+                    }
                         .frame(height: playerHeight)
                         .contentShape(Rectangle())
                         .onTapGesture { toggleControls() }
@@ -331,7 +340,7 @@ struct RoomView: View {
                         }
                         if value.translation.width < -70 {
                             withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) { roomSwipeOffset = 0 }
-                            showMembers = true
+                            presentMembers()
                         } else if value.translation.width > 0 {
                             let shouldLeave = value.translation.width > 145 || value.predictedEndTranslation.width > 270
                             if shouldLeave {
@@ -361,7 +370,6 @@ struct RoomView: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 keyboardHeight = 0
-                showMembers = false
             }
             withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
                 chatFocused = false
@@ -424,7 +432,9 @@ struct RoomView: View {
             .opacity(model.isOwner ? 1 : 0.62)
         }
         .padding(9)
+        .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .tint(.cyan)
     }
     private func copyInviteCode() {
         controlsHideTask?.cancel()
@@ -445,6 +455,7 @@ struct RoomView: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(primary ? .title3.weight(.semibold) : .body.weight(.semibold))
+                .foregroundStyle(.cyan)
                 .frame(width: primary ? 48 : 42, height: 42)
                 .contentShape(Circle())
                 .liquidCard(Circle())
@@ -462,6 +473,13 @@ struct RoomView: View {
             guard !Task.isCancelled else { return }
             await MainActor.run { withAnimation(.easeOut(duration: 0.22)) { controlsVisible = false } }
         }
+    }
+    private func presentMembers() {
+        // A sheet and an active UIKit text view must never compete for the
+        // keyboard. Resign first, then present; the chat stays in place.
+        chatFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        DispatchQueue.main.async { showMembers = true }
     }
 }
 
@@ -675,45 +693,45 @@ struct NativeChatPane: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
-    @State private var bottomScrollRequest = 0
-    @State private var visibleMessageID: Int?
+    @State private var didInitialScroll = false
     private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Чат").font(.headline)
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(messages) { message in
-                        NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
-                            .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
-                            .id(message.id)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(messages) { message in
+                            NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
+                                .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
+                                .id(message.id)
+                        }
+                    }
+                    .padding(.top, 2)
+                    .padding(.bottom, 2)
+                    .scrollTargetLayout()
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { focused = false; inputFocused = false }
+                .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
+                    max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
+                }, action: { _, distanceToBottom in
+                    sticksToBottom = distanceToBottom < 44
+                })
+                .onChange(of: messages.last?.id) { oldID, newID in
+                    guard newID != nil, newID != oldID else { return }
+                    if !didInitialScroll || sticksToBottom {
+                        scrollToLatestMessage(proxy, animated: didInitialScroll)
+                        didInitialScroll = true
                     }
                 }
-                .padding(.top, 2)
-                .padding(.bottom, 2)
-                .scrollTargetLayout()
-            }
-            .defaultScrollAnchor(.bottom)
-            .scrollPosition(id: $visibleMessageID, anchor: .bottom)
-            .contentShape(Rectangle())
-            .onTapGesture { focused = false; inputFocused = false }
-            .onChange(of: visibleMessageID) { _, target in
-                guard let target else { return }
-                sticksToBottom = messages.suffix(3).contains { $0.id == target }
-            }
-            .onChange(of: bottomScrollRequest) { _, _ in
-                sticksToBottom = true
-                scrollToLatestMessage(animated: true)
-            }
-            .onChange(of: messages.last?.id) { _, _ in
-                if sticksToBottom { scrollToLatestMessage(animated: true) }
-            }
-            .onAppear {
-                if visibleMessageID == nil { visibleMessageID = messages.last?.id }
-            }
-            .onChange(of: messages.isEmpty) { _, isEmpty in
-                if isEmpty { visibleMessageID = nil }
-                else if visibleMessageID == nil { visibleMessageID = messages.last?.id }
+                .onAppear {
+                    guard !didInitialScroll, messages.last != nil else { return }
+                    DispatchQueue.main.async {
+                        scrollToLatestMessage(proxy, animated: false)
+                        didInitialScroll = true
+                    }
+                }
             }
             .frame(maxHeight: .infinity)
             HStack(alignment: .bottom, spacing: 10) {
@@ -761,6 +779,11 @@ struct NativeChatPane: View {
         // keyboard-sized padding belongs inside the chat: it created the large
         // empty rectangle below the composer.
         .animation(.easeOut(duration: 0.18), value: inputFocused)
+        .onChange(of: focused) { _, roomFocused in
+            // RoomView can explicitly close the keyboard before presenting
+            // participants; keep UIKit and SwiftUI focus in sync.
+            if !roomFocused { inputFocused = false }
+        }
         .task {
             FluentEmojiCache.shared.warmCommonEmoji()
             messages.forEach { FluentEmojiCache.shared.prefetch(in: $0.text) }
@@ -775,7 +798,6 @@ struct NativeChatPane: View {
             } send: {
                 sticksToBottom = true
                 send("", photo.dataURL)
-                bottomScrollRequest += 1
                 pendingPhoto = nil
             }
         }
@@ -786,7 +808,6 @@ struct NativeChatPane: View {
         sticksToBottom = true
         send(text, "")
         draft = ""
-        bottomScrollRequest += 1
     }
     private func preparePhoto(_ item: PhotosPickerItem?) async {
         guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
@@ -815,14 +836,14 @@ struct NativeChatPane: View {
         if jpeg.count > 1_850_000, let smaller = normalized.jpegData(compressionQuality: 0.56) { jpeg = smaller }
         return "data:image/jpeg;base64," + jpeg.base64EncodedString()
     }
-    private func scrollToLatestMessage(animated: Bool) {
+    private func scrollToLatestMessage(_ proxy: ScrollViewProxy, animated: Bool) {
         guard let lastID = messages.last?.id else { return }
         if animated {
-            withAnimation(.easeOut(duration: 0.18)) { visibleMessageID = lastID }
+            withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(lastID, anchor: .bottom) }
         } else {
             var transaction = Transaction()
             transaction.disablesAnimations = true
-            withTransaction(transaction) { visibleMessageID = lastID }
+            withTransaction(transaction) { proxy.scrollTo(lastID, anchor: .bottom) }
         }
     }
 }
