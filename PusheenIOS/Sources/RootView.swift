@@ -2106,12 +2106,15 @@ private struct FriendSwipeRow: View {
     let add: () async -> Void
     let remove: () async -> Void
     @State private var revealed = false
-    @State private var dragOffset: CGFloat = 0
+    // `nil` means there is no finger on the row. Zero is a real drag position
+    // while the user returns the row to the right, so it must not be used as a
+    // sentinel value.
+    @State private var dragOffset: CGFloat?
     @State private var removing = false
     @State private var showDeleteConfirmation = false
 
     private let settledOffset: CGFloat = -104
-    private var offset: CGFloat { dragOffset == 0 ? (revealed ? settledOffset : 0) : dragOffset }
+    private var offset: CGFloat { dragOffset ?? (revealed ? settledOffset : 0) }
     private var deleteReveal: CGFloat {
         min(1, max(0, (-offset) / (-settledOffset)))
     }
@@ -2121,7 +2124,7 @@ private struct FriendSwipeRow: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            if person.isFriend && (revealed || dragOffset < -4) {
+            if person.isFriend && (revealed || (dragOffset ?? 0) < -4) {
                 Button {
                     requestDeleteConfirmation()
                 } label: {
@@ -2196,13 +2199,13 @@ private struct FriendSwipeRow: View {
                 }
                 .onEnded { value in
                     guard person.isFriend else { return }
-                    guard abs(value.translation.width) > abs(value.translation.height) else { dragOffset = 0; return }
+                    guard abs(value.translation.width) > abs(value.translation.height) else { dragOffset = nil; return }
                     let wasRevealed = revealed
                     let projected = value.predictedEndTranslation.width + (wasRevealed ? settledOffset : 0)
                     withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08)) {
                         if !wasRevealed && projected < -132 {
                             revealed = true
-                            dragOffset = 0
+                            dragOffset = nil
                             showDeleteConfirmation = true
                             return
                         } else if wasRevealed {
@@ -2212,7 +2215,7 @@ private struct FriendSwipeRow: View {
                         } else {
                             revealed = projected < -54
                         }
-                        dragOffset = 0
+                        dragOffset = nil
                     }
                 })
         }
