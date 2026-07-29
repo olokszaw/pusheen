@@ -2179,6 +2179,7 @@ private struct FriendSwipeRow: View {
     @GestureState private var swipeGesture: SwipeGestureState = .inactive
     @State private var removing = false
     @State private var showDeleteConfirmation = false
+    @State private var deletePromptTriggeredByDrag = false
 
     private let settledOffset: CGFloat = -104
     private var offset: CGFloat {
@@ -2280,22 +2281,31 @@ private struct FriendSwipeRow: View {
                         break
                     }
                 }
+                .onChanged { value in
+                    guard person.isFriend, !revealed, !removing else { return }
+                    guard !showDeleteConfirmation, !deletePromptTriggeredByDrag else { return }
+                    guard abs(value.translation.width) >= abs(value.translation.height) else { return }
+                    guard value.translation.width <= -64 else { return }
+
+                    // Crossing the destructive threshold with the finger is the
+                    // action that presents confirmation. Do not first settle the
+                    // row to its resting offset: that produced a second, automatic
+                    // left swipe before the dialog appeared.
+                    deletePromptTriggeredByDrag = true
+                    showDeleteConfirmation = true
+                }
                 .onEnded { value in
                     guard person.isFriend else { return }
+                    if deletePromptTriggeredByDrag {
+                        // Presentation cancels the active drag and the row returns
+                        // directly to its normal shape behind the dialog.
+                        deletePromptTriggeredByDrag = false
+                        revealed = false
+                        return
+                    }
                     guard swipeGesture.isHorizontal || abs(value.translation.width) >= abs(value.translation.height) else { return }
                     let wasRevealed = revealed
                     let projected = value.predictedEndTranslation.width + (wasRevealed ? settledOffset : 0)
-                    let actual = value.translation.width + (wasRevealed ? settledOffset : 0)
-                    if !wasRevealed && actual <= -64 {
-                        // Present immediately on release. Keeping this state out
-                        // of the spring transaction prevents SwiftUI from waiting
-                        // for the row's automatic settle animation to finish.
-                        showDeleteConfirmation = true
-                        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.90, blendDuration: 0.04)) {
-                            revealed = true
-                        }
-                        return
-                    }
                     withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08)) {
                         if wasRevealed {
                             // Once the row visibly follows a deliberate reverse
