@@ -1455,13 +1455,6 @@ private struct GenreOnlyCard: View {
     }
 }
 
-private struct HeatmapMonthSection: Identifiable {
-    let start: Date
-    let label: String
-    let columns: [[Date]]
-    var id: Date { start }
-}
-
 private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
     private let calendar = Calendar.current
@@ -1470,53 +1463,58 @@ private struct ViewingHeatmapCard: View {
     @State private var pinchScale: CGFloat = 1
 
     private var today: Date { calendar.startOfDay(for: Date()) }
-    private var monthSections: [HeatmapMonthSection] {
+    private var currentMonthStart: Date {
+        let components = calendar.dateComponents([.year, .month], from: today)
+        return calendar.date(from: components) ?? today
+    }
+
+    private var visibleStart: Date {
+        calendar.date(byAdding: .month, value: -(visibleMonths - 1), to: currentMonthStart) ?? currentMonthStart
+    }
+
+    // One uninterrupted chronological data set removes the artificial holes
+    // that appeared at the boundary of two separately rendered months.
+    // Its first day is always the first day of the first labelled month and
+    // its last day is today, so neither April under "May" nor future cells can
+    // enter the grid.
+    private var visibleDays: [Date] {
+        let dayCount = max(1, (calendar.dateComponents([.day], from: visibleStart, to: today).day ?? 0) + 1)
+        return (0..<dayCount).compactMap {
+            calendar.date(byAdding: .day, value: $0, to: visibleStart)
+        }
+    }
+
+    private var columns: [[Date]] {
+        if visibleMonths == 1 {
+            let columnCount = min(7, max(1, visibleDays.count))
+            let rowCount = max(1, Int(ceil(Double(visibleDays.count) / Double(columnCount))))
+            return (0..<columnCount).map { column in
+                (0..<rowCount).compactMap { row in
+                    let index = row * columnCount + column
+                    return index < visibleDays.count ? visibleDays[index] : nil
+                }
+            }
+        }
+
+        let rowCount = 7
+        let columnCount = max(1, Int(ceil(Double(visibleDays.count) / Double(rowCount))))
+        return (0..<columnCount).map { column in
+            (0..<rowCount).compactMap { row in
+                let index = column * rowCount + row
+                return index < visibleDays.count ? visibleDays[index] : nil
+            }
+        }
+    }
+
+    private var monthLabels: [String] {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "ru_RU")
         formatter.dateFormat = "LLL"
-        let currentComponents = calendar.dateComponents([.year, .month], from: today)
-        let currentStart = calendar.date(from: currentComponents) ?? today
-
-        // Each section is a strict calendar month. The current section ends
-        // today, so no future day or cell exists. The remaining real dates are
-        // resized by the layout to consume all available width.
         return (0..<visibleMonths).compactMap { offset in
-            guard let sectionStart = calendar.date(byAdding: .month, value: -(visibleMonths - 1) + offset, to: currentStart),
-                  let interval = calendar.dateInterval(of: .month, for: sectionStart) else { return nil }
-            let naturalEnd = calendar.date(byAdding: .day, value: -1, to: interval.end) ?? today
-            let sectionEnd = min(today, naturalEnd)
-            let dayCount = max(1, (calendar.dateComponents([.day], from: sectionStart, to: sectionEnd).day ?? 0) + 1)
-            let days = (0..<dayCount).compactMap {
-                calendar.date(byAdding: .day, value: $0, to: sectionStart)
-            }
-            let columns: [[Date]]
-            if visibleMonths == 1 {
-                let columnCount = min(7, max(1, days.count))
-                let rowCount = max(1, Int(ceil(Double(days.count) / Double(columnCount))))
-                columns = (0..<columnCount).map { column in
-                    (0..<rowCount).compactMap { row in
-                        let index = row * columnCount + column
-                        return index < days.count ? days[index] : nil
-                    }
-                }
-            } else {
-                let rowCount = 7
-                let columnCount = max(1, Int(ceil(Double(days.count) / Double(rowCount))))
-                columns = (0..<columnCount).map { column in
-                    (0..<rowCount).compactMap { row in
-                        let index = column * rowCount + row
-                        return index < days.count ? days[index] : nil
-                    }
-                }
-            }
-            return HeatmapMonthSection(
-                start: sectionStart,
-                label: formatter.string(from: sectionStart).replacingOccurrences(of: ".", with: ""),
-                columns: columns
-            )
+            guard let month = calendar.date(byAdding: .month, value: offset, to: visibleStart) else { return nil }
+            return formatter.string(from: month).replacingOccurrences(of: ".", with: "")
         }
     }
-    private var columnCount: Int { monthSections.reduce(0) { $0 + $1.columns.count } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1538,48 +1536,46 @@ private struct ViewingHeatmapCard: View {
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
                 let spacing: CGFloat = visibleMonths == 1 ? 6 : 3
-                let monthGap: CGFloat = visibleMonths == 1 ? 0 : spacing
-                let totalGaps = CGFloat(max(0, columnCount - visibleMonths)) * spacing + CGFloat(max(0, visibleMonths - 1)) * monthGap
-                let fitted = (proxy.size.width - totalGaps) / CGFloat(max(1, columnCount))
+                let totalGaps = CGFloat(max(0, columns.count - 1)) * spacing
+                let fitted = (proxy.size.width - totalGaps) / CGFloat(max(1, columns.count))
                 let labelAllowance: CGFloat = 23
-                let actualRows = monthSections.flatMap(\.columns).map(\.count).max() ?? 1
+                let actualRows = columns.map(\.count).max() ?? 1
                 let rowCount = CGFloat(actualRows)
                 let verticalFit = max(8, (proxy.size.height - labelAllowance - (rowCount - 1) * spacing) / rowCount)
                 let tile = min(visibleMonths == 1 ? 30 : 20, fitted, verticalFit)
-                HStack(alignment: .top, spacing: monthGap) {
-                    ForEach(monthSections) { section in
-                        VStack(alignment: .leading, spacing: 9) {
-                            HStack(spacing: spacing) {
-                                ForEach(section.columns.indices, id: \.self) { columnIndex in
-                                    VStack(spacing: spacing) {
-                                        ForEach(section.columns[columnIndex].indices, id: \.self) { rowIndex in
-                                            let day = section.columns[columnIndex][rowIndex]
-                                            RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                                .fill(color(for: day))
-                                                .frame(width: tile, height: tile)
-                                                .overlay {
-                                                    if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
-                                                        RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                                            .stroke(.white.opacity(0.94), lineWidth: 1.8)
-                                                            .shadow(color: .cyan.opacity(0.8), radius: 6)
-                                                    }
-                                                }
-                                                .contentShape(Rectangle())
-                                                .onTapGesture {
-                                                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
-                                                }
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(alignment: .top, spacing: spacing) {
+                        ForEach(columns.indices, id: \.self) { columnIndex in
+                            VStack(spacing: spacing) {
+                                ForEach(columns[columnIndex], id: \.self) { day in
+                                    RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                        .fill(color(for: day))
+                                        .frame(width: tile, height: tile)
+                                        .overlay {
+                                            if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
+                                                RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
+                                                    .stroke(.white.opacity(0.94), lineWidth: 1.8)
+                                                    .shadow(color: .cyan.opacity(0.8), radius: 6)
+                                            }
                                         }
-                                    }
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
+                                        }
                                 }
                             }
-                            Text(section.label)
+                        }
+                    }
+                    HStack(spacing: 0) {
+                        ForEach(Array(monthLabels.enumerated()), id: \.offset) { _, label in
+                            Text(label)
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .frame(height: 14, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    .frame(width: CGFloat(columns.count) * tile + totalGaps, height: 14)
                 }
                 .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
