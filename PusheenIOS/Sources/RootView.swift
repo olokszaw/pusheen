@@ -1458,6 +1458,18 @@ private struct GenreOnlyCard: View {
 private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
     private let calendar = Calendar.current
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "LLL"
+        return formatter
+    }()
+    private static let detailFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "d MMMM"
+        return formatter
+    }()
     @State private var selectedDay: Date?
     @State private var visibleMonths = 3
     @State private var pinchScale: CGFloat = 1
@@ -1485,38 +1497,41 @@ private struct ViewingHeatmapCard: View {
     }
 
     private var columns: [[Date]] {
+        // Capture this computed range once. Accessing visibleDays from inside
+        // every nested loop used to rebuild the whole range for every tile.
+        let days = visibleDays
         if visibleMonths == 1 {
-            let columnCount = min(7, max(1, visibleDays.count))
-            let rowCount = max(1, Int(ceil(Double(visibleDays.count) / Double(columnCount))))
+            let columnCount = min(7, max(1, days.count))
+            let rowCount = max(1, Int(ceil(Double(days.count) / Double(columnCount))))
             return (0..<columnCount).map { column in
                 (0..<rowCount).compactMap { row in
                     let index = row * columnCount + column
-                    return index < visibleDays.count ? visibleDays[index] : nil
+                    return index < days.count ? days[index] : nil
                 }
             }
         }
 
         let rowCount = 7
-        let columnCount = max(1, Int(ceil(Double(visibleDays.count) / Double(rowCount))))
+        let columnCount = max(1, Int(ceil(Double(days.count) / Double(rowCount))))
         return (0..<columnCount).map { column in
             (0..<rowCount).compactMap { row in
                 let index = column * rowCount + row
-                return index < visibleDays.count ? visibleDays[index] : nil
+                return index < days.count ? days[index] : nil
             }
         }
     }
 
     private var monthLabels: [String] {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
-        formatter.dateFormat = "LLL"
         return (0..<visibleMonths).compactMap { offset in
             guard let month = calendar.date(byAdding: .month, value: offset, to: visibleStart) else { return nil }
-            return formatter.string(from: month).replacingOccurrences(of: ".", with: "")
+            return Self.monthFormatter.string(from: month).replacingOccurrences(of: ".", with: "")
         }
     }
 
     var body: some View {
+        // Keep a single immutable layout snapshot for this SwiftUI render.
+        let renderedColumns = columns
+        let renderedMonthLabels = monthLabels
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1536,18 +1551,18 @@ private struct ViewingHeatmapCard: View {
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
                 let spacing: CGFloat = visibleMonths == 1 ? 6 : 3
-                let totalGaps = CGFloat(max(0, columns.count - 1)) * spacing
-                let fitted = (proxy.size.width - totalGaps) / CGFloat(max(1, columns.count))
+                let totalGaps = CGFloat(max(0, renderedColumns.count - 1)) * spacing
+                let fitted = (proxy.size.width - totalGaps) / CGFloat(max(1, renderedColumns.count))
                 let labelAllowance: CGFloat = 23
-                let actualRows = columns.map(\.count).max() ?? 1
+                let actualRows = renderedColumns.map(\.count).max() ?? 1
                 let rowCount = CGFloat(actualRows)
                 let verticalFit = max(8, (proxy.size.height - labelAllowance - (rowCount - 1) * spacing) / rowCount)
                 let tile = min(visibleMonths == 1 ? 30 : 20, fitted, verticalFit)
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(alignment: .top, spacing: spacing) {
-                        ForEach(columns.indices, id: \.self) { columnIndex in
+                        ForEach(renderedColumns.indices, id: \.self) { columnIndex in
                             VStack(spacing: spacing) {
-                                ForEach(columns[columnIndex], id: \.self) { day in
+                                ForEach(renderedColumns[columnIndex], id: \.self) { day in
                                     RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
                                         .fill(color(for: day))
                                         .frame(width: tile, height: tile)
@@ -1567,7 +1582,7 @@ private struct ViewingHeatmapCard: View {
                         }
                     }
                     HStack(spacing: 0) {
-                        ForEach(Array(monthLabels.enumerated()), id: \.offset) { _, label in
+                        ForEach(Array(renderedMonthLabels.enumerated()), id: \.offset) { _, label in
                             Text(label)
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
@@ -1575,7 +1590,7 @@ private struct ViewingHeatmapCard: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    .frame(width: CGFloat(columns.count) * tile + totalGaps, height: 14)
+                    .frame(width: CGFloat(renderedColumns.count) * tile + totalGaps, height: 14)
                 }
                 .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -1590,8 +1605,7 @@ private struct ViewingHeatmapCard: View {
     }
 
     private func color(for day: Date) -> Color {
-        let key = ISO8601DateFormatter().string(from: day).prefix(10)
-        let value = daily[String(key)] ?? 0
+        let value = daily[dayKey(for: day)] ?? 0
         guard value > 0 else { return .white.opacity(0.10) }
         // Use an absolute time scale instead of comparing a day with the
         // current maximum. A short session stays subtle and translucent;
@@ -1599,6 +1613,16 @@ private struct ViewingHeatmapCard: View {
         let threeHours = 3.0 * 60.0 * 60.0
         let progress = min(1, Double(value) / threeHours)
         return Color.cyan.opacity(0.12 + 0.68 * progress)
+    }
+
+    private func dayKey(for day: Date) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: day)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
     }
 
     private var heatmapMagnification: some Gesture {
@@ -1624,26 +1648,13 @@ private struct ViewingHeatmapCard: View {
     }
 
     private func activityDetail(for day: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
-        formatter.dateFormat = "d MMMM"
-        let key = String(ISO8601DateFormatter().string(from: day).prefix(10))
-        let totalMinutes = (daily[key] ?? 0) / 60
-        guard totalMinutes > 0 else { return "\(formatter.string(from: day)): активности нет" }
+        let totalMinutes = (daily[dayKey(for: day)] ?? 0) / 60
+        guard totalMinutes > 0 else { return "\(Self.detailFormatter.string(from: day)): активности нет" }
         let hours = totalMinutes / 60
         let minutes = totalMinutes % 60
         return hours == 0
-            ? "\(formatter.string(from: day)): \(minutes) мин"
-            : "\(formatter.string(from: day)): \(hours) ч \(minutes) мин"
-    }
-
-    private func activityText(for day: Date) -> String {
-        let dayFormatter = DateFormatter()
-        dayFormatter.locale = Locale(identifier: "ru_RU")
-        dayFormatter.dateFormat = "d MMMM"
-        let key = String(ISO8601DateFormatter().string(from: day).prefix(10))
-        let minutes = (daily[key] ?? 0) / 60
-        return minutes > 0 ? "\(dayFormatter.string(from: day)): \(minutes) мин в приложении" : "\(dayFormatter.string(from: day)): активности нет"
+            ? "\(Self.detailFormatter.string(from: day)): \(minutes) мин"
+            : "\(Self.detailFormatter.string(from: day)): \(hours) ч \(minutes) мин"
     }
 }
 
