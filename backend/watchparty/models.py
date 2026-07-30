@@ -18,6 +18,9 @@ class Room(models.Model):
     max_members = models.PositiveSmallIntegerField(default=12, validators=[MinValueValidator(2), MaxValueValidator(100)])
     allow_guests_control = models.BooleanField(default=False)
     vk_video_url = models.URLField(blank=True)
+    # A room can use either an external URL or an owner-uploaded video.  The
+    # file lives on the server; it is never treated as a VK/Web URL.
+    uploaded_video = models.FileField(upload_to="room-videos/%Y/%m/", blank=True, null=True)
     thumbnail_url = models.TextField(blank=True, default="")
     duration_seconds = models.FloatField(default=0)
     genres = models.JSONField(default=list, blank=True)
@@ -32,6 +35,24 @@ class RoomMember(models.Model):
     active_connections = models.PositiveSmallIntegerField(default=0)
     class Meta:
         unique_together = ("room", "user")
+
+
+class RoomMute(models.Model):
+    """A durable room-local mute tied to the authenticated account, not a visit."""
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="mutes")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="room_mutes")
+    muted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="issued_room_mutes",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("room", "user"), name="unique_room_mute")]
 
 
 class RoomBan(models.Model):

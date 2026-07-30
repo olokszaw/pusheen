@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 enum APIError: LocalizedError { case invalidURL, server(String); var errorDescription: String? { switch self { case .invalidURL: return "Неверный адрес сервера"; case .server(let text): return text } } }
 
@@ -116,6 +117,38 @@ final class APIClient {
     func moderateMember(roomID: Int, userID: Int, action: String) async throws { _ = try await request("/api/rooms/\(roomID)/members/\(userID)/moderate/", method: "POST", body: ["action": action]) }
     func stream(roomID: Int) async throws -> VideoStream { let data = try await request("/api/rooms/\(roomID)/stream/"); return try decoder.decode(VideoStream.self, from: data) }
     func createRoom(videoURL: String, isPrivate: Bool) async throws -> Room { let data = try await request("/api/rooms/", method: "POST", body: ["title": "", "vk_video_url": videoURL, "media_url": videoURL, "is_private": isPrivate]); return try decoder.decode(Room.self, from: data) }
+    func uploadRoomVideo(roomID: Int, fileURL: URL) async throws -> Room {
+        guard let url = URL(string: "/api/rooms/\(roomID)/upload/", relativeTo: baseURL) else { throw APIError.invalidURL }
+        let boundary = "PusheenUpload-\(UUID().uuidString)"
+        let bodyURL = try makeMultipartUpload(fileURL: fileURL, boundary: boundary)
+        defer { try? FileManager.default.removeItem(at: bodyURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        if let token { request.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: bodyURL)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String ?? "Не удалось загрузить видео"
+            throw APIError.server(detail)
+        }
+        return try decoder.decode(Room.self, from: data)
+    }
+    private func makeMultipartUpload(fileURL: URL, boundary: String) throws -> URL {
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent("pusheen-upload-\(UUID().uuidString).body")
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let output = try FileHandle(forWritingTo: destination)
+        defer { try? output.close() }
+        let name = fileURL.lastPathComponent.replacingOccurrences(of: "\"", with: "")
+        let mime = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "video/mp4"
+        let title = fileURL.deletingPathExtension().lastPathComponent
+        output.write(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\(title)\r\n".utf8))
+        output.write(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"\(name)\"\r\nContent-Type: \(mime)\r\n\r\n".utf8))
+        let input = try FileHandle(forReadingFrom: fileURL)
+        defer { try? input.close() }
+        while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty { output.write(chunk) }
+        output.write(Data("\r\n--\(boundary)--\r\n".utf8))
+        return destination
+    }
     func joinRoom(code: String) async throws -> Room { let data = try await request("/api/rooms/join/", method: "POST", body: ["invite_code": code.uppercased()]); return try decoder.decode(Room.self, from: data) }
     func deleteRoom(id: Int) async throws { _ = try await request("/api/rooms/\(id)/", method: "DELETE") }
     func usernameAvailable(_ username: String) async throws -> Bool { let data = try await request("/api/auth/username-available/?username=\(username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? username)"); return (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["available"] as? Bool ?? false }

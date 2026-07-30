@@ -9,6 +9,7 @@ from .models import (
     PlaybackState,
     Room,
     RoomMember,
+    RoomMute,
     UserProfile,
     ViewingActivity,
 )
@@ -16,6 +17,7 @@ from .models import (
 
 admin.site.register(Room)
 admin.site.register(RoomMember)
+admin.site.register(RoomMute)
 admin.site.register(PlaybackState)
 admin.site.register(ClientIdentity)
 admin.site.register(UserProfile)

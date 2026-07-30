@@ -7,7 +7,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from config.asgi import application
-from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomMember, UserProfile
+from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute, UserProfile
 
 
 class RoomApiTests(APITestCase):
@@ -39,6 +39,7 @@ class RoomApiTests(APITestCase):
         self.assertEqual(muted.data["system_text"], "Создатель заглушил(а) Гость")
         member.refresh_from_db()
         self.assertTrue(member.is_muted)
+        self.assertTrue(RoomMute.objects.filter(room=room, user=self.guest).exists())
 
         unmuted = self.client.post(
             f"/api/rooms/{room.id}/members/{self.guest.id}/moderate/",
@@ -47,10 +48,60 @@ class RoomApiTests(APITestCase):
         )
         self.assertEqual(unmuted.status_code, 200)
         self.assertFalse(unmuted.data["muted"])
+        self.assertFalse(RoomMute.objects.filter(room=room, user=self.guest).exists())
         self.assertEqual(
             unmuted.data["system_text"],
             "Создатель разрешил(а) писать Гость",
         )
+
+    def test_muting_is_bound_to_user_id_and_survives_rejoining_room(self):
+        room = Room.objects.create(owner=self.owner, title="Persistent mute")
+        RoomMember.objects.create(room=room, user=self.owner)
+        RoomMember.objects.create(room=room, user=self.guest)
+        self.authenticate(self.owner_token)
+        muted = self.client.post(
+            f"/api/rooms/{room.id}/members/{self.guest.id}/moderate/",
+            {"action": "mute"},
+            format="json",
+        )
+        self.assertEqual(muted.status_code, 200)
+        self.assertTrue(RoomMute.objects.filter(room=room, user_id=self.guest.id).exists())
+
+        # Simulates a row being recreated after the client leaves/rejoins. A
+        # new `RoomMember` must inherit the durable mute for the same account.
+        RoomMember.objects.filter(room=room, user=self.guest).delete()
+        self.authenticate(self.guest_token)
+        joined = self.client.post(
+            "/api/rooms/join/", {"invite_code": room.invite_code}, format="json"
+        )
+        self.assertEqual(joined.status_code, 200)
+        recreated = RoomMember.objects.get(room=room, user=self.guest)
+        self.assertTrue(recreated.is_muted)
+        members = self.client.get(f"/api/rooms/{room.id}/members/")
+        current = next(item for item in members.data if item["user_id"] == self.guest.id)
+        self.assertTrue(current["is_muted"])
+
+    def test_removed_member_is_banned_from_rejoining_with_the_same_account(self):
+        room = Room.objects.create(owner=self.owner, title="No re-entry")
+        RoomMember.objects.create(room=room, user=self.owner)
+        RoomMember.objects.create(room=room, user=self.guest)
+        self.authenticate(self.owner_token)
+
+        removed = self.client.post(
+            f"/api/rooms/{room.id}/members/{self.guest.id}/moderate/",
+            {"action": "kick"},
+            format="json",
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertTrue(RoomBan.objects.filter(room=room, user=self.guest).exists())
+        self.assertFalse(RoomMember.objects.filter(room=room, user=self.guest).exists())
+
+        self.authenticate(self.guest_token)
+        retry = self.client.post(
+            "/api/rooms/join/", {"invite_code": room.invite_code}, format="json"
+        )
+        self.assertEqual(retry.status_code, 403)
+        self.assertFalse(RoomMember.objects.filter(room=room, user=self.guest).exists())
 
     def test_registration_separates_unique_username_and_repeatable_nickname(self):
         first = self.client.post(

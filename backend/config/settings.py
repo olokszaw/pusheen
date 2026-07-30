@@ -41,6 +41,11 @@ USE_I18N = True
 USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+# Video uploads are streamed to disk by Django's upload handlers. Keep a
+# sensible default for a small server; it can be raised through the env var.
+MAX_ROOM_VIDEO_UPLOAD_BYTES = int(os.environ.get("MAX_ROOM_VIDEO_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {"DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.TokenAuthentication"], "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"]}
 # Flutter Web uses a different local port on each run.

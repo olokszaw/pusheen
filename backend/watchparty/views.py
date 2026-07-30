@@ -1,3 +1,5 @@
+import mimetypes
+import os
 import re
 
 from asgiref.sync import async_to_sync
@@ -6,7 +8,8 @@ from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.db import transaction
 from django.shortcuts import get_object_or_404
-from django.http import HttpResponse
+from django.conf import settings
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils.html import escape
 from django.utils import timezone
 from rest_framework import generics, status
@@ -26,6 +29,7 @@ from .models import (
     Room,
     RoomBan,
     RoomMember,
+    RoomMute,
     UserProfile,
     ViewingActivity,
 )
@@ -395,7 +399,13 @@ def join_room(request):
         return Response({"detail": "Вы заблокированы в этой комнате"}, status=403)
     if room.members.count() >= room.max_members and not RoomMember.objects.filter(room=room, user=request.user).exists():
         return Response({"detail": "Комната заполнена"}, status=409)
-    RoomMember.objects.get_or_create(room=room, user=request.user)
+    member, _ = RoomMember.objects.get_or_create(room=room, user=request.user)
+    # Do not let a newly-created participation row silently clear a prior
+    # moderation decision. `RoomMute` is keyed by the persistent user ID.
+    durable_mute = RoomMute.objects.filter(room=room, user=request.user).exists()
+    if member.is_muted != durable_mute:
+        member.is_muted = durable_mute
+        member.save(update_fields=["is_muted"])
     return Response(RoomSerializer(room, context={"request": request}).data)
 
 
@@ -429,17 +439,30 @@ def moderate_member(request, room_id, user_id):
         actor_name = public_profile(request.user)["nickname"]
         target_name = public_profile(member.user)["nickname"]
         action = str(request.data.get("action") or "")
-        muted = member.is_muted
+        muted = RoomMute.objects.filter(room=room, user_id=user_id).exists()
         if action == "mute":
-            member.is_muted = not member.is_muted
+            mute, created = RoomMute.objects.get_or_create(
+                room=room,
+                user_id=user_id,
+                defaults={"muted_by": request.user},
+            )
+            if not created:
+                mute.delete()
+            muted = created
+            # Keep the old member flag in sync for old clients/admin views,
+            # but never use it as the authoritative moderation state.
+            member.is_muted = muted
             member.save(update_fields=["is_muted"])
-            muted = member.is_muted
             system_text = (
                 f"{actor_name} заглушил(а) {target_name}"
                 if muted
                 else f"{actor_name} разрешил(а) писать {target_name}"
             )
         elif action == "kick":
+            # A removal is final for this room.  Persist it against the
+            # account before deleting the visit, otherwise the same user can
+            # immediately recreate RoomMember through the invite code.
+            RoomBan.objects.get_or_create(room=room, user_id=user_id)
             member.delete()
             system_text = f"{actor_name} выгнал(а) {target_name}"
         elif action == "ban":
@@ -479,6 +502,24 @@ def room_stream(request, room_id):
     room = get_object_or_404(Room, id=room_id)
     if not RoomMember.objects.filter(room=room, user=request.user).exists():
         return Response({"detail": "Вы не участник комнаты"}, status=403)
+    if RoomBan.objects.filter(room=room, user=request.user).exists():
+        return Response({"detail": "Вы заблокированы в этой комнате"}, status=403)
+    # Uploads deliberately bypass the external-source resolver. This keeps the
+    # VK/site flow untouched and lets AVPlayer request the file through the
+    # authenticated media endpoint below.
+    if room.uploaded_video:
+        if not room.uploaded_video.storage.exists(room.uploaded_video.name):
+            return Response({"detail": "Загруженный файл больше недоступен"}, status=404)
+        return Response({
+            "url": request.build_absolute_uri(f"/api/rooms/{room.id}/media/"),
+            "title": room.title,
+            "duration_seconds": room.duration_seconds,
+            "quality": "Original",
+            "headers": {"Authorization": request.headers.get("Authorization", "")},
+            "source_type": "upload",
+            "thumbnail": room.thumbnail_url,
+            "genres": room.genres,
+        })
     if not room.vk_video_url:
         return Response({"detail": "В комнате не выбрано видео"}, status=400)
     source_type = detect_media_source(room.vk_video_url)
@@ -513,6 +554,105 @@ def room_stream(request, room_id):
     if changed:
         room.save(update_fields=changed)
     return Response(stream)
+
+
+def _video_file_chunks(file_path, start, length):
+    with open(file_path, "rb") as source:
+        source.seek(start)
+        remaining = length
+        while remaining > 0:
+            chunk = source.read(min(128 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+@api_view(["POST"])
+def room_upload_video(request, room_id):
+    """Attach an owner-selected local movie without touching URL providers."""
+    room = get_object_or_404(Room, id=room_id)
+    if room.owner_id != request.user.id:
+        return Response({"detail": "Только создатель комнаты может загрузить видео"}, status=403)
+    video = request.FILES.get("video")
+    if video is None:
+        return Response({"detail": "Выберите файл видео"}, status=400)
+    extension = os.path.splitext(video.name or "")[1].lower()
+    # iOS AVPlayer supports these containers reliably. No video is transcoded
+    # or altered by the server, so the exact downloaded film is preserved.
+    if extension not in {".mp4", ".mov", ".m4v"} or not str(video.content_type or "").startswith("video/"):
+        return Response({"detail": "Поддерживаются видео MP4, MOV и M4V"}, status=415)
+    if video.size <= 0:
+        return Response({"detail": "Файл видео пустой"}, status=400)
+    if video.size > settings.MAX_ROOM_VIDEO_UPLOAD_BYTES:
+        return Response({"detail": "Видео превышает допустимый размер"}, status=413)
+
+    old_file_name = room.uploaded_video.name if room.uploaded_video else ""
+    # Saving through FileField uses Django's streaming upload handler; it does
+    # not read a multi-gigabyte gallery file into Python memory.
+    room.uploaded_video.save(os.path.basename(video.name), video, save=False)
+    room.vk_video_url = ""
+    requested_title = str(request.data.get("title") or "").strip()[:80]
+    room.title = requested_title or os.path.splitext(os.path.basename(video.name))[0][:80] or "Видео"
+    try:
+        room.duration_seconds = max(0.0, float(request.data.get("duration_seconds") or 0))
+    except (TypeError, ValueError):
+        room.duration_seconds = 0
+    room.thumbnail_url = ""
+    room.genres = []
+    room.save(update_fields=[
+        "uploaded_video", "vk_video_url", "title", "duration_seconds", "thumbnail_url", "genres",
+    ])
+    if old_file_name and old_file_name != room.uploaded_video.name:
+        room.uploaded_video.storage.delete(old_file_name)
+    return Response(RoomSerializer(room, context={"request": request}).data, status=201)
+
+
+@api_view(["GET"])
+def room_uploaded_media(request, room_id):
+    """Authenticated byte-range media stream for AVPlayer/local room movies."""
+    room = get_object_or_404(Room, id=room_id)
+    if (
+        not RoomMember.objects.filter(room=room, user=request.user).exists()
+        or RoomBan.objects.filter(room=room, user=request.user).exists()
+    ):
+        return Response({"detail": "Нет доступа к видео этой комнаты"}, status=403)
+    if not room.uploaded_video or not room.uploaded_video.storage.exists(room.uploaded_video.name):
+        return Response({"detail": "Загруженное видео не найдено"}, status=404)
+    try:
+        file_path = room.uploaded_video.path
+        file_size = os.path.getsize(file_path)
+    except (NotImplementedError, OSError):
+        return Response({"detail": "Файл временно недоступен"}, status=503)
+
+    start, end = 0, max(0, file_size - 1)
+    range_header = request.headers.get("Range", "")
+    if range_header:
+        match = re.match(r"^bytes=(\d*)-(\d*)$", range_header.strip())
+        if not match:
+            return HttpResponse(status=416, headers={"Content-Range": f"bytes */{file_size}"})
+        first, last = match.groups()
+        if first:
+            start = int(first)
+            end = int(last) if last else end
+        elif last:
+            suffix = min(int(last), file_size)
+            start = max(0, file_size - suffix)
+        if start >= file_size or start > end:
+            return HttpResponse(status=416, headers={"Content-Range": f"bytes */{file_size}"})
+        end = min(end, file_size - 1)
+    length = end - start + 1
+    content_type = mimetypes.guess_type(room.uploaded_video.name)[0] or "video/mp4"
+    response = StreamingHttpResponse(
+        _video_file_chunks(file_path, start, length),
+        status=206 if range_header else 200,
+        content_type=content_type,
+    )
+    response["Accept-Ranges"] = "bytes"
+    response["Content-Length"] = str(length)
+    if range_header:
+        response["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+    return response
 
 
 @api_view(["GET"])

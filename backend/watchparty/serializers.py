@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from .media_sources import detect_media_source, validate_media_url
-from .models import ChatMessage, PlaybackState, Room, RoomMember
+from .models import ChatMessage, PlaybackState, Room, RoomMember, RoomMute
 
 
 def public_profile(user):
@@ -31,7 +31,7 @@ class RoomSerializer(serializers.ModelSerializer):
     owner_name = serializers.SerializerMethodField()
     members_count = serializers.IntegerField(source="members.count", read_only=True)
     playback = PlaybackSerializer(read_only=True)
-    media_url = serializers.CharField(source="vk_video_url", read_only=True)
+    media_url = serializers.SerializerMethodField()
     source_type = serializers.SerializerMethodField()
 
     class Meta:
@@ -63,7 +63,16 @@ class RoomSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(str(error)) from error
 
     def get_source_type(self, room):
+        if room.uploaded_video:
+            return "upload"
         return detect_media_source(room.vk_video_url)
+
+    def get_media_url(self, room):
+        if room.uploaded_video:
+            request = self.context.get("request")
+            path = f"/api/rooms/{room.id}/media/"
+            return request.build_absolute_uri(path) if request else path
+        return room.vk_video_url
 
     def get_owner_name(self, room):
         return public_profile(room.owner)["nickname"]
@@ -80,6 +89,7 @@ class RoomMemberSerializer(serializers.ModelSerializer):
     avatar_data_url = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
     is_online = serializers.SerializerMethodField()
+    is_muted = serializers.SerializerMethodField()
 
     class Meta:
         model = RoomMember
@@ -99,6 +109,11 @@ class RoomMemberSerializer(serializers.ModelSerializer):
 
     def get_is_online(self, member):
         return member.active_connections > 0
+
+    def get_is_muted(self, member):
+        # A mute survives membership recreation, therefore this separate
+        # room+user record is the source of truth rather than a visit row.
+        return RoomMute.objects.filter(room_id=member.room_id, user_id=member.user_id).exists()
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):

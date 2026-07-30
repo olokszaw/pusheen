@@ -4,14 +4,18 @@ from datetime import datetime, timezone
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.db import transaction
-from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomMember
+from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute
 
 
 class RoomConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         self.room_id = int(self.scope["url_route"]["kwargs"]["room_id"])
         self.group_name = f"watch_room_{self.room_id}"
-        if not self.scope["user"].is_authenticated or not await self.is_member():
+        if (
+            not self.scope["user"].is_authenticated
+            or await self.is_banned()
+            or not await self.is_member()
+        ):
             await self.close(code=4403)
             return
         await self.channel_layer.group_add(self.group_name, self.channel_name)
@@ -141,18 +145,27 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         return RoomMember.objects.filter(room_id=self.room_id, user=self.scope["user"]).exists()
 
     @database_sync_to_async
+    def is_banned(self):
+        # Keep this independent from membership. A stale/recreated member row
+        # must never let a banned authenticated account reopen the socket.
+        return RoomBan.objects.filter(room_id=self.room_id, user=self.scope["user"]).exists()
+
+    @database_sync_to_async
     def is_owner(self):
         return Room.objects.filter(id=self.room_id, owner=self.scope["user"]).exists()
 
     @database_sync_to_async
     def is_muted(self):
-        return RoomMember.objects.filter(room_id=self.room_id, user=self.scope["user"], is_muted=True).exists()
+        # This is intentionally independent from RoomMember: rejoining creates
+        # a new membership row, while a moderation decision must persist for
+        # the same authenticated user ID.
+        return RoomMute.objects.filter(room_id=self.room_id, user=self.scope["user"]).exists()
 
     @database_sync_to_async
     def current_state(self):
         room = Room.objects.select_related("playback").get(id=self.room_id)
         state = room.playback
-        return {"room_id": room.id, "command": "state", "is_owner": room.owner_id == self.scope["user"].id, "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
+        return {"room_id": room.id, "command": "state", "is_owner": room.owner_id == self.scope["user"].id, "is_muted": RoomMute.objects.filter(room=room, user=self.scope["user"]).exists(), "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
 
     @database_sync_to_async
     def save_playback(self, action, is_playing, position, video_url):

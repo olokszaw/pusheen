@@ -3,6 +3,21 @@ import AVKit
 import UIKit
 import PhotosUI
 import ImageIO
+import CoreTransferable
+import UniformTypeIdentifiers
+
+private struct ImportedRoomMovie: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in
+            let source = received.file
+            let ext = source.pathExtension.isEmpty ? "mp4" : source.pathExtension
+            let copy = URL.temporaryDirectory.appendingPathComponent("pusheen-movie-\(UUID().uuidString)").appendingPathExtension(ext)
+            try FileManager.default.copyItem(at: source, to: copy)
+            return Self(url: copy)
+        }
+    }
+}
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
@@ -235,18 +250,46 @@ struct CreateRoomSheet: View {
     @Environment(\.dismiss) private var dismiss
     let created: (Room) -> Void
     @State private var url = ""
+    @State private var selectedMovie: PhotosPickerItem?
+    @State private var movieURL: URL?
+    @State private var movieError = ""
     @State private var isPrivate = false
     @State private var loading = false
     @State private var error = ""
     var body: some View { ZStack { AcrylicBackground(); VStack(alignment: .leading, spacing: 16) {
         Text("Новая комната").font(.title2.bold())
-        Text("Вставь ссылку VK Видео или сайта. Сервер сам возьмёт название и обложку.").font(.subheadline).foregroundStyle(.secondary)
+        Text("Вставь ссылку VK Видео, сайта или выбери файл из галереи.").font(.subheadline).foregroundStyle(.secondary)
         TextField("Ссылка на видео", text: $url, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
+        PhotosPicker(selection: $selectedMovie, matching: .videos) {
+            HStack { Image(systemName: "video.badge.plus"); Text(movieURL == nil ? "Выбрать видео из галереи" : movieURL!.lastPathComponent); Spacer(); if movieURL != nil { Image(systemName: "checkmark.circle.fill").foregroundStyle(.mint) } }
+                .lineLimit(1).padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
+        }
+        .onChange(of: selectedMovie) { _, item in Task { await loadMovie(item) } }
         Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
+        if !movieError.isEmpty { Text(movieError).font(.caption).foregroundStyle(.red) }
         if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
-        Button { Task { await create() } } label: { Label("Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).disabled(url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading)
-    }.padding(22) }.presentationDetents([.medium]).presentationBackground(.clear) }
-    private func create() async { loading = true; error = ""; defer { loading = false }; do { let room = try await session.api.createRoom(videoURL: url.trimmingCharacters(in: .whitespacesAndNewlines), isPrivate: isPrivate); created(room); dismiss() } catch { self.error = error.localizedDescription } }
+        Button { Task { await create() } } label: { Label(loading ? "Загрузка…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading)
+    }.padding(22) }.presentationDetents([.medium, .large]).presentationBackground(.clear) }
+    private func loadMovie(_ item: PhotosPickerItem?) async {
+        movieError = ""; movieURL = nil
+        guard let item else { return }
+        do { movieURL = try await item.loadTransferable(type: ImportedRoomMovie.self)?.url }
+        catch { movieError = "Не удалось получить видео из галереи" }
+    }
+    private func create() async {
+        loading = true; error = ""; defer { loading = false }
+        var pendingRoom: Room?
+        do {
+            pendingRoom = try await session.api.createRoom(videoURL: movieURL == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : "", isPrivate: isPrivate)
+            let room: Room
+            if let movieURL { room = try await session.api.uploadRoomVideo(roomID: pendingRoom!.id, fileURL: movieURL) }
+            else { room = pendingRoom! }
+            created(room); dismiss()
+        } catch {
+            if let pendingRoom { try? await session.api.deleteRoom(id: pendingRoom.id) }
+            self.error = error.localizedDescription
+        }
+    }
 }
 
 struct LegacyRoomCard: View {
@@ -387,6 +430,9 @@ struct RoomView: View {
             if focused && controlsVisible {
                 withAnimation(.easeOut(duration: 0.18)) { controlsVisible = false }
             }
+        }
+        .onChange(of: model.wasRemovedFromRoom) { _, removed in
+            if removed { dismiss() }
         }
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)

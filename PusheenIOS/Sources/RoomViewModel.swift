@@ -12,6 +12,7 @@ final class RoomViewModel: ObservableObject {
     @Published var position: Double = 0
     @Published var duration: Double = 1
     @Published var error = ""
+    @Published var wasRemovedFromRoom = false
     private let room: Room
     private let api: APIClient
     private let token: String
@@ -22,6 +23,7 @@ final class RoomViewModel: ObservableObject {
     private var audioObservers: [NSObjectProtocol] = []
     private var activityTask: Task<Void, Never>?
     private var streamGenres: [String] = []
+    private var latestPlaybackStateAt: Date?
 
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token }
     func setCurrentUserID(_ id: Int?) { currentUserID = id }
@@ -144,7 +146,11 @@ final class RoomViewModel: ObservableObject {
     private func apply(_ event: [String: Any]) {
         switch event["type"] as? String {
         case "playback_state":
+            let stateDate = playbackStateDate(from: event)
+            if let stateDate, let latestPlaybackStateAt, stateDate < latestPlaybackStateAt { return }
+            if let stateDate { latestPlaybackStateAt = stateDate }
             isOwner = event["is_owner"] as? Bool ?? false; isPlaying = event["is_playing"] as? Bool ?? false
+            if let muted = event["is_muted"] as? Bool { isMuted = muted }
             let remote = (event["position_seconds"] as? NSNumber)?.doubleValue ?? 0
             // The creator receives their own broadcast too. Never seek it back to
             // an older server snapshot: that was the visible forward/back loop.
@@ -221,6 +227,7 @@ final class RoomViewModel: ObservableObject {
             }
         case "room_removed":
             error = "Вас удалили из комнаты"
+            wasRemovedFromRoom = true
         case "error":
             if event["code"] as? String == "muted" {
                 isMuted = true
@@ -230,10 +237,21 @@ final class RoomViewModel: ObservableObject {
     }
     private func compensatedPosition(remote: Double, isPlaying: Bool, event: [String: Any]) -> Double {
         guard isPlaying,
-              let value = event["server_updated_at"] as? String,
-              let date = ISO8601DateFormatter().date(from: value) else { return remote }
+              let date = playbackStateDate(from: event) else { return remote }
         // The server timestamp is authoritative; compensate transit time so a
         // remote player starts at the live position instead of 1–2 sec behind.
-        return max(0, remote + min(2.0, Date().timeIntervalSince(date)))
+        let livePosition = max(0, remote + Date().timeIntervalSince(date))
+        if duration.isFinite, duration > 0 { return min(livePosition, duration) }
+        return livePosition
+    }
+
+    private func playbackStateDate(from event: [String: Any]) -> Date? {
+        guard let value = event["server_updated_at"] as? String else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: value)
     }
 }
