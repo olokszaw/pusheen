@@ -1274,11 +1274,10 @@ struct LiquidAuthView: View {
                     Spacer(minLength: 48)
                     Image(systemName: "play.fill").font(.system(size: 30, weight: .bold)).frame(width: 76, height: 76).liquidCard(RoundedRectangle(cornerRadius: 25))
                     Text(register ? "Создать аккаунт" : "Войти").font(.system(size: 34, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
-                    Text("Сервер: \(session.api.serverHost) · build 5")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                    AuthModeSwitcher(register: $register) {
+                        error = ""
+                        availability = .idle
+                    }
                     Text(register ? "Укажи данные для нового аккаунта" : "Введи username и пароль").font(.subheadline).foregroundStyle(.secondary)
                     VStack(spacing: 11) {
                         if register { GlassField(icon: "person.text.rectangle", title: "Nickname", text: $nickname) }
@@ -1286,10 +1285,22 @@ struct LiquidAuthView: View {
                         if register && !username.isEmpty { AuthProfilePreview(nickname: nickname, username: username, availability: availability) }
                         GlassSecureField(title: "Password", text: $password)
                         if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading) }
-                        Button { Task { await submit() } } label: { HStack { if loading { ProgressView().tint(.white) }; Text(register ? "Создать аккаунт" : "Войти"); Image(systemName: "arrow.right") }.frame(maxWidth: .infinity).padding(.vertical, 4) }
-                            .buttonStyle(.borderedProminent).controlSize(.large).disabled(loading)
+                        Button { Task { await submit() } } label: {
+                            HStack(spacing: 9) {
+                                if loading { ProgressView().tint(.white).controlSize(.small) }
+                                Text(register ? "Создать" : "Войти")
+                                Image(systemName: "arrow.right").font(.subheadline.weight(.bold))
+                            }
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 46)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                        .background(Color.purple.opacity(0.28), in: Capsule())
+                        .genreLiquidGlass(.purple, in: Capsule())
+                        .disabled(loading)
                     }.padding(15).liquidCard(RoundedRectangle(cornerRadius: 30))
-                    Button(register ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Создать") { withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) { register.toggle(); error = ""; availability = .idle } }.buttonStyle(.plain).foregroundStyle(.secondary)
                     Spacer(minLength: 20)
                 }.frame(maxWidth: 440).padding(22)
             }
@@ -1297,6 +1308,85 @@ struct LiquidAuthView: View {
     }
     private func validate(_ value: String) async { guard register else { withAnimation { availability = .idle }; return }; guard usernameValid else { withAnimation(.easeOut(duration: 0.2)) { availability = .invalid }; return }; withAnimation(.easeOut(duration: 0.2)) { availability = .checking }; try? await Task.sleep(for: .milliseconds(250)); guard username == value else { return }; let isAvailable = (try? await session.api.usernameAvailable(value)) == true; withAnimation(.spring(response: 0.36, dampingFraction: 0.84)) { availability = isAvailable ? .available : .taken } }
     private func submit() async { error = ""; guard !username.isEmpty, !password.isEmpty else { error = "Заполни username и пароль"; return }; if register && (!usernameValid || nickname.trimmingCharacters(in: .whitespacesAndNewlines).count < 2) { error = "Проверь nickname и username"; return }; loading = true; defer { loading = false }; do { if register { try await session.register(nickname: nickname, username: username, password: password) } else { try await session.login(username: username, password: password) } } catch { self.error = error.localizedDescription } }
+}
+
+/// Compact login/register control. The highlight follows the finger and snaps
+/// to the closest mode on release, so switching does not feel like a hard tap.
+private struct AuthModeSwitcher: View {
+    @Binding var register: Bool
+    var didChangeMode: () -> Void
+    @GestureState private var dragTranslation: CGFloat = 0
+    @State private var feedbackCrossed = false
+
+    private let height: CGFloat = 42
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let side = width / 2
+            let restingCenter = register ? side * 1.5 : side * 0.5
+            let draggedCenter = min(width - side / 2, max(side / 2, restingCenter + dragTranslation))
+            let selectionShape = Capsule()
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.black.opacity(0.18))
+                    .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.7))
+                selectionShape
+                    .fill(.white.opacity(0.12))
+                    .frame(width: side - 4, height: height - 4)
+                    .liquidCard(selectionShape)
+                    .offset(x: draggedCenter - side / 2 - (side - 4) / 2)
+                    .animation(dragTranslation == 0 ? .interactiveSpring(response: 0.34, dampingFraction: 0.84) : nil, value: register)
+                HStack(spacing: 0) {
+                    modeButton("Login", selected: !register) { setMode(false) }
+                    modeButton("Register", selected: register) { setMode(true) }
+                }
+            }
+            .contentShape(Capsule())
+            .gesture(
+                DragGesture(minimumDistance: 3)
+                    .updating($dragTranslation) { value, state, _ in
+                        state = value.translation.width
+                    }
+                    .onChanged { value in
+                        let candidate = restingCenter + value.translation.width >= width / 2
+                        if candidate != register && !feedbackCrossed {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            feedbackCrossed = true
+                        } else if candidate == register {
+                            feedbackCrossed = false
+                        }
+                    }
+                    .onEnded { value in
+                        let finalCenter = restingCenter + value.predictedEndTranslation.width * 0.22 + value.translation.width
+                        setMode(finalCenter >= width / 2)
+                        feedbackCrossed = false
+                    }
+            )
+        }
+        .frame(width: 178, height: height)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Режим входа")
+    }
+
+    @ViewBuilder private func modeButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected ? .primary : .secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func setMode(_ next: Bool) {
+        guard next != register else { return }
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.72)
+        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { register = next }
+        didChangeMode()
+    }
 }
 
 struct GlassField: View {
