@@ -1,8 +1,8 @@
 import Foundation
 
 struct MovieCatalogItem: Codable, Identifiable, Hashable {
-    let trackId: Int
-    let trackName: String
+    let trackId: Int?
+    let trackName: String?
     let kind: String?
     let artworkUrl100: String?
     let longDescription: String?
@@ -11,7 +11,8 @@ struct MovieCatalogItem: Codable, Identifiable, Hashable {
     let primaryGenreName: String?
     let trackViewUrl: String?
 
-    var id: Int { trackId }
+    var id: String { "\(trackId ?? 0)-\(trackName ?? \"unknown\")" }
+    var title: String { trackName ?? "Без названия" }
     var description: String { longDescription ?? shortDescription ?? "Описание пока недоступно." }
     var year: String { releaseDate.map { String($0.prefix(4)) } ?? "" }
 }

@@ -287,7 +287,7 @@ struct MovieSearchSheet: View {
                                 AsyncImage(url: URL(string: film.artworkUrl100 ?? "")) { image in image.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1).overlay(Image(systemName: "film")) }
                                     .frame(width: 66, height: 94).clipShape(RoundedRectangle(cornerRadius: 11))
                                 VStack(alignment: .leading, spacing: 5) {
-                                    Text(film.trackName).font(.headline)
+                                    Text(film.title).font(.headline)
                                     Text([film.year, film.primaryGenreName ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
                                     Text(film.description).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                                     if let link = film.trackViewUrl, let url = URL(string: link) { Link("Открыть официальную страницу", destination: url).font(.caption.weight(.semibold)) }
