@@ -1292,13 +1292,13 @@ struct LiquidAuthView: View {
                                 Image(systemName: "arrow.right").font(.subheadline.weight(.bold))
                             }
                             .font(.body.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 46)
+                            .frame(width: 188, height: 42)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.white)
-                        .background(Color.purple.opacity(0.28), in: Capsule())
-                        .genreLiquidGlass(.purple, in: Capsule())
+                        .background(.white.opacity(0.055), in: Capsule())
+                        .liquidCard(Capsule())
+                        .frame(maxWidth: .infinity)
                         .disabled(loading)
                     }.padding(15).liquidCard(RoundedRectangle(cornerRadius: 30))
                     Spacer(minLength: 20)
