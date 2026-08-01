@@ -7,17 +7,23 @@ from .genres import detect_genres
 TRAILER_WORDS = ("trailer", "teaser", "preview", "трейлер", "тизер")
 
 
-def _extract(page_url, *, format_selector=None):
+def _extract(page_url, *, format_selector=None, inspect_playlist=False):
     options = {
         "quiet": True,
         "no_warnings": True,
-        "noplaylist": True,
+        # A generic page may expose a short trailer first and the actual movie
+        # as another public entry. Web resolution opts in to inspect that list.
+        "noplaylist": not inspect_playlist,
         "skip_download": True,
         "extract_flat": False,
         "socket_timeout": 20,
     }
     if format_selector:
         options["format"] = format_selector
+    if inspect_playlist:
+        # Enough entries to cover the usual trailer/full-feature pair while
+        # keeping arbitrary giant collections bounded.
+        options["playlistend"] = 20
     with YoutubeDL(options) as downloader:
         info = downloader.extract_info(page_url, download=False)
     if info.get("entries"):
@@ -83,6 +89,7 @@ def resolve_web_stream(page_url):
         # AVPlayer requires a combined audio+video stream. Do not cap quality:
         # for YouTube and public sites choose the highest compatible stream.
         format_selector="best[vcodec!=none][acodec!=none]",
+        inspect_playlist=True,
     )
     formats = [
         item
