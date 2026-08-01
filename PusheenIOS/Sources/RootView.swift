@@ -311,7 +311,7 @@ struct MovieSearchSheet: View {
         guard !text.isEmpty else { return }
         isSearching = true; error = ""; defer { isSearching = false }
         do { results = try await session.api.searchMovies(text) }
-        catch { error = error.localizedDescription }
+        catch let caughtError { self.error = caughtError.localizedDescription }
     }
 }
 
