@@ -1729,7 +1729,7 @@ private struct ViewingInsightsPager: View {
                         }
                 )
             }
-            .frame(height: 278)
+            .frame(height: 350)
 
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
@@ -1771,6 +1771,220 @@ private struct GenreOnlyCard: View {
 }
 
 private struct ViewingHeatmapCard: View {
+    private struct MonthGroup: Identifiable {
+        let month: Date
+        let label: String
+        let columns: [[Date?]]
+        var id: Date { month }
+    }
+
+    let daily: [String: Int]
+    private let calendar = Calendar.current
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "LLL"
+        return formatter
+    }()
+    private static let detailFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "d MMMM"
+        return formatter
+    }()
+    @State private var selectedDay: Date?
+    @State private var visibleMonths = 3
+    @State private var pinchScale: CGFloat = 1
+
+    private var today: Date { calendar.startOfDay(for: Date()) }
+    private var monthStarts: [Date] {
+        let current = calendar.date(from: calendar.dateComponents([.year, .month], from: today)) ?? today
+        return (0..<visibleMonths).compactMap { offset in
+            calendar.date(byAdding: .month, value: -(visibleMonths - 1 - offset), to: current)
+        }
+    }
+    private var monthGroups: [MonthGroup] {
+        monthStarts.map { start in
+            let dayCount = calendar.range(of: .day, in: .month, for: start)?.count ?? 28
+            let firstWeekday = (calendar.component(.weekday, from: start) + 5) % 7 // Monday = 0
+            let columnCount = max(1, Int(ceil(Double(firstWeekday + dayCount) / 7.0)))
+            var columns = Array(repeating: Array<Date?>(repeating: nil, count: 7), count: columnCount)
+            for dayNumber in 1...dayCount {
+                guard let day = calendar.date(byAdding: .day, value: dayNumber - 1, to: start), day <= today else { continue }
+                let slot = firstWeekday + dayNumber - 1
+                columns[slot / 7][slot % 7] = day
+            }
+            return MonthGroup(
+                month: start,
+                label: Self.monthFormatter.string(from: start).replacingOccurrences(of: ".", with: ""),
+                columns: columns
+            )
+        }
+    }
+    private var allVisibleDays: [Date] { monthGroups.flatMap { $0.columns.flatMap { $0.compactMap { $0 } } } }
+    private var highlightedDay: Date { selectedDay ?? latestActiveDay ?? today }
+    private var latestActiveDay: Date? {
+        allVisibleDays.last(where: { (daily[dayKey(for: $0)] ?? 0) > 0 })
+    }
+    private var streakDays: Int {
+        var count = 0
+        var cursor = today
+        while daily[dayKey(for: cursor)] ?? 0 > 0 {
+            count += 1
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = previous
+        }
+        return count
+    }
+    private var trendText: String {
+        let days = allVisibleDays.count
+        guard days > 0, let start = allVisibleDays.first else { return "Смотри чаще — статистика появится здесь" }
+        let current = allVisibleDays.reduce(0) { $0 + (daily[dayKey(for: $1)] ?? 0) }
+        let previousEnd = calendar.date(byAdding: .day, value: -1, to: start) ?? start
+        let previous = (0..<days).reduce(0) { total, offset in
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: previousEnd) else { return total }
+            return total + (daily[dayKey(for: day)] ?? 0)
+        }
+        guard previous > 0 else { return current > 0 ? "Твоя первая активность за этот период" : "Смотри чаще — статистика появится здесь" }
+        let percent = Int(((Double(current) - Double(previous)) / Double(previous) * 100).rounded())
+        return percent >= 0 ? "На \(percent)% больше, чем в предыдущие 3 месяца" : "На \(abs(percent))% меньше, чем в предыдущие 3 месяца"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 13) {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.cyan)
+                    .frame(width: 42, height: 42)
+                    .background(.cyan.opacity(0.09), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.cyan.opacity(0.30), lineWidth: 1))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Активность").font(.title3.bold())
+                    Text(visibleMonths == 1 ? "Последний месяц" : "Последние 3 месяца").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                HStack(spacing: 7) {
+                    Image(systemName: "flame.fill").foregroundStyle(.cyan)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("\(streakDays) дней подряд").font(.caption.weight(.bold)).foregroundStyle(.cyan)
+                        Text("Текущая серия").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(.cyan.opacity(0.045), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.8))
+            }
+
+            HStack(spacing: 11) {
+                Image(systemName: "calendar").font(.headline.weight(.semibold)).foregroundStyle(.cyan).frame(width: 38, height: 38).background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                Text(Self.detailFormatter.string(from: highlightedDay)).font(.headline.weight(.bold)).foregroundStyle(.cyan)
+                Text("•").foregroundStyle(.blue.opacity(0.7))
+                Text(durationText(for: highlightedDay)).font(.headline.weight(.bold))
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.cyan).font(.caption.bold())
+            }
+            .padding(10)
+            .background(LinearGradient(colors: [.cyan.opacity(0.17), .blue.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.cyan.opacity(0.25), lineWidth: 0.9))
+
+            GeometryReader { proxy in
+                let groups = monthGroups
+                let weekdayWidth: CGFloat = 25
+                let monthGap: CGFloat = 10
+                let columnGap: CGFloat = 4
+                let totalColumns = max(1, groups.reduce(0) { $0 + $1.columns.count })
+                let groupGaps = CGFloat(max(0, groups.count - 1)) * monthGap
+                let cell = max(10, min(22, (proxy.size.width - weekdayWidth - groupGaps - CGFloat(totalColumns - groups.count) * columnGap) / CGFloat(totalColumns)))
+                let rowGap: CGFloat = 4
+                HStack(alignment: .top, spacing: 9) {
+                    VStack(alignment: .leading, spacing: rowGap) {
+                        ForEach(["пн", "вт", "ср", "чт", "пт", "сб", "вс"], id: \.self) { day in
+                            Text(day).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(width: weekdayWidth, height: cell, alignment: .leading)
+                        }
+                    }
+                    HStack(alignment: .top, spacing: monthGap) {
+                        ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                            VStack(spacing: 7) {
+                                HStack(alignment: .top, spacing: columnGap) {
+                                    ForEach(group.columns.indices, id: \.self) { column in
+                                        VStack(spacing: rowGap) {
+                                            ForEach(group.columns[column].indices, id: \.self) { row in
+                                                if let day = group.columns[column][row] {
+                                                    RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous)
+                                                        .fill(tileGradient(for: day))
+                                                        .frame(width: cell, height: cell)
+                                                        .overlay {
+                                                            if calendar.isDate(day, inSameDayAs: highlightedDay) {
+                                                                RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous).stroke(.white, lineWidth: 1.7).shadow(color: .cyan.opacity(0.75), radius: 4)
+                                                            }
+                                                        }
+                                                        .contentShape(Rectangle())
+                                                        .onTapGesture { select(day) }
+                                                } else {
+                                                    Color.clear.frame(width: cell, height: cell)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Text(group.label).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+                            }
+                            .overlay(alignment: .trailing) {
+                                if index < groups.count - 1 { Rectangle().fill(.white.opacity(0.12)).frame(width: 1, height: 15).offset(x: monthGap / 2, y: 72) }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .scaleEffect(pinchScale, anchor: .center)
+            }
+            .frame(height: 136)
+
+            HStack(spacing: 8) {
+                Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(.cyan).font(.caption.weight(.bold))
+                Text(trendText).font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .simultaneousGesture(heatmapMagnification)
+    }
+
+    private func select(_ day: Date) {
+        guard selectedDay.map({ !calendar.isDate($0, inSameDayAs: day) }) ?? true else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.9)
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
+    }
+    private func color(for day: Date) -> Color {
+        let seconds = daily[dayKey(for: day)] ?? 0
+        guard seconds > 0 else { return .white.opacity(0.10) }
+        return .cyan.opacity(0.22 + 0.72 * min(1, Double(seconds) / 10_800))
+    }
+    private func tileGradient(for day: Date) -> LinearGradient {
+        let base = color(for: day)
+        return LinearGradient(colors: [base.opacity(0.72), base], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    private func dayKey(for day: Date) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: day)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+    private func durationText(for day: Date) -> String {
+        let minutes = (daily[dayKey(for: day)] ?? 0) / 60
+        return minutes == 0 ? "активности нет" : minutes >= 60 ? "\(minutes / 60) ч \(minutes % 60) мин" : "\(minutes) мин"
+    }
+    private var heatmapMagnification: some Gesture {
+        MagnificationGesture()
+            .onChanged { pinchScale = min(1.16, max(0.86, $0)) }
+            .onEnded { value in
+                let next = value > 1.04 ? 1 : value < 0.96 ? 3 : visibleMonths
+                if next != visibleMonths { UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 1) }
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) { visibleMonths = next; selectedDay = nil; pinchScale = 1 }
+            }
+    }
+}
+
+private struct LegacyViewingHeatmapCard: View {
     private struct MonthMarker {
         let label: String
         let column: Int
