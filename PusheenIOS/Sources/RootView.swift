@@ -319,52 +319,24 @@ struct BrowserPageView: UIViewRepresentable {
     var reloadOnURLChange = true
     func makeCoordinator() -> Coordinator { Coordinator(visitedURL: $visitedURL) }
     func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: """
-                document.querySelectorAll('iframe[src*="ad"], [id*="banner" i], [class*="banner" i], [id*="advert" i], [class*="advert" i], [class*="popup" i]').forEach(function(node) { node.remove(); });
-                """,
-                injectionTime: .atDocumentEnd,
-                forMainFrameOnly: false
-            )
-        )
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = WKWebView(frame: .zero)
         view.navigationDelegate = context.coordinator
         view.uiDelegate = context.coordinator
-        context.coordinator.loadedURL = url
         view.allowsBackForwardNavigationGestures = true
         view.load(URLRequest(url: url))
-        WKContentRuleListStore.default().compileContentRuleList(
-            forIdentifier: "pusheen-content-blocker-v1",
-            encodedContentRuleList: Self.contentRules
-        ) { ruleList, _ in
-            if let ruleList { view.configuration.userContentController.add(ruleList) }
-        }
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {
         guard reloadOnURLChange else { return }
-        guard context.coordinator.loadedURL != url else { return }
-        context.coordinator.loadedURL = url
+        guard view.url?.absoluteString != url.absoluteString else { return }
         view.load(URLRequest(url: url))
     }
-    private static let contentRules = """
-    [
-      {"trigger":{"url-filter":".*","if-domain":["doubleclick.net","googlesyndication.com","googleadservices.com","adservice.google.com","adnxs.com","taboola.com","outbrain.com","popads.net","popcash.net"]},"action":{"type":"block"}},
-      {"trigger":{"url-filter":".*(doubleclick|googlesyndication|googleadservices|/ads?[/?._-]|advert|popunder|popads|popcash).*"},"action":{"type":"block"}},
-      {"trigger":{"url-filter":".*"},"action":{"type":"css-display-none","selector":".adsbygoogle, [id*='banner' i], [class*='banner' i], [id*='advert' i], [class*='advert' i], [class*='popup' i]"}}
-    ]
-    """
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         @Binding var visitedURL: String
-        var loadedURL: URL?
         init(visitedURL: Binding<String>) { _visitedURL = visitedURL }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { visitedURL = webView.url?.absoluteString ?? "" }
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-            // Advertisement pop-ups commonly request a new target frame.
-            // Keep the room browser on the page the user selected instead.
+            if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
             return nil
         }
     }
