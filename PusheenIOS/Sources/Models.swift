@@ -47,8 +47,7 @@ struct Room: Codable, Identifiable, Hashable {
     let thumbnailURL: String
     let membersCount: Int
     let playback: Playback?
-    let sourceType: String?
-    enum CodingKeys: String, CodingKey { case id, owner, title, playback; case ownerName = "owner_name"; case inviteCode = "invite_code"; case mediaURL = "media_url"; case thumbnailURL = "thumbnail_url"; case membersCount = "members_count"; case sourceType = "source_type" }
+    enum CodingKeys: String, CodingKey { case id, owner, title, playback; case ownerName = "owner_name"; case inviteCode = "invite_code"; case mediaURL = "media_url"; case thumbnailURL = "thumbnail_url"; case membersCount = "members_count" }
 }
 
 struct ChatReaction: Codable, Hashable, Identifiable {
