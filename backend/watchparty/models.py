@@ -2,6 +2,8 @@ import secrets
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 
 
 def invite_code():
@@ -25,6 +27,21 @@ class Room(models.Model):
     duration_seconds = models.FloatField(default=0)
     genres = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+@receiver(post_delete, sender=Room)
+def delete_room_uploaded_video(sender, instance, **kwargs):
+    """Remove the server-side gallery video once its room no longer exists."""
+    video = instance.uploaded_video
+    if not video or not video.name:
+        return
+    try:
+        video.storage.delete(video.name)
+    except Exception:
+        # Deleting a room must not fail merely because storage is temporarily
+        # unavailable. The file is no longer reachable and can be cleaned up
+        # by the storage provider if necessary.
+        pass
 
 
 class RoomMember(models.Model):
