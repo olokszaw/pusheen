@@ -1921,7 +1921,11 @@ private struct ViewingHeatmapCard: View {
                                 .offset(x: CGFloat(marker.column) * (tile + spacing))
                         }
                     }
-                    .frame(width: CGFloat(renderedColumns.count) * tile + totalGaps, height: 14)
+                    .frame(
+                        width: CGFloat(renderedColumns.count) * tile + totalGaps,
+                        height: 14,
+                        alignment: .leading
+                    )
                 }
                 .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
