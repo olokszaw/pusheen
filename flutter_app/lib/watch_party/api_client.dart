@@ -20,7 +20,7 @@ class ApiClient {
   // Temporary Cloudflare tunnel. If it changes, rebuild with
   // --dart-define=API_BASE_URL=https://new-address.trycloudflare.com
   static const _defaultBaseUrl =
-      'https://trio-anderson-istanbul-definition.trycloudflare.com';
+      'https://located-prime-ranks-neural.trycloudflare.com';
   static const _configuredBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: _defaultBaseUrl,
