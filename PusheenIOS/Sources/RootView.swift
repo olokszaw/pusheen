@@ -237,14 +237,14 @@ struct HomeView: View {
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
                     }.padding(18) }.task { await load() }.onChange(of: session.isOffline) { _, offline in if !offline { Task { await load() } } }
                 }
+                .blur(radius: previewedRoom == nil ? 0 : 17)
+                .allowsHitTesting(previewedRoom == nil)
                 if isSelectingRooms {
                     selectionToolbar
                         .padding(.horizontal, 18)
                         .padding(.bottom, 12)
                         .frame(maxHeight: .infinity, alignment: .bottom)
                 }
-                .blur(radius: previewedRoom == nil ? 0 : 17)
-                .allowsHitTesting(previewedRoom == nil)
 
                 if let room = previewedRoom {
                     Color.black.opacity(0.28)
