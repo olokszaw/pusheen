@@ -1274,6 +1274,11 @@ struct LiquidAuthView: View {
                     Spacer(minLength: 48)
                     Image(systemName: "play.fill").font(.system(size: 30, weight: .bold)).frame(width: 76, height: 76).liquidCard(RoundedRectangle(cornerRadius: 25))
                     Text(register ? "Создать аккаунт" : "Войти").font(.system(size: 34, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
+                    Text("Сервер: \(session.api.serverHost) · build 5")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                     Text(register ? "Укажи данные для нового аккаунта" : "Введи username и пароль").font(.subheadline).foregroundStyle(.secondary)
                     VStack(spacing: 11) {
                         if register { GlassField(icon: "person.text.rectangle", title: "Nickname", text: $nickname) }
