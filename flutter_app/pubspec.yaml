@@ -1,7 +1,7 @@
 name: pulse_watch_party
 description: Visual prototype of a shared watching mobile app.
 publish_to: none
-version: 1.0.0+3
+version: 1.0.0+4
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

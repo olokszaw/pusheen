@@ -8,14 +8,14 @@ on:
       api_base_url:
         description: Backend URL reachable from iPhone
         required: true
-        default: https://trio-anderson-istanbul-definition.trycloudflare.com
+        default: https://located-prime-ranks-neural.trycloudflare.com
 
 jobs:
   build-ios:
     runs-on: macos-latest
     timeout-minutes: 45
     env:
-      API_BASE_URL: ${{ inputs.api_base_url || 'https://trio-anderson-istanbul-definition.trycloudflare.com' }}
+      API_BASE_URL: ${{ inputs.api_base_url || 'https://located-prime-ranks-neural.trycloudflare.com' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
