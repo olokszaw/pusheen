@@ -201,6 +201,10 @@ struct HomeView: View {
     @State private var showJoin = false
     @State private var showMovieSearch = false
     @State private var previewedRoom: Room?
+    @State private var selectedRoomIDs = Set<Int>()
+    @State private var isSelectingRooms = false
+    @State private var showBulkDeleteConfirmation = false
+    @State private var isDeletingSelectedRooms = false
     var body: some View {
         NavigationStack(path: $path) {
             ZStack {
@@ -210,15 +214,34 @@ struct HomeView: View {
                 HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Найти фильм", systemImage: "magnifyingglass") { showMovieSearch = true }; Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 ForEach(rooms) { room in
                     RoomCard(room: room)
+                        .overlay(alignment: .topTrailing) {
+                            if isSelectingRooms && room.owner == session.profile?.userId {
+                                Image(systemName: selectedRoomIDs.contains(room.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.title3)
+                                    .foregroundStyle(selectedRoomIDs.contains(room.id) ? .mint : .white.opacity(0.72))
+                                    .padding(9)
+                            }
+                        }
                         .contentShape(RoundedRectangle(cornerRadius: 22))
                         .gesture(
                             LongPressGesture(minimumDuration: 0.42)
-                                .onEnded { _ in previewedRoom = room }
-                                .exclusively(before: TapGesture().onEnded { path.append(room) })
+                                .onEnded { _ in if !isSelectingRooms { previewedRoom = room } }
+                                .exclusively(before: TapGesture().onEnded {
+                                    if isSelectingRooms, room.owner == session.profile?.userId {
+                                        if selectedRoomIDs.contains(room.id) { selectedRoomIDs.remove(room.id) }
+                                        else { selectedRoomIDs.insert(room.id) }
+                                    } else if !isSelectingRooms { path.append(room) }
+                                })
                         )
                 }
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
                     }.padding(18) }.task { await load() }.onChange(of: session.isOffline) { _, offline in if !offline { Task { await load() } } }
+                }
+                if isSelectingRooms {
+                    selectionToolbar
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 12)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
                 }
                 .blur(radius: previewedRoom == nil ? 0 : 17)
                 .allowsHitTesting(previewedRoom == nil)
@@ -227,8 +250,11 @@ struct HomeView: View {
                     Color.black.opacity(0.28)
                         .ignoresSafeArea()
                         .onTapGesture { withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { previewedRoom = nil } }
-                    RoomPreviewOverlay(room: room, canDelete: room.owner == session.profile?.userId, close: {
+                    RoomPreviewOverlay(room: room, canDelete: room.owner == session.profile?.userId, canSelectAll: rooms.contains { $0.owner == session.profile?.userId && $0.id != room.id }, close: {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { previewedRoom = nil }
+                    }, selectAll: {
+                        selectedRoomIDs = Set(rooms.filter { $0.owner == session.profile?.userId }.map(\.id))
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { isSelectingRooms = true; previewedRoom = nil }
                     }) {
                         try? await session.api.deleteRoom(id: room.id)
                         rooms.removeAll { $0.id == room.id }
@@ -242,9 +268,31 @@ struct HomeView: View {
             .sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
             .sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
             .sheet(isPresented: $showMovieSearch) { MovieSearchSheet() }
+            .confirmationDialog("Удалить выбранные комнаты?", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
+                Button("Удалить (selectedRoomIDs.count)", role: .destructive) { Task { await deleteSelectedRooms() } }
+            } message: { Text("Видео, загруженные в эти комнаты, тоже удалятся с сервера.") }
         }
     }
     private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
+    private var selectionToolbar: some View {
+        HStack(spacing: 10) {
+            Text("Выбрано: \(selectedRoomIDs.count)").font(.subheadline.weight(.semibold))
+            Spacer()
+            Button { isSelectingRooms = false; selectedRoomIDs = [] } label: { Image(systemName: "xmark").frame(width: 36, height: 36).liquidCard(Circle()) }.buttonStyle(.plain)
+            Button(role: .destructive) { showBulkDeleteConfirmation = true } label: { Label("Удалить", systemImage: "trash").font(.subheadline.weight(.semibold)).padding(.horizontal, 12).frame(height: 36).liquidCard(Capsule()) }.buttonStyle(.plain).disabled(selectedRoomIDs.isEmpty || isDeletingSelectedRooms)
+        }
+        .padding(9)
+        .liquidCard(RoundedRectangle(cornerRadius: 19, style: .continuous))
+    }
+    private func deleteSelectedRooms() async {
+        isDeletingSelectedRooms = true
+        let ids = selectedRoomIDs
+        for id in ids { try? await session.api.deleteRoom(id: id) }
+        rooms.removeAll { ids.contains($0.id) }
+        selectedRoomIDs = []
+        isSelectingRooms = false
+        isDeletingSelectedRooms = false
+    }
 }
 
 struct MovieSearchSheet: View {
@@ -397,7 +445,9 @@ struct RoomView: View {
             let uncoveredSafeTop = max(0, safeTop - geometryTop)
             let contentTop = uncoveredSafeTop + (chatFocused ? 2 : 6)
             let playerHeight = chatFocused ? 176.0 : roomPlayerHeight
-            let roomHeight = max(playerHeight + 180, geometry.size.height - (chatFocused ? keyboardHeight : 0))
+            // Leave a tiny visual margin so the lower glass corners do not
+            // touch or clip against the physical edge of the display.
+            let roomHeight = max(playerHeight + 180, geometry.size.height - (chatFocused ? keyboardHeight : 0) - 7)
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
             ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
@@ -420,7 +470,7 @@ struct RoomView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                             .zIndex(20)
                     }
-                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, isMuted: model.isMuted, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardHeight: keyboardHeight, isMuted: model.isMuted, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
                         .frame(maxHeight: .infinity)
                         .layoutPriority(2)
                 }
@@ -611,7 +661,9 @@ struct RoomView: View {
 private struct RoomPreviewOverlay: View {
     let room: Room
     let canDelete: Bool
+    let canSelectAll: Bool
     let close: () -> Void
+    let selectAll: () -> Void
     let delete: () async -> Void
     @State private var deleting = false
     var body: some View {
@@ -629,6 +681,16 @@ private struct RoomPreviewOverlay: View {
             Text(room.title).font(.title3.bold()).multilineTextAlignment(.center).lineLimit(2)
             Text("Код \(room.inviteCode)").font(.caption.monospaced()).foregroundStyle(.secondary)
             if canDelete {
+                if canSelectAll {
+                    Button(action: selectAll) {
+                        Label("Выбрать все", systemImage: "checkmark.circle")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.bordered)
+                    .liquidCard(Capsule())
+                }
                 Button(role: .destructive) {
                     Task { deleting = true; await delete(); deleting = false }
                 } label: {
@@ -891,6 +953,7 @@ struct NativeChatPane: View {
     let currentUserID: Int?
     @Binding var draft: String
     @Binding var focused: Bool
+    let keyboardHeight: CGFloat
     let isMuted: Bool
     let send: (String, String) -> Void
     let react: (Int, String) -> Void
@@ -942,6 +1005,13 @@ struct NativeChatPane: View {
                         didInitialScroll = true
                         forceScrollOnNextMessage = false
                     }
+                }
+                .onChange(of: keyboardHeight) { oldHeight, newHeight in
+                    // The chat becomes taller as the keyboard closes. Keep
+                    // the newest bubbles attached to the composer instead of
+                    // leaving them at the top of the expanded scroll view.
+                    guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
+                    DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
                 }
                 .onAppear {
                     guard !didInitialScroll, messages.last != nil else { return }
