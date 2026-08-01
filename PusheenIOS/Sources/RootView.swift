@@ -1574,6 +1574,7 @@ private struct ViewingInsightsPager: View {
                             if predicted > threshold { next -= 1 }
                             next = min(max(next, 0), pages.count - 1)
                             guard next != page else { return }
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.82)
                             withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.88, blendDuration: 0.06)) {
                                 page = next
                             }
@@ -1741,6 +1742,8 @@ private struct ViewingHeatmapCard: View {
                                         }
                                         .contentShape(Rectangle())
                                         .onTapGesture {
+                                            guard selectedDay.map({ !calendar.isDate($0, inSameDayAs: day) }) ?? true else { return }
+                                            UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.9)
                                             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
                                         }
                                 }
@@ -1805,6 +1808,11 @@ private struct ViewingHeatmapCard: View {
                 } else {
                     next = visibleMonths
                 }
+                if next != visibleMonths {
+                    // A firm, single confirmation makes zoom-in and return to
+                    // the overview feel deliberate without buzzing per frame.
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 1)
+                }
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
                     visibleMonths = next
                     selectedDay = nil
@@ -1833,6 +1841,7 @@ private struct SharedWatchingCard: View {
         VStack(alignment: .leading, spacing: 13) {
             if let companion {
                 Button {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.86)
                     withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) { showsDetail.toggle() }
                 } label: {
                     VStack(spacing: 9) {
