@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../watch_party/api_client.dart';
 import '../../watch_party/media_source.dart';
@@ -22,6 +23,8 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
   bool isPrivate = false;
   bool loading = false;
   MediaSourceType sourceType = MediaSourceType.vk;
+  final picker = ImagePicker();
+  XFile? galleryVideo;
 
   @override
   void dispose() {
@@ -31,18 +34,25 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
 
   Future<void> submit() async {
     final uri = Uri.tryParse(videoUrl.text.trim());
-    if (uri == null ||
-        !uri.hasAuthority ||
-        (uri.scheme != 'https' && uri.scheme != 'http')) {
+    if (galleryVideo == null &&
+        (uri == null ||
+            !uri.hasAuthority ||
+            (uri.scheme != 'https' && uri.scheme != 'http'))) {
       return message('Вставь корректную ссылку на страницу видео');
     }
     setState(() => loading = true);
     try {
-      final room = await widget.api.createRoom(
-        videoUrl: videoUrl.text.trim(),
-        sourceType: sourceType,
+      var room = await widget.api.createRoom(
+        videoUrl: galleryVideo == null ? videoUrl.text.trim() : '',
+        sourceType: galleryVideo == null ? sourceType : MediaSourceType.upload,
         isPrivate: isPrivate,
       );
+      if (galleryVideo != null) {
+        room = await widget.api.uploadRoomVideo(
+          roomId: room.id,
+          video: galleryVideo!,
+        );
+      }
       if (!mounted) return;
       if (widget.embedded && widget.onCreated != null) {
         widget.onCreated!(room);
@@ -58,6 +68,19 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
 
   void message(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+  Future<void> pickGalleryVideo() async {
+    try {
+      final video = await picker.pickVideo(source: ImageSource.gallery);
+      if (!mounted || video == null) return;
+      setState(() {
+        galleryVideo = video;
+        videoUrl.clear();
+      });
+    } catch (error) {
+      message('Не удалось выбрать видео: $error');
+    }
+  }
 
   Future<void> openVideoBrowser() async {
     final selected = await Navigator.of(context).push<String>(
@@ -95,6 +118,7 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
                 onTap: () => setState(() {
                   sourceType = MediaSourceType.vk;
                   videoUrl.clear();
+                  galleryVideo = null;
                 }),
               ),
             ),
@@ -106,6 +130,7 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
                 onTap: () => setState(() {
                   sourceType = MediaSourceType.web;
                   videoUrl.clear();
+                  galleryVideo = null;
                 }),
               ),
             ),
@@ -117,6 +142,17 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
               decoration: const InputDecoration(
                   hintText: 'Вставь ссылку на видео',
                   prefixIcon: Icon(Icons.link_rounded))),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: loading ? null : pickGalleryVideo,
+              icon: const Icon(Icons.video_library_rounded),
+              label: Text(galleryVideo == null
+                  ? 'Выбрать видео из галереи'
+                  : 'Выбрано: ${galleryVideo!.name}'),
+            ),
+          ),
           if (sourceType == MediaSourceType.web) ...[
             const SizedBox(height: 10),
             SizedBox(

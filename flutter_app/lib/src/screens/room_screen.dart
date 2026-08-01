@@ -955,7 +955,7 @@ class _RoomScreenState extends State<RoomScreen> {
                       16,
                       keyboardOpen ? 5 : 10,
                       16,
-                      keyboardOpen ? 8 : 16,
+                      keyboardOpen ? 10 : 22,
                     ),
                     child: Column(children: [
                       buildRoomHeader(compact: keyboardOpen),

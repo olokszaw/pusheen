@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/models/room.dart';
@@ -261,6 +263,26 @@ class ApiClient {
         'is_private': isPrivate,
       }),
     );
+    return RoomModel.fromJson(_decodeMap(response));
+  }
+
+  Future<RoomModel> uploadRoomVideo({
+    required int roomId,
+    required XFile video,
+  }) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/api/rooms/$roomId/upload/'),
+    );
+    if (token != null) request.headers['Authorization'] = 'Token $token';
+    request.files.add(http.MultipartFile(
+      'video',
+      http.ByteStream(video.openRead()),
+      await video.length(),
+      filename: video.name,
+      contentType: MediaType.parse(video.mimeType ?? 'video/mp4'),
+    ));
+    final response = await http.Response.fromStream(await request.send());
     return RoomModel.fromJson(_decodeMap(response));
   }
 

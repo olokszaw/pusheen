@@ -1,6 +1,7 @@
 enum MediaSourceType {
   vk('vk'),
-  web('web');
+  web('web'),
+  upload('upload');
 
   final String apiValue;
   const MediaSourceType(this.apiValue);
@@ -8,6 +9,7 @@ enum MediaSourceType {
   static MediaSourceType fromApi(String? value, {String fallbackUrl = ''}) {
     if (value == web.apiValue) return web;
     if (value == vk.apiValue) return vk;
+    if (value == upload.apiValue) return upload;
     return detect(fallbackUrl);
   }
 
