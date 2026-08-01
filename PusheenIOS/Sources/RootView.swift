@@ -5,6 +5,7 @@ import PhotosUI
 import ImageIO
 import CoreTransferable
 import UniformTypeIdentifiers
+import WebKit
 
 private struct ImportedRoomMovie: Transferable {
     let url: URL
@@ -241,7 +242,7 @@ struct HomeView: View {
             .navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }
             .sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
             .sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
-            .sheet(isPresented: $showMovieSearch) { MovieSearchSheet() }
+            .sheet(isPresented: $showMovieSearch) { MovieSearchSheet { room in rooms.insert(room, at: 0); path.append(room) } }
         }
     }
     private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
@@ -250,68 +251,94 @@ struct HomeView: View {
 struct MovieSearchSheet: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.dismiss) private var dismiss
+    let created: (Room) -> Void
     @State private var query = ""
-    @State private var results: [MovieCatalogItem] = []
-    @State private var isSearching = false
+    @State private var currentURL = URL(string: "https://www.google.com")!
+    @State private var selectedURL = ""
+    @State private var isCreating = false
     @State private var error = ""
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AcrylicBackground().ignoresSafeArea()
-                VStack(spacing: 14) {
+                VStack(spacing: 12) {
                     HStack(spacing: 10) {
-                        TextField("Название фильма", text: $query)
+                        TextField("Что ищем?", text: $query)
                             .textInputAutocapitalization(.words)
                             .submitLabel(.search)
-                            .onSubmit { Task { await search() } }
+                            .onSubmit { search() }
                             .padding(12)
                             .liquidCard(RoundedRectangle(cornerRadius: 16))
-                        Button { Task { await search() } } label: {
+                        Button { search() } label: {
                             Image(systemName: "magnifyingglass").frame(width: 42, height: 42)
                         }
-                        .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSearching)
+                        .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .liquidCard(Circle())
                     }
                     .padding(.horizontal, 18)
 
-                    if isSearching {
-                        ProgressView("Ищу фильмы…").tint(.white).padding(.top, 20)
-                    } else if !error.isEmpty {
-                        ContentUnavailableView("Поиск недоступен", systemImage: "exclamationmark.triangle", description: Text(error))
-                    } else if results.isEmpty {
-                        ContentUnavailableView("Найди фильм", systemImage: "film", description: Text("Введи название — покажу официальные карточки фильма."))
-                    } else {
-                        List(results) { film in
-                            HStack(alignment: .top, spacing: 12) {
-                                AsyncImage(url: URL(string: film.artworkUrl100 ?? "")) { image in image.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1).overlay(Image(systemName: "film")) }
-                                    .frame(width: 66, height: 94).clipShape(RoundedRectangle(cornerRadius: 11))
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(film.title).font(.headline)
-                                    Text([film.year, film.primaryGenreName ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-                                    Text(film.description).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                                    if let link = film.trackViewUrl, let url = URL(string: link) { Link("Открыть официальную страницу", destination: url).font(.caption.weight(.semibold)) }
-                                }
-                            }
-                            .listRowBackground(Color.clear)
-                        }
-                        .scrollContentBackground(.hidden)
-                    }
+                    BrowserPageView(url: currentURL, visitedURL: $selectedURL)
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                        .padding(.horizontal, 12)
+                    if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal, 18) }
+                    Button { Task { await createRoom() } } label: { Label(isCreating ? "Создаю…" : "Создать комнату с этой страницей", systemImage: "play.rectangle.fill").frame(maxWidth: .infinity) }
+                        .buttonStyle(.borderedProminent).padding(.horizontal, 18)
+                        .disabled(isCreating || !isBrowsablePage)
                 }
             }
-            .navigationTitle("Поиск фильмов")
+            .navigationTitle("Поиск в Google")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
         }
         .presentationDetents([.large])
         .presentationBackground(.clear)
     }
 
-    private func search() async {
+    private var isBrowsablePage: Bool {
+        guard let url = URL(string: selectedURL), let host = url.host?.lowercased() else { return false }
+        return !host.contains("google.")
+    }
+
+    private func search() {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        isSearching = true; error = ""; defer { isSearching = false }
-        do { results = try await session.api.searchMovies(text) }
-        catch let caughtError { self.error = caughtError.localizedDescription }
+        currentURL = URL(string: "https://www.google.com/search?q=\(text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? text)")!
+    }
+
+    private func createRoom() async {
+        guard isBrowsablePage else { return }
+        isCreating = true; error = ""; defer { isCreating = false }
+        do { let room = try await session.api.createRoom(videoURL: selectedURL, isPrivate: false); created(room); dismiss() }
+        catch { error = error.localizedDescription }
+    }
+}
+
+struct BrowserPageView: UIViewRepresentable {
+    let url: URL
+    @Binding var visitedURL: String
+    var reloadOnURLChange = true
+    func makeCoordinator() -> Coordinator { Coordinator(visitedURL: $visitedURL) }
+    func makeUIView(context: Context) -> WKWebView {
+        let view = WKWebView(frame: .zero)
+        view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
+        view.allowsBackForwardNavigationGestures = true
+        view.load(URLRequest(url: url))
+        return view
+    }
+    func updateUIView(_ view: WKWebView, context: Context) {
+        guard reloadOnURLChange else { return }
+        guard view.url?.absoluteString != url.absoluteString else { return }
+        view.load(URLRequest(url: url))
+    }
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        @Binding var visitedURL: String
+        init(visitedURL: Binding<String>) { _visitedURL = visitedURL }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { visitedURL = webView.url?.absoluteString ?? "" }
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+            if navigationAction.targetFrame == nil { webView.load(navigationAction.request) }
+            return nil
+        }
     }
 }
 
@@ -387,6 +414,7 @@ struct RoomView: View {
     private let roomPlayerHeight: CGFloat = 214
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
+    private var usesEmbeddedBrowser: Bool { room.sourceType == "web" && URL(string: room.mediaURL) != nil }
     var body: some View {
         GeometryReader { geometry in
             let safeTop = geometry.safeAreaInsets.top
@@ -402,7 +430,9 @@ struct RoomView: View {
             ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
                     Group {
-                        if let player = model.player {
+                        if usesEmbeddedBrowser, let pageURL = URL(string: room.mediaURL) {
+                            BrowserPageView(url: pageURL, visitedURL: .constant(pageURL.absoluteString), reloadOnURLChange: false)
+                        } else if let player = model.player {
                             BarePlayerSurface(player: player)
                         } else {
                             ZStack {
@@ -414,7 +444,7 @@ struct RoomView: View {
                         .frame(height: playerHeight)
                         .contentShape(Rectangle())
                         .onTapGesture { toggleControls() }
-                    if controlsVisible {
+                    if controlsVisible && !usesEmbeddedBrowser {
                         playerControls
                             .padding(.horizontal, 2)
                             .transition(.opacity.combined(with: .move(edge: .top)))
@@ -506,7 +536,7 @@ struct RoomView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .task { model.setCurrentUserID(session.profile?.userId); await model.start() }.onDisappear { model.stop() }
+        .task { model.setCurrentUserID(session.profile?.userId); await model.start(loadVideo: !usesEmbeddedBrowser) }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
     }

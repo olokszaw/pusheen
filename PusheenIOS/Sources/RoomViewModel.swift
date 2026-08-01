@@ -32,11 +32,18 @@ final class RoomViewModel: ObservableObject {
         // with the view model; cancelling explicitly here would cross actors.
     }
 
-    func start() async {
+    func start(loadVideo: Bool = true) async {
         do {
-            configureAudioSession()
             async let history = api.messages(roomID: room.id)
             async let people = api.members(roomID: room.id)
+            if !loadVideo {
+                messages = try await history; members = try await people
+                isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
+                socket.onEvent = { [weak self] event in self?.apply(event) }
+                socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
+                return
+            }
+            configureAudioSession()
             let stream = try await api.stream(roomID: room.id)
             streamGenres = stream.genres
             messages = try await history; members = try await people
