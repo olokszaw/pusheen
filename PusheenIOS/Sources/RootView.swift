@@ -1321,7 +1321,8 @@ struct LiquidAuthView: View {
 private struct AuthModeSwitcher: View {
     @Binding var register: Bool
     var didChangeMode: () -> Void
-    @GestureState private var dragTranslation: CGFloat = 0
+    @State private var dragOffset: CGFloat = 0
+    @State private var isDragging = false
     // Keep the drag anchored to the mode from which the finger started. The
     // binding itself can then change while the finger is still down without
     // making the thumb jump under it.
@@ -1335,7 +1336,7 @@ private struct AuthModeSwitcher: View {
             let side = width / 2
             let startMode = dragStartMode ?? register
             let restingCenter = startMode ? side * 1.5 : side * 0.5
-            let draggedCenter = min(width - side / 2, max(side / 2, restingCenter + dragTranslation))
+            let draggedCenter = min(width - side / 2, max(side / 2, restingCenter + dragOffset))
             let selectionShape = Capsule()
 
             ZStack(alignment: .leading) {
@@ -1346,7 +1347,6 @@ private struct AuthModeSwitcher: View {
                     .frame(width: side - 4, height: height - 4)
                     .overlay(selectionShape.stroke(.white.opacity(0.15), lineWidth: 0.65))
                     .offset(x: draggedCenter - (side - 4) / 2)
-                    .animation(dragTranslation == 0 ? .interactiveSpring(response: 0.34, dampingFraction: 0.84) : nil, value: register)
                 HStack(spacing: 0) {
                     modeButton("Login", selected: !register) { setMode(false) }
                     modeButton("Register", selected: register) { setMode(true) }
@@ -1355,12 +1355,14 @@ private struct AuthModeSwitcher: View {
             .contentShape(Capsule())
             .highPriorityGesture(
                 DragGesture(minimumDistance: 3)
-                    .updating($dragTranslation) { value, state, _ in
-                        state = value.translation.width
-                    }
                     .onChanged { value in
-                        if dragStartMode == nil { dragStartMode = register }
-                        let candidate = restingCenter + value.translation.width >= width / 2
+                        if !isDragging {
+                            dragStartMode = register
+                            isDragging = true
+                        }
+                        dragOffset = value.translation.width
+                        let startCenter = (dragStartMode ?? register) ? side * 1.5 : side * 0.5
+                        let candidate = startCenter + value.translation.width >= width / 2
                         // Change immediately at the midpoint. Keeping the
                         // finger down and moving back reverses this live.
                         if candidate != register {
@@ -1370,10 +1372,21 @@ private struct AuthModeSwitcher: View {
                         }
                     }
                     .onEnded { value in
-                        let finalCenter = restingCenter + value.predictedEndTranslation.width * 0.22 + value.translation.width
+                        let startCenter = (dragStartMode ?? register) ? side * 1.5 : side * 0.5
+                        let finalCenter = startCenter + value.predictedEndTranslation.width * 0.22 + value.translation.width
                         let finalMode = finalCenter >= width / 2
-                        if finalMode != register { setMode(finalMode) }
-                        dragStartMode = nil
+                        if finalMode != register {
+                            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.58)
+                            register = finalMode
+                            didChangeMode()
+                        }
+                        // Resetting the offset and anchor in one spring is what
+                        // makes the thumb visibly settle into its final slot.
+                        withAnimation(.interpolatingSpring(stiffness: 360, damping: 29)) {
+                            dragOffset = 0
+                            dragStartMode = nil
+                        }
+                        isDragging = false
                     }
             )
         }
@@ -1396,7 +1409,7 @@ private struct AuthModeSwitcher: View {
     private func setMode(_ next: Bool) {
         guard next != register else { return }
         UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.72)
-        withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.84)) { register = next }
+        withAnimation(.interpolatingSpring(stiffness: 360, damping: 29)) { register = next }
         didChangeMode()
     }
 }
