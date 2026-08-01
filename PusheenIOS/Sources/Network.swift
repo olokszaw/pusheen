@@ -145,7 +145,10 @@ final class APIClient {
         if authenticated, let token { request.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.server("Unexpected server response")
+        }
+        guard 200..<300 ~= http.statusCode else {
             if authenticated, http.statusCode == 401 || http.statusCode == 403 {
                 throw APIError.unauthorized
             }
