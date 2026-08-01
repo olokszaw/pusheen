@@ -309,7 +309,7 @@ struct MovieSearchSheet: View {
         guard isBrowsablePage else { return }
         isCreating = true; error = ""; defer { isCreating = false }
         do { let room = try await session.api.createRoom(videoURL: selectedURL, isPrivate: false); created(room); dismiss() }
-        catch let caughtError { self.error = caughtError.localizedDescription }
+        catch { error = error.localizedDescription }
     }
 }
 
