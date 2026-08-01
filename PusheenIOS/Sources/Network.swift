@@ -1,7 +1,16 @@
 import Foundation
 import UniformTypeIdentifiers
 
-enum APIError: LocalizedError { case invalidURL, server(String); var errorDescription: String? { switch self { case .invalidURL: return "Неверный адрес сервера"; case .server(let text): return text } } }
+enum APIError: LocalizedError {
+    case invalidURL, unauthorized, server(String)
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL: return "Неверный адрес сервера"
+        case .unauthorized: return "Сессия закончилась"
+        case .server(let text): return text
+        }
+    }
+}
 
 @MainActor
 final class SessionStore: ObservableObject {
@@ -12,16 +21,21 @@ final class SessionStore: ObservableObject {
     @Published var friendRequests = FriendRequestsResponse(incoming: [], outgoing: [])
     @Published var friendRequestNotice: FriendRequestProfile?
     @Published var viewingStats: ViewingStats?
+    @Published private(set) var isOffline = false
     let api = APIClient()
     private var friendRequestPollingTask: Task<Void, Never>?
     private var appActivityTask: Task<Void, Never>?
+    private var restoreRetryTask: Task<Void, Never>?
     private var knownIncomingRequestIDs = Set<Int>()
     private var hasPrimedFriendRequests = false
+    private let cachedProfileKey = "pusheen.cached-profile"
 
     init() {
         token = UserDefaults.standard.string(forKey: "pusheen.token")
         if let token {
             api.token = token
+            profile = Self.loadCachedProfile()
+            authenticationState = .signedIn
             Task { await restore() }
         } else {
             authenticationState = .signedOut
@@ -29,23 +43,50 @@ final class SessionStore: ObservableObject {
     }
 
     func restore() async {
-        defer { if profile == nil { authenticationState = .signedOut } }
         do {
             profile = try await api.profile()
+            saveCachedProfile()
             authenticationState = .signedIn
+            isOffline = false
+            restoreRetryTask = nil
             viewingStats = try? await api.viewingStats()
             startFriendRequestPolling()
             startActivityHeartbeat()
+        } catch APIError.unauthorized {
+            logout()
         } catch {
-            token = nil
-            api.token = nil
-            UserDefaults.standard.removeObject(forKey: "pusheen.token")
+            // A tunnel outage, timeout, or no network must not erase a saved login.
+            authenticationState = .signedIn
+            isOffline = true
+            startOfflineRetry()
         }
     }
     func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
     func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
-    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startFriendRequestPolling(); startActivityHeartbeat(); Task { self.viewingStats = try? await self.api.viewingStats() } }
-    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; token = nil; profile = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token") }
+    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; saveCachedProfile(); api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startFriendRequestPolling(); startActivityHeartbeat(); Task { self.viewingStats = try? await self.api.viewingStats() } }
+    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey) }
+
+    private static func loadCachedProfile() -> Profile? {
+        guard let data = UserDefaults.standard.data(forKey: "pusheen.cached-profile") else { return nil }
+        return try? JSONDecoder().decode(Profile.self, from: data)
+    }
+
+    private func saveCachedProfile() {
+        guard let profile, let data = try? JSONEncoder().encode(profile) else { return }
+        UserDefaults.standard.set(data, forKey: cachedProfileKey)
+    }
+
+    private func startOfflineRetry() {
+        guard restoreRetryTask == nil else { return }
+        restoreRetryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(8))
+                guard let self, self.token != nil else { return }
+                await self.restore()
+                if !self.isOffline { return }
+            }
+        }
+    }
 
     func refreshFriendRequests() async {
         guard authenticationState == .signedIn, let response = try? await api.friendRequests() else { return }
@@ -105,6 +146,9 @@ final class APIClient {
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            if authenticated, http.statusCode == 401 || http.statusCode == 403 {
+                throw APIError.unauthorized
+            }
             let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String ?? "Ошибка сервера"
             throw APIError.server(detail)
         }
