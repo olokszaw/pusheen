@@ -1316,27 +1316,30 @@ private struct AuthModeSwitcher: View {
     @Binding var register: Bool
     var didChangeMode: () -> Void
     @GestureState private var dragTranslation: CGFloat = 0
-    @State private var feedbackCrossed = false
+    // Keep the drag anchored to the mode from which the finger started. The
+    // binding itself can then change while the finger is still down without
+    // making the thumb jump under it.
+    @State private var dragStartMode: Bool?
 
-    private let height: CGFloat = 42
+    private let height: CGFloat = 40
 
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
             let side = width / 2
-            let restingCenter = register ? side * 1.5 : side * 0.5
+            let startMode = dragStartMode ?? register
+            let restingCenter = startMode ? side * 1.5 : side * 0.5
             let draggedCenter = min(width - side / 2, max(side / 2, restingCenter + dragTranslation))
             let selectionShape = Capsule()
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(.black.opacity(0.18))
-                    .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.7))
+                    .fill(.black.opacity(0.13))
                 selectionShape
-                    .fill(.white.opacity(0.12))
+                    .fill(.white.opacity(0.14))
                     .frame(width: side - 4, height: height - 4)
-                    .liquidCard(selectionShape)
-                    .offset(x: draggedCenter - side / 2 - (side - 4) / 2)
+                    .overlay(selectionShape.stroke(.white.opacity(0.15), lineWidth: 0.65))
+                    .offset(x: draggedCenter - (side - 4) / 2)
                     .animation(dragTranslation == 0 ? .interactiveSpring(response: 0.34, dampingFraction: 0.84) : nil, value: register)
                 HStack(spacing: 0) {
                     modeButton("Login", selected: !register) { setMode(false) }
@@ -1350,22 +1353,25 @@ private struct AuthModeSwitcher: View {
                         state = value.translation.width
                     }
                     .onChanged { value in
+                        if dragStartMode == nil { dragStartMode = register }
                         let candidate = restingCenter + value.translation.width >= width / 2
-                        if candidate != register && !feedbackCrossed {
+                        // Change immediately at the midpoint. Keeping the
+                        // finger down and moving back reverses this live.
+                        if candidate != register {
                             UISelectionFeedbackGenerator().selectionChanged()
-                            feedbackCrossed = true
-                        } else if candidate == register {
-                            feedbackCrossed = false
+                            withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.86)) { register = candidate }
+                            didChangeMode()
                         }
                     }
                     .onEnded { value in
                         let finalCenter = restingCenter + value.predictedEndTranslation.width * 0.22 + value.translation.width
-                        setMode(finalCenter >= width / 2)
-                        feedbackCrossed = false
+                        let finalMode = finalCenter >= width / 2
+                        if finalMode != register { setMode(finalMode) }
+                        dragStartMode = nil
                     }
             )
         }
-        .frame(width: 178, height: height)
+        .frame(width: 160, height: height)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Режим входа")
     }
