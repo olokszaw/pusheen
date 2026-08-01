@@ -1273,14 +1273,17 @@ struct LiquidAuthView: View {
                 VStack(spacing: 18) {
                     Spacer(minLength: 48)
                     Image(systemName: "play.fill").font(.system(size: 30, weight: .bold)).frame(width: 76, height: 76).liquidCard(RoundedRectangle(cornerRadius: 25))
-                    Text(register ? "Создать аккаунт" : "Войти").font(.system(size: 34, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
+                    Text(register ? "Создать аккаунт" : "Войти").font(.system(size: 34, weight: .bold, design: .rounded)).multilineTextAlignment(.center).contentTransition(.opacity)
                     AuthModeSwitcher(register: $register) {
                         error = ""
                         availability = .idle
                     }
-                    Text(register ? "Укажи данные для нового аккаунта" : "Введи username и пароль").font(.subheadline).foregroundStyle(.secondary)
+                    Text(register ? "Укажи данные для нового аккаунта" : "Введи username и пароль").font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
                     VStack(spacing: 11) {
-                        if register { GlassField(icon: "person.text.rectangle", title: "Nickname", text: $nickname) }
+                        if register {
+                            GlassField(icon: "person.text.rectangle", title: "Nickname", text: $nickname)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                         GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { await validate(value) } }
                         if register && !username.isEmpty { AuthProfilePreview(nickname: nickname, username: username, availability: availability) }
                         GlassSecureField(title: "Password", text: $password)
@@ -1300,7 +1303,10 @@ struct LiquidAuthView: View {
                         .liquidCard(Capsule())
                         .frame(maxWidth: .infinity)
                         .disabled(loading)
-                    }.padding(15).liquidCard(RoundedRectangle(cornerRadius: 30))
+                    }
+                    .padding(15)
+                    .liquidCard(RoundedRectangle(cornerRadius: 30))
+                    .animation(.interactiveSpring(response: 0.34, dampingFraction: 0.86), value: register)
                     Spacer(minLength: 20)
                 }.frame(maxWidth: 440).padding(22)
             }
@@ -1347,7 +1353,7 @@ private struct AuthModeSwitcher: View {
                 }
             }
             .contentShape(Capsule())
-            .gesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 3)
                     .updating($dragTranslation) { value, state, _ in
                         state = value.translation.width
