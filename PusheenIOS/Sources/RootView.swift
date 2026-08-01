@@ -199,6 +199,7 @@ struct HomeView: View {
     @State private var path = NavigationPath()
     @State private var showCreate = false
     @State private var showJoin = false
+    @State private var showMovieSearch = false
     @State private var previewedRoom: Room?
     var body: some View {
         NavigationStack(path: $path) {
@@ -206,7 +207,7 @@ struct HomeView: View {
                 ZStack { AcrylicBackground()
                     ScrollView { VStack(alignment: .leading, spacing: 18) {
                 HStack { VStack(alignment: .leading) { Text("Pusheen").font(.largeTitle.bold()); Text("Привет, \(session.profile?.nickname ?? "")").foregroundStyle(.secondary) }; Spacer(); Button { session.logout() } label: { Image(systemName: "rectangle.portrait.and.arrow.right").padding(10).liquidCard(Circle()) }.buttonStyle(.plain) }
-                HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
+                HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Найти фильм", systemImage: "magnifyingglass") { showMovieSearch = true }; Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 ForEach(rooms) { room in
                     RoomCard(room: room)
                         .contentShape(RoundedRectangle(cornerRadius: 22))
@@ -240,9 +241,78 @@ struct HomeView: View {
             .navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }
             .sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
             .sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
+            .sheet(isPresented: $showMovieSearch) { MovieSearchSheet() }
         }
     }
     private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
+}
+
+struct MovieSearchSheet: View {
+    @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var results: [MovieCatalogItem] = []
+    @State private var isSearching = false
+    @State private var error = ""
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AcrylicBackground().ignoresSafeArea()
+                VStack(spacing: 14) {
+                    HStack(spacing: 10) {
+                        TextField("Название фильма", text: $query)
+                            .textInputAutocapitalization(.words)
+                            .submitLabel(.search)
+                            .onSubmit { Task { await search() } }
+                            .padding(12)
+                            .liquidCard(RoundedRectangle(cornerRadius: 16))
+                        Button { Task { await search() } } label: {
+                            Image(systemName: "magnifyingglass").frame(width: 42, height: 42)
+                        }
+                        .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSearching)
+                        .liquidCard(Circle())
+                    }
+                    .padding(.horizontal, 18)
+
+                    if isSearching {
+                        ProgressView("Ищу фильмы…").tint(.white).padding(.top, 20)
+                    } else if !error.isEmpty {
+                        ContentUnavailableView("Поиск недоступен", systemImage: "exclamationmark.triangle", description: Text(error))
+                    } else if results.isEmpty {
+                        ContentUnavailableView("Найди фильм", systemImage: "film", description: Text("Введи название — покажу официальные карточки фильма."))
+                    } else {
+                        List(results) { film in
+                            HStack(alignment: .top, spacing: 12) {
+                                AsyncImage(url: URL(string: film.artworkUrl100 ?? "")) { image in image.resizable().scaledToFill() } placeholder: { Color.white.opacity(0.1).overlay(Image(systemName: "film")) }
+                                    .frame(width: 66, height: 94).clipShape(RoundedRectangle(cornerRadius: 11))
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(film.trackName).font(.headline)
+                                    Text([film.year, film.primaryGenreName ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                                    Text(film.description).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                                    if let link = film.trackViewUrl, let url = URL(string: link) { Link("Открыть официальную страницу", destination: url).font(.caption.weight(.semibold)) }
+                                }
+                            }
+                            .listRowBackground(Color.clear)
+                        }
+                        .scrollContentBackground(.hidden)
+                    }
+                }
+            }
+            .navigationTitle("Поиск фильмов")
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
+        }
+        .presentationDetents([.large])
+        .presentationBackground(.clear)
+    }
+
+    private func search() async {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        isSearching = true; error = ""; defer { isSearching = false }
+        do { results = try await session.api.searchMovies(text) }
+        catch { error = error.localizedDescription }
+    }
 }
 
 struct CreateRoomSheet: View {

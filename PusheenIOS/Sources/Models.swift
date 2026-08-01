@@ -1,5 +1,22 @@
 import Foundation
 
+struct MovieCatalogItem: Codable, Identifiable, Hashable {
+    let trackId: Int
+    let trackName: String
+    let artworkUrl100: String?
+    let longDescription: String?
+    let shortDescription: String?
+    let releaseDate: String?
+    let primaryGenreName: String?
+    let trackViewUrl: String?
+
+    var id: Int { trackId }
+    var description: String { longDescription ?? shortDescription ?? "Описание пока недоступно." }
+    var year: String { releaseDate.map { String($0.prefix(4)) } ?? "" }
+}
+
+struct MovieCatalogResponse: Codable { let results: [MovieCatalogItem] }
+
 struct Profile: Codable, Identifiable, Equatable {
     let userId: Int
     var username: String

@@ -114,6 +114,14 @@ final class APIClient {
     func register(nickname: String, username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/register/", method: "POST", body: ["nickname": nickname, "username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
     func profile() async throws -> Profile { let data = try await request("/api/profile/"); return try decoder.decode(Profile.self, from: data) }
     func rooms() async throws -> [Room] { let data = try await request("/api/rooms/"); return try decoder.decode([Room].self, from: data) }
+    func searchMovies(_ query: String) async throws -> [MovieCatalogItem] {
+        var components = URLComponents(string: "https://itunes.apple.com/search")!
+        components.queryItems = [URLQueryItem(name: "term", value: query), URLQueryItem(name: "media", value: "movie"), URLQueryItem(name: "entity", value: "movie"), URLQueryItem(name: "limit", value: "25")]
+        guard let url = components.url else { throw APIError.invalidURL }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw APIError.server("Не удалось выполнить поиск фильмов") }
+        return try decoder.decode(MovieCatalogResponse.self, from: data).results
+    }
     func messages(roomID: Int) async throws -> [ChatMessage] { let data = try await request("/api/rooms/\(roomID)/messages/"); return try decoder.decode([ChatMessage].self, from: data) }
     func members(roomID: Int) async throws -> [RoomMember] { let data = try await request("/api/rooms/\(roomID)/members/"); return try decoder.decode([RoomMember].self, from: data) }
     func moderateMember(roomID: Int, userID: Int, action: String) async throws { _ = try await request("/api/rooms/\(roomID)/members/\(userID)/moderate/", method: "POST", body: ["action": action]) }
