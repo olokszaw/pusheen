@@ -1840,13 +1840,16 @@ private struct ViewingHeatmapCard: View {
         }
     }
 
-    private var monthMarkers: [MonthMarker] {
-        (0..<visibleMonths).compactMap { offset in
-            guard let month = calendar.date(byAdding: .month, value: offset, to: visibleStart) else { return nil }
-            let dayOffset = max(0, calendar.dateComponents([.day], from: visibleStart, to: month).day ?? 0)
-            let column = visibleMonths == 1 ? 0 : dayOffset / 7
+    private func monthMarkers(for renderedColumns: [[Date]]) -> [MonthMarker] {
+        renderedColumns.enumerated().compactMap { column, days in
+            // A label belongs to the exact column that contains day 1. This
+            // remains correct even when a column spans the end of one month
+            // and the beginning of the next.
+            guard let firstDayOfMonth = days.first(where: { calendar.component(.day, from: $0) == 1 }) else {
+                return nil
+            }
             return MonthMarker(
-                label: Self.monthFormatter.string(from: month).replacingOccurrences(of: ".", with: ""),
+                label: Self.monthFormatter.string(from: firstDayOfMonth).replacingOccurrences(of: ".", with: ""),
                 column: column
             )
         }
@@ -1855,7 +1858,7 @@ private struct ViewingHeatmapCard: View {
     var body: some View {
         // Keep a single immutable layout snapshot for this SwiftUI render.
         let renderedColumns = columns
-        let renderedMonthMarkers = monthMarkers
+        let renderedMonthMarkers = monthMarkers(for: renderedColumns)
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1876,11 +1879,11 @@ private struct ViewingHeatmapCard: View {
             GeometryReader { proxy in
                 let spacing: CGFloat = visibleMonths == 1 ? 6 : 4
                 let totalGaps = CGFloat(max(0, renderedColumns.count - 1)) * spacing
-                let fitted = (proxy.size.width - 20 - totalGaps) / CGFloat(max(1, renderedColumns.count))
+                let fitted = (proxy.size.width - totalGaps) / CGFloat(max(1, renderedColumns.count))
                 let labelAllowance: CGFloat = 23
                 let actualRows = renderedColumns.map(\.count).max() ?? 1
                 let rowCount = CGFloat(actualRows)
-                let verticalFit = max(8, (proxy.size.height - labelAllowance - 18 - (rowCount - 1) * spacing) / rowCount)
+                let verticalFit = max(8, (proxy.size.height - labelAllowance - (rowCount - 1) * spacing) / rowCount)
                 let tile = min(visibleMonths == 1 ? 30 : 20, fitted, verticalFit)
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(alignment: .top, spacing: spacing) {
@@ -1914,18 +1917,12 @@ private struct ViewingHeatmapCard: View {
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .offset(x: CGFloat(marker.column) * (tile + spacing))
                         }
                     }
                     .frame(width: CGFloat(renderedColumns.count) * tile + totalGaps, height: 14)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 9)
-                .background(
-                    LinearGradient(colors: [.white.opacity(0.045), .cyan.opacity(0.025)], startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: RoundedRectangle(cornerRadius: 17, style: .continuous)
-                )
-                .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(.white.opacity(0.07), lineWidth: 0.7))
                 .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
