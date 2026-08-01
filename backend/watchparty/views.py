@@ -523,7 +523,8 @@ def room_stream(request, room_id):
     if not room.vk_video_url:
         return Response({"detail": "В комнате не выбрано видео"}, status=400)
     source_type = detect_media_source(room.vk_video_url)
-    cache_key = f"room-stream:v2:{source_type}:{room.id}:{room.vk_video_url}"
+    # v3 invalidates streams resolved before trailer-aware selection existed.
+    cache_key = f"room-stream:v3:{source_type}:{room.id}:{room.vk_video_url}"
     stream = cache.get(cache_key)
     if stream is None:
         try:
