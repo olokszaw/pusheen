@@ -3,6 +3,7 @@ import Foundation
 struct MovieCatalogItem: Codable, Identifiable, Hashable {
     let trackId: Int
     let trackName: String
+    let kind: String?
     let artworkUrl100: String?
     let longDescription: String?
     let shortDescription: String?
