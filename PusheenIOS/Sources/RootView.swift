@@ -199,7 +199,6 @@ struct HomeView: View {
     @State private var path = NavigationPath()
     @State private var showCreate = false
     @State private var showJoin = false
-    @State private var showMovieSearch = false
     @State private var previewedRoom: Room?
     @State private var selectedRoomIDs = Set<Int>()
     @State private var isSelectingRooms = false
@@ -210,16 +209,26 @@ struct HomeView: View {
             ZStack {
                 ZStack { AcrylicBackground()
                     ScrollView { VStack(alignment: .leading, spacing: 18) {
-                HStack { VStack(alignment: .leading) { Text("Pusheen").font(.largeTitle.bold()); Text("Привет, \(session.profile?.nickname ?? "")").foregroundStyle(.secondary) }; Spacer(); Button { session.logout() } label: { Image(systemName: "rectangle.portrait.and.arrow.right").padding(10).liquidCard(Circle()) }.buttonStyle(.plain) }
-                HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Найти фильм", systemImage: "magnifyingglass") { showMovieSearch = true }; Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
+                HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 ForEach(rooms) { room in
                     RoomCard(room: room)
                         .overlay(alignment: .topTrailing) {
                             if isSelectingRooms && room.owner == session.profile?.userId {
-                                Image(systemName: selectedRoomIDs.contains(room.id) ? "checkmark.circle.fill" : "circle")
-                                    .font(.title3)
-                                    .foregroundStyle(selectedRoomIDs.contains(room.id) ? .mint : .white.opacity(0.72))
-                                    .padding(9)
+                                let selected = selectedRoomIDs.contains(room.id)
+                                ZStack {
+                                    Circle().fill(selected ? Color.mint.opacity(0.24) : Color.black.opacity(0.26))
+                                    Circle().stroke(selected ? Color.mint.opacity(0.95) : Color.white.opacity(0.38), lineWidth: 1.2)
+                                    if selected {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .foregroundStyle(.white)
+                                    }
+                                }
+                                .frame(width: 27, height: 27)
+                                .shadow(color: selected ? .mint.opacity(0.35) : .black.opacity(0.25), radius: 7, y: 2)
+                                .padding(9)
+                                .scaleEffect(selected ? 1 : 0.92)
+                                .animation(.spring(response: 0.25, dampingFraction: 0.72), value: selected)
                             }
                         }
                         .contentShape(RoundedRectangle(cornerRadius: 22))
@@ -267,9 +276,8 @@ struct HomeView: View {
             .navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }
             .sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
             .sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
-            .sheet(isPresented: $showMovieSearch) { MovieSearchSheet() }
             .confirmationDialog("Удалить выбранные комнаты?", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
-                Button("Удалить (selectedRoomIDs.count)", role: .destructive) { Task { await deleteSelectedRooms() } }
+                Button("Удалить \(selectedRoomIDs.count)", role: .destructive) { Task { await deleteSelectedRooms() } }
             } message: { Text("Видео, загруженные в эти комнаты, тоже удалятся с сервера.") }
         }
     }
@@ -447,7 +455,7 @@ struct RoomView: View {
             let playerHeight = chatFocused ? 176.0 : roomPlayerHeight
             // Leave a tiny visual margin so the lower glass corners do not
             // touch or clip against the physical edge of the display.
-            let roomHeight = max(playerHeight + 180, geometry.size.height - (chatFocused ? keyboardHeight : 0) - 7)
+            let roomHeight = max(playerHeight + 180, geometry.size.height - (chatFocused ? keyboardHeight : 0) - 14)
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
             ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
@@ -1763,6 +1771,10 @@ private struct GenreOnlyCard: View {
 }
 
 private struct ViewingHeatmapCard: View {
+    private struct MonthMarker {
+        let label: String
+        let column: Int
+    }
     let daily: [String: Int]
     private let calendar = Calendar.current
     private static let monthFormatter: DateFormatter = {
@@ -1828,17 +1840,22 @@ private struct ViewingHeatmapCard: View {
         }
     }
 
-    private var monthLabels: [String] {
-        return (0..<visibleMonths).compactMap { offset in
+    private var monthMarkers: [MonthMarker] {
+        (0..<visibleMonths).compactMap { offset in
             guard let month = calendar.date(byAdding: .month, value: offset, to: visibleStart) else { return nil }
-            return Self.monthFormatter.string(from: month).replacingOccurrences(of: ".", with: "")
+            let dayOffset = max(0, calendar.dateComponents([.day], from: visibleStart, to: month).day ?? 0)
+            let column = visibleMonths == 1 ? 0 : dayOffset / 7
+            return MonthMarker(
+                label: Self.monthFormatter.string(from: month).replacingOccurrences(of: ".", with: ""),
+                column: column
+            )
         }
     }
 
     var body: some View {
         // Keep a single immutable layout snapshot for this SwiftUI render.
         let renderedColumns = columns
-        let renderedMonthLabels = monthLabels
+        let renderedMonthMarkers = monthMarkers
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1857,22 +1874,23 @@ private struct ViewingHeatmapCard: View {
                 .padding(.vertical, 8)
                 .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             GeometryReader { proxy in
-                let spacing: CGFloat = visibleMonths == 1 ? 6 : 3
+                let spacing: CGFloat = visibleMonths == 1 ? 6 : 4
                 let totalGaps = CGFloat(max(0, renderedColumns.count - 1)) * spacing
-                let fitted = (proxy.size.width - totalGaps) / CGFloat(max(1, renderedColumns.count))
+                let fitted = (proxy.size.width - 20 - totalGaps) / CGFloat(max(1, renderedColumns.count))
                 let labelAllowance: CGFloat = 23
                 let actualRows = renderedColumns.map(\.count).max() ?? 1
                 let rowCount = CGFloat(actualRows)
-                let verticalFit = max(8, (proxy.size.height - labelAllowance - (rowCount - 1) * spacing) / rowCount)
+                let verticalFit = max(8, (proxy.size.height - labelAllowance - 18 - (rowCount - 1) * spacing) / rowCount)
                 let tile = min(visibleMonths == 1 ? 30 : 20, fitted, verticalFit)
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(alignment: .top, spacing: spacing) {
                         ForEach(renderedColumns.indices, id: \.self) { columnIndex in
                             VStack(spacing: spacing) {
                                 ForEach(renderedColumns[columnIndex], id: \.self) { day in
-                                    RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
-                                        .fill(color(for: day))
+                                    RoundedRectangle(cornerRadius: max(3, tile * 0.28), style: .continuous)
+                                        .fill(tileGradient(for: day))
                                         .frame(width: tile, height: tile)
+                                        .overlay(RoundedRectangle(cornerRadius: max(3, tile * 0.28), style: .continuous).stroke(.white.opacity(0.055), lineWidth: 0.6))
                                         .overlay {
                                             if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
                                                 RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
@@ -1890,17 +1908,24 @@ private struct ViewingHeatmapCard: View {
                             }
                         }
                     }
-                    HStack(spacing: 0) {
-                        ForEach(Array(renderedMonthLabels.enumerated()), id: \.offset) { _, label in
-                            Text(label)
+                    ZStack(alignment: .leading) {
+                        ForEach(Array(renderedMonthMarkers.enumerated()), id: \.offset) { _, marker in
+                            Text(marker.label)
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .offset(x: CGFloat(marker.column) * (tile + spacing))
                         }
                     }
                     .frame(width: CGFloat(renderedColumns.count) * tile + totalGaps, height: 14)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(
+                    LinearGradient(colors: [.white.opacity(0.045), .cyan.opacity(0.025)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                    in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+                )
+                .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(.white.opacity(0.07), lineWidth: 0.7))
                 .scaleEffect(pinchScale, anchor: .center)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
@@ -1922,6 +1947,15 @@ private struct ViewingHeatmapCard: View {
         let threeHours = 3.0 * 60.0 * 60.0
         let progress = min(1, Double(value) / threeHours)
         return Color.cyan.opacity(0.12 + 0.68 * progress)
+    }
+
+    private func tileGradient(for day: Date) -> LinearGradient {
+        let base = color(for: day)
+        return LinearGradient(
+            colors: [base.opacity(0.88), base],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 
     private func dayKey(for day: Date) -> String {
