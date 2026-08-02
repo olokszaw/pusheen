@@ -140,7 +140,7 @@ final class APIClient {
 
     private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true) async throws -> Data {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }
-        var request = URLRequest(url: url); request.httpMethod = method
+        var request = URLRequest(url: url); request.httpMethod = method; request.timeoutInterval = 8
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if authenticated, let token { request.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
@@ -170,8 +170,8 @@ final class APIClient {
         return try decoder.decode(MovieCatalogResponse.self, from: data).results.filter { $0.kind == "feature-movie" }
     }
     func messages(roomID: Int) async throws -> [ChatMessage] { let data = try await request("/api/rooms/\(roomID)/messages/"); return try decoder.decode([ChatMessage].self, from: data) }
-    func sendMessage(roomID: Int, text: String, image: String = "") async throws -> ChatMessage {
-        let data = try await request("/api/rooms/\(roomID)/messages/", method: "POST", body: ["text": text, "image_data_url": image])
+    func sendMessage(roomID: Int, text: String, image: String = "", clientMessageID: String) async throws -> ChatMessage {
+        let data = try await request("/api/rooms/\(roomID)/messages/", method: "POST", body: ["text": text, "image_data_url": image, "client_message_id": clientMessageID])
         return try decoder.decode(ChatMessage.self, from: data)
     }
     func members(roomID: Int) async throws -> [RoomMember] { let data = try await request("/api/rooms/\(roomID)/members/"); return try decoder.decode([RoomMember].self, from: data) }

@@ -3,6 +3,11 @@ import Foundation
 
 @MainActor
 final class RoomViewModel: ObservableObject {
+    private struct PendingChatMessage: Identifiable {
+        let id: String
+        let text: String
+        let image: String
+    }
     @Published var player: AVPlayer?
     @Published var messages: [ChatMessage] = []
     @Published var members: [RoomMember] = []
@@ -23,6 +28,8 @@ final class RoomViewModel: ObservableObject {
     private var audioObservers: [NSObjectProtocol] = []
     private var activityTask: Task<Void, Never>?
     private var messageSyncTask: Task<Void, Never>?
+    private var pendingMessages: [PendingChatMessage] = []
+    private var isFlushingMessages = false
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
 
@@ -112,6 +119,7 @@ final class RoomViewModel: ObservableObject {
         messageSyncTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
+                await self.flushPendingMessages()
                 if let serverMessages = try? await self.api.messages(roomID: self.room.id) {
                     self.mergeServerMessages(serverMessages)
                 }
@@ -156,13 +164,16 @@ final class RoomViewModel: ObservableObject {
             let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
             messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], createdAt: ISO8601DateFormatter().string(from: Date())))
         }
+        let pendingID = UUID().uuidString
+        pendingMessages.append(PendingChatMessage(id: pendingID, text: text, image: image))
         // HTTP persists first; the server then broadcasts to every socket.
         // This prevents a message disappearing when a room socket reconnects.
         Task { [weak self] in
             guard let self else { return }
             do {
-                let persisted = try await self.api.sendMessage(roomID: self.room.id, text: text, image: image)
+                let persisted = try await self.api.sendMessage(roomID: self.room.id, text: text, image: image, clientMessageID: pendingID)
                 self.mergeServerMessages([persisted])
+                self.pendingMessages.removeAll { $0.id == pendingID }
             } catch {
                 self.error = "Не удалось отправить сообщение. Проверь подключение."
             }
@@ -277,6 +288,26 @@ final class RoomViewModel: ObservableObject {
                 messages[pending] = message
             } else {
                 messages.append(message)
+            }
+        }
+    }
+    private func flushPendingMessages() async {
+        guard !isFlushingMessages else { return }
+        isFlushingMessages = true
+        defer { isFlushingMessages = false }
+        while let pending = pendingMessages.first {
+            do {
+                let persisted = try await api.sendMessage(
+                    roomID: room.id,
+                    text: pending.text,
+                    image: pending.image,
+                    clientMessageID: pending.id
+                )
+                pendingMessages.removeAll { $0.id == pending.id }
+                mergeServerMessages([persisted])
+            } catch {
+                // The outbox is kept until the periodic recovery loop succeeds.
+                return
             }
         }
     }

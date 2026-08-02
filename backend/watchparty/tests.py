@@ -37,6 +37,18 @@ class RoomApiTests(APITestCase):
         self.assertEqual(history.status_code, 200)
         self.assertEqual([item["text"] for item in history.data], ["Visible message"])
 
+    def test_retrying_client_message_id_does_not_duplicate_chat(self):
+        room = Room.objects.create(owner=self.owner, title="Retry chat")
+        RoomMember.objects.create(room=room, user=self.owner)
+        self.authenticate(self.owner_token)
+        payload = {"text": "Retry once", "client_message_id": "offline-retry-1"}
+        first = self.client.post(f"/api/rooms/{room.id}/messages/", payload, format="json")
+        retry = self.client.post(f"/api/rooms/{room.id}/messages/", payload, format="json")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(first.data["id"], retry.data["id"])
+        self.assertEqual(ChatMessage.objects.filter(room=room).count(), 1)
+
     @patch("watchparty.views.timezone.localdate", return_value=date(2026, 8, 2))
     def test_activity_persists_server_calculated_month_increase(self, _localdate):
         ViewingActivity.objects.create(

@@ -724,16 +724,24 @@ def room_messages(request, room_id):
             return Response({"detail": "Image is too large"}, status=413)
         if not text and not image_data_url:
             return Response({"detail": "Message is empty"}, status=400)
+        client_message_id = str(request.data.get("client_message_id") or "").strip()[:64]
         # Persist before fan-out: a socket reconnect must never lose chat.
-        message = ChatMessage.objects.create(
-            room=room, user=request.user, text=text, image_data_url=image_data_url
-        )
+        if client_message_id:
+            message, created = ChatMessage.objects.get_or_create(
+                room=room, user=request.user, client_message_id=client_message_id,
+                defaults={"text": text, "image_data_url": image_data_url},
+            )
+        else:
+            message = ChatMessage.objects.create(
+                room=room, user=request.user, text=text, image_data_url=image_data_url
+            )
+            created = True
         payload = ChatMessageSerializer(message, context={"request": request}).data
-        async_to_sync(get_channel_layer().group_send)(
-            f"watch_room_{room.id}",
-            {"type": "room.chat", "payload": dict(payload)},
-        )
-        return Response(payload, status=status.HTTP_201_CREATED)
+        if created:
+            async_to_sync(get_channel_layer().group_send)(
+                f"watch_room_{room.id}", {"type": "room.chat", "payload": dict(payload)}
+            )
+        return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
     messages = list(
         ChatMessage.objects.filter(room=room)
         .select_related("user", "user__watch_profile", "user__client_identity")
