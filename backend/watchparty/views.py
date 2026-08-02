@@ -1,6 +1,7 @@
 import mimetypes
 import os
 import re
+from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -56,6 +57,33 @@ def auth_payload(user):
     return {"token": token.key, **public_profile(user)}
 
 
+def month_increase_percent(daily_seconds, current_day=None):
+    """Return the server-authoritative month-over-month increase.
+
+    The source data remains the daily activity ledger. The derived percentage
+    is refreshed and persisted with that ledger, rather than trusting each
+    client to calculate a potentially different result.
+    """
+    today = current_day or timezone.localdate()
+    current_start = today.replace(day=1)
+    previous_end = current_start - timedelta(days=1)
+    previous_start = previous_end.replace(day=1)
+    daily = daily_seconds or {}
+
+    def total_between(start, end):
+        return sum(
+            max(0, int(seconds or 0))
+            for day, seconds in daily.items()
+            if start.isoformat() <= str(day) <= end.isoformat()
+        )
+
+    current = total_between(current_start, today)
+    previous = total_between(previous_start, previous_end)
+    if previous <= 0:
+        return 100 if current > 0 else 0
+    return max(0, round((current - previous) / previous * 100))
+
+
 def activity_payload(activity):
     genres = activity.genre_counts or {}
     total = sum(int(value or 0) for value in genres.values())
@@ -78,6 +106,7 @@ def activity_payload(activity):
         "longest_movie_seconds": activity.longest_movie_seconds,
         "genres": genre_rows,
         "daily_seconds": activity.daily_seconds or {},
+        "month_increase_percent": activity.month_increase_percent,
         "top_companion": top_companion,
     }
 
@@ -86,6 +115,10 @@ def activity_payload(activity):
 def activity(request):
     activity_obj, _ = ViewingActivity.objects.get_or_create(user=request.user)
     if request.method == "GET":
+        current_percent = month_increase_percent(activity_obj.daily_seconds)
+        if activity_obj.month_increase_percent != current_percent:
+            activity_obj.month_increase_percent = current_percent
+            activity_obj.save(update_fields=["month_increase_percent", "updated_at"])
         return Response(activity_payload(activity_obj))
 
     # The client reports bounded foreground intervals. A single request can
@@ -105,7 +138,10 @@ def activity(request):
         activity_obj.longest_movie_seconds = max(activity_obj.longest_movie_seconds, duration_seconds)
         daily = dict(activity_obj.daily_seconds or {})
         daily[day] = min(86_400, int(daily.get(day, 0)) + app_seconds + watched_seconds)
-        activity_obj.daily_seconds = dict(sorted(daily.items())[-14:])
+        # The activity card compares the current month with the previous one.
+        # Keep enough history for two full months plus a safe margin.
+        activity_obj.daily_seconds = dict(sorted(daily.items())[-100:])
+        activity_obj.month_increase_percent = month_increase_percent(activity_obj.daily_seconds)
         counts = dict(activity_obj.genre_counts or {})
         for genre in genres[:5]:
             if isinstance(genre, str) and genre.strip():

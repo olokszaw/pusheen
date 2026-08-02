@@ -1779,7 +1779,10 @@ private struct ViewingInsightsPager: View {
     private var pages: [AnyView] {
         [
             AnyView(GenreOnlyCard(stats: stats)),
-            AnyView(ViewingHeatmapCard(daily: stats?.dailySeconds ?? [:])),
+            AnyView(ViewingHeatmapCard(
+                daily: stats?.dailySeconds ?? [:],
+                backendMonthIncreasePercentage: stats?.monthIncreasePercentage
+            )),
             AnyView(SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends)),
         ]
     }
@@ -1881,6 +1884,7 @@ private struct GenreOnlyCard: View {
 
 private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
+    let backendMonthIncreasePercentage: Int?
     private let calendar = Calendar.current
     private static let detailFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -1912,6 +1916,7 @@ private struct ViewingHeatmapCard: View {
         return count
     }
     private var monthIncreasePercentage: Int {
+        if let backendMonthIncreasePercentage { return backendMonthIncreasePercentage }
         ActivityCalendarLayout.monthIncreasePercentage(
             daily: daily,
             today: today,

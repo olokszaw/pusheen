@@ -167,6 +167,7 @@ class ViewingActivity(models.Model):
     longest_movie_seconds = models.PositiveIntegerField(default=0)
     genre_counts = models.JSONField(default=dict, blank=True)
     daily_seconds = models.JSONField(default=dict, blank=True)
+    month_increase_percent = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
 

@@ -1,3 +1,5 @@
+from datetime import date
+
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
 from asgiref.sync import async_to_sync
@@ -7,7 +9,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from config.asgi import application
-from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute, UserProfile
+from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute, UserProfile, ViewingActivity
 
 
 class RoomApiTests(APITestCase):
@@ -20,6 +22,19 @@ class RoomApiTests(APITestCase):
 
     def authenticate(self, token):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+    @patch("watchparty.views.timezone.localdate", return_value=date(2026, 8, 2))
+    def test_activity_persists_server_calculated_month_increase(self, _localdate):
+        ViewingActivity.objects.create(
+            user=self.owner,
+            daily_seconds={"2026-07-01": 100, "2026-08-01": 150},
+        )
+        self.authenticate(self.owner_token)
+        response = self.client.get("/api/activity/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["month_increase_percent"], 50)
+        activity = ViewingActivity.objects.get(user=self.owner)
+        self.assertEqual(activity.month_increase_percent, 50)
 
     def test_moderation_returns_realtime_system_event_and_muted_state(self):
         UserProfile.objects.create(user=self.owner, nickname="Создатель")

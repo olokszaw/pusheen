@@ -20,6 +20,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Python for backend tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test persisted activity percentage
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python manage.py test watchparty.tests.RoomApiTests.test_activity_persists_server_calculated_month_increase --verbosity 2
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
