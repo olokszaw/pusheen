@@ -1934,7 +1934,13 @@ private struct ViewingHeatmapCard: View {
                                                         .contentShape(Rectangle())
                                                         .onTapGesture { select(day) }
                                                 } else {
-                                                    Color.clear.frame(width: cell, height: cell)
+                                                    // Keep every week a complete seven-row grid.
+                                                    // Empty slots are intentionally subdued, but they
+                                                    // occupy the same space as real days so no month
+                                                    // can create visual holes or shifted columns.
+                                                    RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous)
+                                                        .fill(.white.opacity(0.055))
+                                                        .frame(width: cell, height: cell)
                                                 }
                                             }
                                         }
