@@ -311,13 +311,14 @@ final class RoomViewModel: ObservableObject {
             changed = true
         }
         guard changed else { return }
-        // Recovery polling and a newly reconnected WebSocket can deliver an
-        // older persisted row after a newer live row. Render by server time,
-        // never by arrival order, so 21:06 cannot appear below 21:08.
+        // Device and server clocks can differ by hours. Database ids are
+        // monotonic and therefore the reliable delivery order; pending local
+        // rows stay after persisted history in their tap order.
         messages.sort { lhs, rhs in
-            let leftDate = chatMessageDate(lhs) ?? .distantFuture
-            let rightDate = chatMessageDate(rhs) ?? .distantFuture
-            if leftDate != rightDate { return leftDate < rightDate }
+            if lhs.id < 0 || rhs.id < 0 {
+                if lhs.id < 0 && rhs.id < 0 { return lhs.id > rhs.id }
+                return rhs.id < 0
+            }
             return lhs.id < rhs.id
         }
     }
