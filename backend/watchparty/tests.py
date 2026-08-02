@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone as datetime_timezone
 
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
@@ -49,6 +49,19 @@ class RoomApiTests(APITestCase):
         self.assertEqual(retry.status_code, 200)
         self.assertEqual(first.data["id"], retry.data["id"])
         self.assertEqual(ChatMessage.objects.filter(room=room).count(), 1)
+
+    def test_message_history_is_ordered_by_server_timestamp(self):
+        room = Room.objects.create(owner=self.owner, title="Ordered chat")
+        RoomMember.objects.create(room=room, user=self.owner)
+        older = ChatMessage.objects.create(room=room, user=self.owner, text="21:06")
+        newer = ChatMessage.objects.create(room=room, user=self.owner, text="21:08")
+        base = datetime(2026, 8, 2, 21, 6, tzinfo=datetime_timezone.utc)
+        ChatMessage.objects.filter(pk=older.pk).update(created_at=base)
+        ChatMessage.objects.filter(pk=newer.pk).update(created_at=base + timedelta(minutes=2))
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/rooms/{room.id}/messages/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["text"] for item in response.data], ["21:06", "21:08"])
 
     @patch("watchparty.views.timezone.localdate", return_value=date(2026, 8, 2))
     def test_activity_persists_server_calculated_month_increase(self, _localdate):

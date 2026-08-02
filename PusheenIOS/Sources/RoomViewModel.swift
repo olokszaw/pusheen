@@ -211,12 +211,9 @@ final class RoomViewModel: ObservableObject {
             // forward/back loop caused by delayed server positions.
             isPlaying ? player?.play() : player?.pause()
         case "chat_message":
-            if let data = try? JSONSerialization.data(withJSONObject: event), let message = try? JSONDecoder().decode(ChatMessage.self, from: data), !messages.contains(where: { $0.id == message.id }) {
-                if let pending = messages.firstIndex(where: { $0.id < 0 && $0.authorId == message.authorId && $0.text == message.text && $0.imageDataURL == message.imageDataURL }) {
-                    messages[pending] = message
-                } else {
-                    messages.append(message)
-                }
+            if let data = try? JSONSerialization.data(withJSONObject: event),
+               let message = try? JSONDecoder().decode(ChatMessage.self, from: data) {
+                mergeServerMessages([message])
             }
         case "message_reaction":
             guard let messageID = event["message_id"] as? Int, let emoji = event["emoji"] as? String else { return }
@@ -290,6 +287,24 @@ final class RoomViewModel: ObservableObject {
                 messages.append(message)
             }
         }
+        // Recovery polling and a newly reconnected WebSocket can deliver an
+        // older persisted row after a newer live row. Render by server time,
+        // never by arrival order, so 21:06 cannot appear below 21:08.
+        messages.sort { lhs, rhs in
+            let leftDate = chatMessageDate(lhs) ?? .distantFuture
+            let rightDate = chatMessageDate(rhs) ?? .distantFuture
+            if leftDate != rightDate { return leftDate < rightDate }
+            return lhs.id < rhs.id
+        }
+    }
+    private func chatMessageDate(_ message: ChatMessage) -> Date? {
+        guard let value = message.createdAt else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: value)
     }
     private func flushPendingMessages() async {
         guard !isFlushingMessages else { return }
