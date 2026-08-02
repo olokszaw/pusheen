@@ -1011,7 +1011,6 @@ struct NativeChatPane: View {
     @State private var sticksToBottom = true
     @State private var didInitialScroll = false
     @State private var forceScrollOnNextMessage = false
-    @State private var latestDistanceToBottom: CGFloat = 0
     private let quickReactions = [
         "👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨",
         "🥰", "🤣", "😍", "🤔", "😎", "🥳", "😡", "💀", "💯", "👎",
@@ -1034,18 +1033,14 @@ struct NativeChatPane: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { focused = false; inputFocused = false }
-                .onScrollGeometryChange(for: CGFloat.self, of: { geometry in
+                .onScrollGeometryChange(for: Bool.self, of: { geometry in
                     max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
-                }, action: { _, distanceToBottom in
-                    // A keyboard/control resize also changes this distance, but it
-                    // is not a user scroll. Keep it only as a measurement and
-                    // commit the reading position when scrolling actually ends.
-                    latestDistanceToBottom = distanceToBottom
+                    < 44
+                }, action: { wasAtBottom, isAtBottom in
+                    // Avoid changing @State on every scroll frame.
+                    guard wasAtBottom != isAtBottom else { return }
+                    sticksToBottom = isAtBottom
                 })
-                .onScrollPhaseChange { _, phase in
-                    guard !phase.isScrolling else { return }
-                    sticksToBottom = latestDistanceToBottom < 44
-                }
                 .onChange(of: messages.last?.id) { oldID, newID in
                     guard newID != nil, newID != oldID else { return }
                     if forceScrollOnNextMessage || !didInitialScroll || sticksToBottom {

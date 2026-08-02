@@ -79,7 +79,7 @@ final class RoomViewModel: ObservableObject {
                     }
                 }
             }
-            timer = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.35, preferredTimescale: 600), queue: .main) { [weak self] time in
+            timer = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.75, preferredTimescale: 600), queue: .main) { [weak self] time in
                 guard let self else { return }; self.position = time.seconds.isFinite ? time.seconds : 0
                 let value = self.player?.currentItem?.duration.seconds ?? 0; if value.isFinite && value > 0 { self.duration = value }
             }
@@ -277,6 +277,7 @@ final class RoomViewModel: ObservableObject {
         }
     }
     private func mergeServerMessages(_ serverMessages: [ChatMessage]) {
+        var changed = false
         for message in serverMessages where !messages.contains(where: { $0.id == message.id }) {
             if let pending = messages.firstIndex(where: {
                 $0.id < 0 && $0.authorId == message.authorId &&
@@ -286,7 +287,9 @@ final class RoomViewModel: ObservableObject {
             } else {
                 messages.append(message)
             }
+            changed = true
         }
+        guard changed else { return }
         // Recovery polling and a newly reconnected WebSocket can deliver an
         // older persisted row after a newer live row. Render by server time,
         // never by arrival order, so 21:06 cannot appear below 21:08.
