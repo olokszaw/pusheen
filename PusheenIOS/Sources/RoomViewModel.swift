@@ -5,6 +5,7 @@ import Foundation
 final class RoomViewModel: ObservableObject {
     private struct PendingChatMessage: Identifiable {
         let id: String
+        let localMessageID: Int
         let text: String
         let image: String
     }
@@ -170,12 +171,12 @@ final class RoomViewModel: ObservableObject {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !image.isEmpty else { return }
         // Render immediately; the server confirmation replaces this temporary
         // message with its permanent id a moment later.
+        let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
         if let profile {
-            let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
             messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], createdAt: ISO8601DateFormatter().string(from: Date())))
         }
         let pendingID = UUID().uuidString
-        pendingMessages.append(PendingChatMessage(id: pendingID, text: text, image: image))
+        pendingMessages.append(PendingChatMessage(id: pendingID, localMessageID: localID, text: text, image: image))
         // A single FIFO HTTP outbox is the source of truth for send order.
         // The server broadcasts each persisted row to all WebSocket listeners.
         Task { [weak self] in
@@ -290,8 +291,15 @@ final class RoomViewModel: ObservableObject {
         }
     }
     private func mergeServerMessages(_ serverMessages: [ChatMessage]) {
-        var changed = false
         for message in serverMessages where !messages.contains(where: { $0.id == message.id }) {
+            // Our HTTP response confirms the exact local row. Ignore the
+            // accompanying socket broadcast while that row is still pending,
+            // otherwise identical spam can confirm the wrong bubble.
+            if let currentUserID, message.authorId == currentUserID && pendingMessages.contains(where: {
+                $0.text == message.text && $0.image == message.imageDataURL
+            }) {
+                continue
+            }
             // Older servers can accept one send through both WebSocket and
             // HTTP, yielding two ids. Keep a single visible delivery.
             if messages.contains(where: { isDuplicateDelivery($0, of: message) }) {
@@ -305,18 +313,6 @@ final class RoomViewModel: ObservableObject {
             } else {
                 messages.append(message)
             }
-            changed = true
-        }
-        guard changed else { return }
-        // Device and server clocks can differ by hours. Database ids are
-        // monotonic and therefore the reliable delivery order; pending local
-        // rows stay after persisted history in their tap order.
-        messages.sort { lhs, rhs in
-            if lhs.id < 0 || rhs.id < 0 {
-                if lhs.id < 0 && rhs.id < 0 { return lhs.id > rhs.id }
-                return rhs.id < 0
-            }
-            return lhs.id < rhs.id
         }
     }
     private func chatMessageDate(_ message: ChatMessage) -> Date? {
@@ -351,11 +347,20 @@ final class RoomViewModel: ObservableObject {
                     clientMessageID: pending.id
                 )
                 pendingMessages.removeAll { $0.id == pending.id }
-                mergeServerMessages([persisted])
+                confirmPersistedMessage(persisted, for: pending)
             } catch {
                 // The outbox is kept until the periodic recovery loop succeeds.
                 return
             }
+        }
+    }
+    private func confirmPersistedMessage(_ persisted: ChatMessage, for pending: PendingChatMessage) {
+        if let localIndex = messages.firstIndex(where: { $0.id == pending.localMessageID }) {
+            // Replace in place. Never sort the entire timeline when an older
+            // queued send is finally acknowledged.
+            messages[localIndex] = persisted
+        } else if !messages.contains(where: { $0.id == persisted.id }) {
+            messages.append(persisted)
         }
     }
     private func recoverMessagesImmediately() async {
