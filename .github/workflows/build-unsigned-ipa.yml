@@ -27,6 +27,12 @@ jobs:
         working-directory: PusheenIOS
         run: xcodegen generate
 
+      - name: Test activity calendar layout
+        working-directory: PusheenIOS
+        run: |
+          swiftc Sources/ActivityCalendarLayout.swift Tests/ActivityCalendarLayoutTests/main.swift -o /tmp/activity-calendar-tests
+          /tmp/activity-calendar-tests
+
       - name: Build native SwiftUI app
         working-directory: PusheenIOS
         run: |

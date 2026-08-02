@@ -1771,21 +1771,8 @@ private struct GenreOnlyCard: View {
 }
 
 private struct ViewingHeatmapCard: View {
-    private struct MonthGroup: Identifiable {
-        let month: Date
-        let label: String
-        let columns: [[Date?]]
-        var id: Date { month }
-    }
-
     let daily: [String: Int]
     private let calendar = Calendar.current
-    private static let monthFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
-        formatter.dateFormat = "LLL"
-        return formatter
-    }()
     private static let detailFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "ru_RU")
@@ -1797,31 +1784,10 @@ private struct ViewingHeatmapCard: View {
     @State private var pinchScale: CGFloat = 1
 
     private var today: Date { calendar.startOfDay(for: Date()) }
-    private var monthStarts: [Date] {
-        let current = calendar.date(from: calendar.dateComponents([.year, .month], from: today)) ?? today
-        return (0..<visibleMonths).compactMap { offset in
-            calendar.date(byAdding: .month, value: -(visibleMonths - 1 - offset), to: current)
-        }
+    private var calendarLayout: ActivityCalendarLayout {
+        ActivityCalendarLayout(today: today, visibleMonths: visibleMonths, calendar: calendar)
     }
-    private var monthGroups: [MonthGroup] {
-        monthStarts.map { start in
-            let dayCount = calendar.range(of: .day, in: .month, for: start)?.count ?? 28
-            let firstWeekday = (calendar.component(.weekday, from: start) + 5) % 7 // Monday = 0
-            let columnCount = max(1, Int(ceil(Double(firstWeekday + dayCount) / 7.0)))
-            var columns = Array(repeating: Array<Date?>(repeating: nil, count: 7), count: columnCount)
-            for dayNumber in 1...dayCount {
-                guard let day = calendar.date(byAdding: .day, value: dayNumber - 1, to: start), day <= today else { continue }
-                let slot = firstWeekday + dayNumber - 1
-                columns[slot / 7][slot % 7] = day
-            }
-            return MonthGroup(
-                month: start,
-                label: Self.monthFormatter.string(from: start).replacingOccurrences(of: ".", with: ""),
-                columns: columns
-            )
-        }
-    }
-    private var allVisibleDays: [Date] { monthGroups.flatMap { $0.columns.flatMap { $0.compactMap { $0 } } } }
+    private var allVisibleDays: [Date] { calendarLayout.displayedDays }
     private var highlightedDay: Date { selectedDay ?? latestActiveDay ?? today }
     private var latestActiveDay: Date? {
         allVisibleDays.last(where: { (daily[dayKey(for: $0)] ?? 0) > 0 })
@@ -1836,18 +1802,12 @@ private struct ViewingHeatmapCard: View {
         }
         return count
     }
-    private var trendText: String {
-        let days = allVisibleDays.count
-        guard days > 0, let start = allVisibleDays.first else { return "Смотри чаще — статистика появится здесь" }
-        let current = allVisibleDays.reduce(0) { $0 + (daily[dayKey(for: $1)] ?? 0) }
-        let previousEnd = calendar.date(byAdding: .day, value: -1, to: start) ?? start
-        let previous = (0..<days).reduce(0) { total, offset in
-            guard let day = calendar.date(byAdding: .day, value: -offset, to: previousEnd) else { return total }
-            return total + (daily[dayKey(for: day)] ?? 0)
-        }
-        guard previous > 0 else { return current > 0 ? "Твоя первая активность за этот период" : "Смотри чаще — статистика появится здесь" }
-        let percent = Int(((Double(current) - Double(previous)) / Double(previous) * 100).rounded())
-        return percent >= 0 ? "На \(percent)% больше, чем в предыдущие 3 месяца" : "На \(abs(percent))% меньше, чем в предыдущие 3 месяца"
+    private var monthIncreasePercentage: Int {
+        ActivityCalendarLayout.monthIncreasePercentage(
+            daily: daily,
+            today: today,
+            calendar: calendar
+        )
     }
 
     var body: some View {
@@ -1894,63 +1854,61 @@ private struct ViewingHeatmapCard: View {
             .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.cyan.opacity(0.25), lineWidth: 0.9))
 
             GeometryReader { proxy in
-                let groups = monthGroups
+                let layout = calendarLayout
+                let columns = layout.columns
                 let weekdayWidth: CGFloat = 25
                 let weekdayGap: CGFloat = 9
-                let monthGap: CGFloat = 10
                 let columnGap: CGFloat = 4
-                let totalColumns = max(1, groups.reduce(0) { $0 + $1.columns.count })
-                let groupGaps = CGFloat(max(0, groups.count - 1)) * monthGap
-                let widthLimitedCell = (proxy.size.width - weekdayWidth - weekdayGap - groupGaps - CGFloat(totalColumns - groups.count) * columnGap) / CGFloat(totalColumns)
+                let totalColumns = max(1, columns.count)
+                let widthLimitedCell = (proxy.size.width - weekdayWidth - weekdayGap - CGFloat(totalColumns - 1) * columnGap) / CGFloat(totalColumns)
                 let rowGap: CGFloat = 4
-                // The calendar has seven rows plus its month caption.  Limit
-                // the tile size by the available height as well as width, so
-                // captions and the footer can never overlap on smaller iPhones.
                 let captionHeight: CGFloat = 15
                 let heightLimitedCell = (proxy.size.height - captionHeight - 7 - (6 * rowGap)) / 7
                 let cell = max(9, min(22, widthLimitedCell, heightLimitedCell))
+
                 HStack(alignment: .top, spacing: weekdayGap) {
                     VStack(alignment: .leading, spacing: rowGap) {
                         ForEach(["пн", "вт", "ср", "чт", "пт", "сб", "вс"], id: \.self) { day in
-                            Text(day).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(width: weekdayWidth, height: cell, alignment: .leading)
+                            Text(day)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: weekdayWidth, height: cell, alignment: .leading)
                         }
                     }
-                    HStack(alignment: .top, spacing: monthGap) {
-                        ForEach(groups) { group in
-                            VStack(spacing: 7) {
-                                HStack(alignment: .top, spacing: columnGap) {
-                                    ForEach(group.columns.indices, id: \.self) { column in
-                                        VStack(spacing: rowGap) {
-                                            ForEach(group.columns[column].indices, id: \.self) { row in
-                                                if let day = group.columns[column][row] {
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(alignment: .top, spacing: columnGap) {
+                            ForEach(columns.indices, id: \.self) { column in
+                                VStack(spacing: rowGap) {
+                                    ForEach(columns[column]) { item in
+                                        RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous)
+                                            .fill(item.isSelectable ? tileGradient(for: item.date) : inactiveTileGradient)
+                                            .frame(width: cell, height: cell)
+                                            .overlay {
+                                                if item.isSelectable && calendar.isDate(item.date, inSameDayAs: highlightedDay) {
                                                     RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous)
-                                                        .fill(tileGradient(for: day))
-                                                        .frame(width: cell, height: cell)
-                                                        .overlay {
-                                                            if calendar.isDate(day, inSameDayAs: highlightedDay) {
-                                                                RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous).stroke(.white, lineWidth: 1.7).shadow(color: .cyan.opacity(0.75), radius: 4)
-                                                            }
-                                                        }
-                                                        .contentShape(Rectangle())
-                                                        .onTapGesture { select(day) }
-                                                } else {
-                                                    // Keep every week a complete seven-row grid.
-                                                    // Empty slots are intentionally subdued, but they
-                                                    // occupy the same space as real days so no month
-                                                    // can create visual holes or shifted columns.
-                                                    RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous)
-                                                        .fill(.white.opacity(0.055))
-                                                        .frame(width: cell, height: cell)
+                                                        .stroke(.white, lineWidth: 1.7)
+                                                        .shadow(color: .cyan.opacity(0.75), radius: 4)
                                                 }
                                             }
-                                        }
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                if item.isSelectable { select(item.date) }
+                                            }
                                     }
                                 }
-                                Text(group.label)
+                            }
+                        }
+
+                        HStack(alignment: .top, spacing: columnGap) {
+                            ForEach(columns.indices, id: \.self) { column in
+                                let label = layout.monthMarkers.first(where: { $0.column == column })?.label
+                                Text(label ?? "")
                                     .font(.system(size: 10, weight: .medium))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
-                                    .frame(maxWidth: .infinity, minHeight: captionHeight)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(width: cell, height: captionHeight, alignment: .leading)
                             }
                         }
                     }
@@ -1962,11 +1920,18 @@ private struct ViewingHeatmapCard: View {
 
             HStack(spacing: 8) {
                 Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(.cyan).font(.caption.weight(.bold))
-                Text(trendText)
+                (
+                    Text("В этом месяце активность выше на ")
+                        .foregroundColor(.secondary)
+                    + Text("\(monthIncreasePercentage)%")
+                        .foregroundColor(.cyan)
+                        .fontWeight(.semibold)
+                    + Text(", чем в прошлом")
+                        .foregroundColor(.secondary)
+                )
                     .font(.caption)
-                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.78)
+                    .minimumScaleFactor(0.72)
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, 2)
@@ -1988,6 +1953,13 @@ private struct ViewingHeatmapCard: View {
     private func tileGradient(for day: Date) -> LinearGradient {
         let base = color(for: day)
         return LinearGradient(colors: [base.opacity(0.72), base], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+    private var inactiveTileGradient: LinearGradient {
+        LinearGradient(
+            colors: [.white.opacity(0.035), .white.opacity(0.055)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
     private func dayKey(for day: Date) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: day)
