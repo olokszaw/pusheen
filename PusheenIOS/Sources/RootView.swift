@@ -1729,7 +1729,7 @@ private struct ViewingInsightsPager: View {
                         }
                 )
             }
-            .frame(height: 440)
+            .frame(height: 390)
 
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
@@ -1891,20 +1891,27 @@ private struct ViewingHeatmapCard: View {
             GeometryReader { proxy in
                 let groups = monthGroups
                 let weekdayWidth: CGFloat = 25
+                let weekdayGap: CGFloat = 9
                 let monthGap: CGFloat = 10
                 let columnGap: CGFloat = 4
                 let totalColumns = max(1, groups.reduce(0) { $0 + $1.columns.count })
                 let groupGaps = CGFloat(max(0, groups.count - 1)) * monthGap
-                let cell = max(10, min(22, (proxy.size.width - weekdayWidth - groupGaps - CGFloat(totalColumns - groups.count) * columnGap) / CGFloat(totalColumns)))
+                let widthLimitedCell = (proxy.size.width - weekdayWidth - weekdayGap - groupGaps - CGFloat(totalColumns - groups.count) * columnGap) / CGFloat(totalColumns)
                 let rowGap: CGFloat = 4
-                HStack(alignment: .top, spacing: 9) {
+                // The calendar has seven rows plus its month caption.  Limit
+                // the tile size by the available height as well as width, so
+                // captions and the footer can never overlap on smaller iPhones.
+                let captionHeight: CGFloat = 15
+                let heightLimitedCell = (proxy.size.height - captionHeight - 7 - (6 * rowGap)) / 7
+                let cell = max(9, min(22, widthLimitedCell, heightLimitedCell))
+                HStack(alignment: .top, spacing: weekdayGap) {
                     VStack(alignment: .leading, spacing: rowGap) {
                         ForEach(["пн", "вт", "ср", "чт", "пт", "сб", "вс"], id: \.self) { day in
                             Text(day).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(width: weekdayWidth, height: cell, alignment: .leading)
                         }
                     }
                     HStack(alignment: .top, spacing: monthGap) {
-                        ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                        ForEach(groups) { group in
                             VStack(spacing: 7) {
                                 HStack(alignment: .top, spacing: columnGap) {
                                     ForEach(group.columns.indices, id: \.self) { column in
@@ -1928,10 +1935,11 @@ private struct ViewingHeatmapCard: View {
                                         }
                                     }
                                 }
-                                Text(group.label).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-                            }
-                            .overlay(alignment: .trailing) {
-                                if index < groups.count - 1 { Rectangle().fill(.white.opacity(0.12)).frame(width: 1, height: 15).offset(x: monthGap / 2, y: 72) }
+                                Text(group.label)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, minHeight: captionHeight)
                             }
                         }
                     }
@@ -1939,13 +1947,18 @@ private struct ViewingHeatmapCard: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .scaleEffect(pinchScale, anchor: .center)
             }
-            .frame(height: 195)
+            .frame(height: 172)
 
             HStack(spacing: 8) {
                 Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(.cyan).font(.caption.weight(.bold))
-                Text(trendText).font(.caption).foregroundStyle(.secondary)
+                Text(trendText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
             .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 2)
         }
         .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .simultaneousGesture(heatmapMagnification)
