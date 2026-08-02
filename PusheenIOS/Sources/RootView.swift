@@ -439,6 +439,7 @@ struct RoomView: View {
     @State private var keyboardHeight: CGFloat = 0
     @State private var controlsVisible = false
     @State private var isScrubbingPlayer = false
+    @State private var isLeavingRoom = false
     @State private var controlsHideTask: Task<Void, Never>?
     private let roomPlayerHeight: CGFloat = 214
     @StateObject private var model: RoomViewModel
@@ -499,12 +500,16 @@ struct RoomView: View {
                         let vertical = abs(value.translation.height)
                         let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? playerHeight + 188 : playerHeight + 80)
                         let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
+                        let exitsFromLeftEdge = value.startLocation.x <= 44 && value.translation.width > 0
                         let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= geometry.size.width - 44 && value.translation.width < 0
                         guard !isScrubbingPlayer,
-                              horizontal > vertical * 1.25,
-                              opensMembersFromRightEdge,
-                              value.translation.width < -70 else { return }
-                        presentMembers()
+                              horizontal > vertical * 1.25 else { return }
+                        if exitsFromLeftEdge,
+                           (value.translation.width > 85 || value.predictedEndTranslation.width > 180) {
+                            leaveRoom()
+                        } else if opensMembersFromRightEdge, value.translation.width < -70 {
+                            presentMembers()
+                        }
                     }
             )
         }
@@ -532,13 +537,19 @@ struct RoomView: View {
             }
         }
         .onChange(of: model.wasRemovedFromRoom) { _, removed in
-            if removed { dismiss() }
+            if removed { leaveRoom() }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .toolbar(.hidden, for: .tabBar)
+        .toolbar(isLeavingRoom ? .visible : .hidden, for: .tabBar)
         .task { model.setCurrentUserID(session.profile?.userId); await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
+    }
+    private func leaveRoom() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { isLeavingRoom = true }
+        DispatchQueue.main.async { dismiss() }
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
     private var playerControls: some View {
