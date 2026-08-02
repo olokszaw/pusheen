@@ -207,13 +207,26 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             message = ChatMessage.objects.get(id=message_id, room_id=self.room_id)
         except ChatMessage.DoesNotExist:
             return None
-        reaction, created = MessageReaction.objects.get_or_create(
-            message=message,
-            user=self.scope["user"],
-            emoji=emoji,
-        )
-        if not created:
-            reaction.delete()
+        with transaction.atomic():
+            existing = MessageReaction.objects.filter(
+                message=message,
+                user=self.scope["user"],
+                emoji=emoji,
+            ).first()
+            if existing:
+                existing.delete()
+            else:
+                reaction_types = MessageReaction.objects.filter(message=message).values("emoji").distinct().count()
+                # Keep a reaction row compact and predictable on every client.
+                # A third reaction type is ignored instead of overflowing the
+                # message bubble or creating hidden server-side state.
+                if reaction_types >= 2:
+                    return None
+                MessageReaction.objects.create(
+                    message=message,
+                    user=self.scope["user"],
+                    emoji=emoji,
+                )
         reactions = list(MessageReaction.objects.filter(message=message, emoji=emoji))
         return {
             "message_id": message.id,

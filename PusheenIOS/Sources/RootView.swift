@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import UIKit
+import PencilKit
 import PhotosUI
 import ImageIO
 import CoreTransferable
@@ -1106,12 +1107,12 @@ struct NativeChatPane: View {
             if let text = messages.last?.text { FluentEmojiCache.shared.prefetch(in: text) }
         }
         .sheet(item: $pendingPhoto) { photo in
-            ChatPhotoConfirmation(photo: photo) {
+            ChatPhotoEditor(photo: photo) {
                 pendingPhoto = nil
-            } send: {
+            } send: { editedDataURL in
                 sticksToBottom = true
                 forceScrollOnNextMessage = true
-                send("", photo.dataURL)
+                send("", editedDataURL)
                 pendingPhoto = nil
             }
         }
@@ -1168,21 +1169,111 @@ private struct PendingChatPhoto: Identifiable {
     let dataURL: String
 }
 
-private struct ChatPhotoConfirmation: View {
+private struct ChatPhotoEditor: View {
     @Environment(\.dismiss) private var dismiss
     let photo: PendingChatPhoto
     let cancel: () -> Void
-    let send: () -> Void
+    let send: (String) -> Void
+    @State private var drawing = PKDrawing()
+    @State private var drawingMode = false
+    @State private var zoom: CGFloat = 1
+    @State private var offset = CGSize.zero
+    @State private var settledOffset = CGSize.zero
+    @State private var cropAspect: CGFloat = 1
+    @State private var previewSize = CGSize(width: 300, height: 300)
+
+    private var sourceImage: UIImage? {
+        guard let comma = photo.dataURL.firstIndex(of: ",") else { return nil }
+        return Data(base64Encoded: String(photo.dataURL[photo.dataURL.index(after: comma)...])).flatMap(UIImage.init(data:))
+    }
+
     var body: some View {
-        VStack(spacing: 14) {
-            Text("Отправить фотографию?")
+        VStack(spacing: 12) {
+            HStack {
+                Text(drawingMode ? "Рисование" : "Обрезка")
                 .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            DataURLImage(dataURL: photo.dataURL, contentMode: .fit)
-                .frame(maxWidth: .infinity)
-                .frame(height: 300)
-                .background(.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                Spacer()
+                Text(drawingMode ? "Проведи пальцем" : "Потяни или приблизь")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            GeometryReader { proxy in
+                let size = cropSize(in: proxy.size)
+                ZStack {
+                    Color.black
+                    if let sourceImage {
+                        Image(uiImage: sourceImage)
+                            .resizable()
+                            .scaledToFill()
+                            .scaleEffect(zoom)
+                            .offset(offset)
+                    }
+                    DrawingCanvas(drawing: $drawing, isDrawing: drawingMode)
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(.white.opacity(0.34), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+                .frame(width: size.width, height: size.height)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear { previewSize = size }
+                .onChange(of: proxy.size) { _, _ in previewSize = cropSize(in: proxy.size) }
+                .onChange(of: cropAspect) { _, _ in
+                    previewSize = cropSize(in: proxy.size)
+                    drawing = PKDrawing()
+                    zoom = 1
+                    offset = .zero
+                    settledOffset = .zero
+                }
+                .simultaneousGesture(
+                    DragGesture()
+                        .onChanged { value in
+                            guard !drawingMode else { return }
+                            offset = CGSize(
+                                width: settledOffset.width + value.translation.width,
+                                height: settledOffset.height + value.translation.height
+                            )
+                        }
+                        .onEnded { _ in
+                            guard !drawingMode else { return }
+                            settledOffset = offset
+                        }
+                )
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            guard !drawingMode else { return }
+                            zoom = min(4, max(1, value))
+                        }
+                )
+            }
+            .frame(height: 340)
+
+            HStack(spacing: 9) {
+                Button {
+                    cropAspect = cropAspect == 1 ? 4.0 / 5.0 : cropAspect == 4.0 / 5.0 ? 16.0 / 9.0 : 1
+                } label: {
+                    Label("Кадр", systemImage: "crop")
+                }
+                .buttonStyle(PhotoEditToolButton(active: !drawingMode))
+
+                Button {
+                    drawingMode.toggle()
+                } label: {
+                    Label("Рисовать", systemImage: "pencil.tip")
+                }
+                .buttonStyle(PhotoEditToolButton(active: drawingMode))
+
+                Button {
+                    drawing = PKDrawing()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(PhotoEditToolButton(active: false))
+                .disabled(drawing.strokes.isEmpty)
+            }
+
             HStack(spacing: 10) {
                 Button {
                     cancel()
@@ -1192,7 +1283,8 @@ private struct ChatPhotoConfirmation: View {
                 }
                 .liquidCard(Capsule())
                 Button {
-                    send()
+                    guard let dataURL = editedDataURL() else { return }
+                    send(dataURL)
                     dismiss()
                 } label: {
                     Label("Отправить", systemImage: "arrow.up")
@@ -1206,10 +1298,99 @@ private struct ChatPhotoConfirmation: View {
             .buttonStyle(.plain)
         }
         .padding(18)
-        .presentationDetents([.fraction(0.62)])
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .presentationBackground(.ultraThinMaterial)
         .presentationCornerRadius(30)
+    }
+
+    private func cropSize(in available: CGSize) -> CGSize {
+        let width = max(1, available.width)
+        let height = min(available.height, width / cropAspect)
+        if height < available.height { return CGSize(width: width, height: height) }
+        return CGSize(width: available.height * cropAspect, height: available.height)
+    }
+
+    private func editedDataURL() -> String? {
+        guard let sourceImage, previewSize.width > 0, previewSize.height > 0 else { return nil }
+        let outputWidth = min(1_440, max(720, previewSize.width * 3))
+        let outputSize = CGSize(width: outputWidth, height: outputWidth / cropAspect)
+        let baseScale = max(previewSize.width / sourceImage.size.width, previewSize.height / sourceImage.size.height)
+        let previewImageSize = CGSize(
+            width: sourceImage.size.width * baseScale * zoom,
+            height: sourceImage.size.height * baseScale * zoom
+        )
+        let previewOrigin = CGPoint(
+            x: (previewSize.width - previewImageSize.width) / 2 + offset.width,
+            y: (previewSize.height - previewImageSize.height) / 2 + offset.height
+        )
+        let outputScale = outputSize.width / previewSize.width
+        let renderer = UIGraphicsImageRenderer(size: outputSize)
+        let edited = renderer.image { _ in
+            UIColor.black.setFill()
+            UIRectFill(CGRect(origin: .zero, size: outputSize))
+            sourceImage.draw(in: CGRect(
+                x: previewOrigin.x * outputScale,
+                y: previewOrigin.y * outputScale,
+                width: previewImageSize.width * outputScale,
+                height: previewImageSize.height * outputScale
+            ))
+            let marks = drawing.image(from: CGRect(origin: .zero, size: previewSize), scale: outputScale)
+            marks.draw(in: CGRect(origin: .zero, size: outputSize))
+        }
+        guard var jpeg = edited.jpegData(compressionQuality: 0.82) else { return nil }
+        if jpeg.count > 1_850_000, let smaller = edited.jpegData(compressionQuality: 0.56) { jpeg = smaller }
+        return "data:image/jpeg;base64," + jpeg.base64EncodedString()
+    }
+}
+
+private struct PhotoEditToolButton: ButtonStyle {
+    let active: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(active ? .cyan : .primary)
+            .frame(height: 36)
+            .padding(.horizontal, 12)
+            .background(active ? .cyan.opacity(0.13) : .white.opacity(0.055), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(active ? 0.18 : 0.08), lineWidth: 0.8))
+            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+    }
+}
+
+private struct DrawingCanvas: UIViewRepresentable {
+    @Binding var drawing: PKDrawing
+    let isDrawing: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeUIView(context: Context) -> PKCanvasView {
+        let view = PKCanvasView()
+        view.delegate = context.coordinator
+        view.backgroundColor = .clear
+        view.isOpaque = false
+        view.drawingPolicy = .anyInput
+        view.tool = PKInkingTool(.pen, color: .systemCyan, width: 5)
+        return view
+    }
+
+    func updateUIView(_ view: PKCanvasView, context: Context) {
+        context.coordinator.parent = self
+        if view.drawing.dataRepresentation() != drawing.dataRepresentation() {
+            view.drawing = drawing
+        }
+        view.isUserInteractionEnabled = isDrawing
+    }
+
+    final class Coordinator: NSObject, PKCanvasViewDelegate {
+        var parent: DrawingCanvas
+
+        init(parent: DrawingCanvas) { self.parent = parent }
+
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            parent.drawing = canvasView.drawing
+        }
     }
 }
 
@@ -1414,29 +1595,27 @@ struct NativeMessageBubble: View {
 
     @ViewBuilder private var reactionStrip: some View {
         if !message.reactions.isEmpty {
-            ScrollView(.horizontal) {
-                HStack(spacing: 4) {
-                    ForEach(message.reactions) { item in
-                        Button { react(message.id, item.emoji) } label: {
-                            HStack(spacing: 3) {
-                                FluentEmojiGlyph(item.emoji, size: 15)
-                                Text("\(item.count)")
-                                    .font(.system(size: 10, weight: .semibold))
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(
-                                item.reacted ? Color.cyan.opacity(0.18) : Color.white.opacity(0.055),
-                                in: Capsule()
-                            )
-                            .overlay(Capsule().stroke(.white.opacity(item.reacted ? 0.18 : 0.08), lineWidth: 0.7))
+            HStack(spacing: 5) {
+                ForEach(Array(message.reactions.prefix(2))) { item in
+                    Button { react(message.id, item.emoji) } label: {
+                        HStack(spacing: 4) {
+                            FluentEmojiGlyph(item.emoji, size: 19)
+                            Text("\(item.count)")
+                                .font(.system(size: 11, weight: .semibold))
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            item.reacted ? Color.cyan.opacity(0.18) : Color.white.opacity(0.055),
+                            in: Capsule()
+                        )
+                        .overlay(Capsule().stroke(.white.opacity(item.reacted ? 0.18 : 0.08), lineWidth: 0.7))
                     }
+                    .buttonStyle(.plain)
                 }
             }
-            .scrollIndicators(.hidden)
-            .frame(width: 238, height: 25, alignment: isMine ? .trailing : .leading)
+            .frame(width: bubbleWidth, height: 31, alignment: isMine ? .trailing : .leading)
+            .clipped()
         }
     }
 
