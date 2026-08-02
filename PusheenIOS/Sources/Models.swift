@@ -123,6 +123,7 @@ struct ViewingStats: Codable, Hashable {
     let genres: [ViewingGenre]
     let dailySeconds: [String: Int]
     let monthIncreasePercentage: Int?
+    let currentStreakDays: Int?
     let topCompanion: ViewingCompanion?
     enum CodingKeys: String, CodingKey {
         case genres
@@ -131,6 +132,7 @@ struct ViewingStats: Codable, Hashable {
         case longestMovieSeconds = "longest_movie_seconds"
         case dailySeconds = "daily_seconds"
         case monthIncreasePercentage = "month_increase_percent"
+        case currentStreakDays = "current_streak_days"
         case topCompanion = "top_companion"
     }
 }

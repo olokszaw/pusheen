@@ -45,6 +45,9 @@ final class RoomViewModel: ObservableObject {
                 members = loadedPeople
                 isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
             }
+            // Keep retrying history even if the video endpoint is unavailable.
+            // When internet returns, messages appear without reopening the room.
+            startMessageSync()
             let stream = try await api.stream(roomID: room.id)
             streamGenres = stream.genres
             guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
@@ -75,7 +78,6 @@ final class RoomViewModel: ObservableObject {
             }
             socket.onEvent = { [weak self] event in self?.apply(event) }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
-            startMessageSync()
             startActivityReporting()
         } catch let caughtError { error = caughtError.localizedDescription }
     }

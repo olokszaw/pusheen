@@ -50,6 +50,29 @@ class RoomApiTests(APITestCase):
         activity = ViewingActivity.objects.get(user=self.owner)
         self.assertEqual(activity.month_increase_percent, 50)
 
+    @patch("watchparty.views.timezone.localdate", return_value=date(2026, 8, 2))
+    def test_activity_streak_is_server_calculated_as_seven_days(self, _localdate):
+        activity_days = {
+            f"2026-07-{day:02d}": 60 for day in range(27, 32)
+        }
+        activity_days.update({"2026-08-01": 60, "2026-08-02": 60})
+        ViewingActivity.objects.create(user=self.owner, daily_seconds=activity_days)
+        self.authenticate(self.owner_token)
+        response = self.client.get("/api/activity/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["current_streak_days"], 7)
+
+    @patch("watchparty.views.timezone.localdate", return_value=date(2026, 8, 2))
+    def test_watched_heartbeat_does_not_double_calendar_activity(self, _localdate):
+        self.authenticate(self.owner_token)
+        response = self.client.post(
+            "/api/activity/",
+            {"app_seconds": 30, "watched_seconds": 30},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["daily_seconds"]["2026-08-02"], 30)
+
     def test_moderation_returns_realtime_system_event_and_muted_state(self):
         UserProfile.objects.create(user=self.owner, nickname="Создатель")
         UserProfile.objects.create(user=self.guest, nickname="Гость")

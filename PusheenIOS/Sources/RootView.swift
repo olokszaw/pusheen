@@ -1944,7 +1944,8 @@ private struct ViewingInsightsPager: View {
             AnyView(GenreOnlyCard(stats: stats)),
             AnyView(ViewingHeatmapCard(
                 daily: stats?.dailySeconds ?? [:],
-                backendMonthIncreasePercentage: stats?.monthIncreasePercentage
+                backendMonthIncreasePercentage: stats?.monthIncreasePercentage,
+                backendStreakDays: stats?.currentStreakDays
             )),
             AnyView(SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends)),
         ]
@@ -2048,6 +2049,7 @@ private struct GenreOnlyCard: View {
 private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
     let backendMonthIncreasePercentage: Int?
+    let backendStreakDays: Int?
     private let calendar = Calendar.current
     private static let detailFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -2069,6 +2071,7 @@ private struct ViewingHeatmapCard: View {
         allVisibleDays.last(where: { (daily[dayKey(for: $0)] ?? 0) > 0 })
     }
     private var streakDays: Int {
+        if let backendStreakDays { return backendStreakDays }
         var count = 0
         var cursor = today
         while daily[dayKey(for: cursor)] ?? 0 > 0 {

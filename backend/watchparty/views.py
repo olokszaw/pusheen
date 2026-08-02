@@ -84,6 +84,21 @@ def month_increase_percent(daily_seconds, current_day=None):
     return max(0, round((current - previous) / previous * 100))
 
 
+def current_activity_streak(daily_seconds, current_day=None):
+    """Count the active-day streak using the server calendar, not the device."""
+    cursor = current_day or timezone.localdate()
+    daily = daily_seconds or {}
+    # A streak remains current until the end of the next calendar day, so a
+    # user is not reset to zero just because they have not opened the app yet.
+    if max(0, int(daily.get(cursor.isoformat(), 0) or 0)) <= 0:
+        cursor -= timedelta(days=1)
+    count = 0
+    while max(0, int(daily.get(cursor.isoformat(), 0) or 0)) > 0:
+        count += 1
+        cursor -= timedelta(days=1)
+    return count
+
+
 def activity_payload(activity):
     genres = activity.genre_counts or {}
     total = sum(int(value or 0) for value in genres.values())
@@ -107,6 +122,7 @@ def activity_payload(activity):
         "genres": genre_rows,
         "daily_seconds": activity.daily_seconds or {},
         "month_increase_percent": activity.month_increase_percent,
+        "current_streak_days": current_activity_streak(activity.daily_seconds),
         "top_companion": top_companion,
     }
 
@@ -137,7 +153,9 @@ def activity(request):
         activity_obj.watched_seconds += watched_seconds
         activity_obj.longest_movie_seconds = max(activity_obj.longest_movie_seconds, duration_seconds)
         daily = dict(activity_obj.daily_seconds or {})
-        daily[day] = min(86_400, int(daily.get(day, 0)) + app_seconds + watched_seconds)
+        # App heartbeats already cover the time spent in a playing room.
+        # Counting watched_seconds again inflated calendar totals and percent.
+        daily[day] = min(86_400, int(daily.get(day, 0)) + app_seconds)
         # The activity card compares the current month with the previous one.
         # Keep enough history for two full months plus a safe margin.
         activity_obj.daily_seconds = dict(sorted(daily.items())[-100:])
