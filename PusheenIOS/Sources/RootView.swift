@@ -212,34 +212,26 @@ struct HomeView: View {
                     ScrollView { VStack(alignment: .leading, spacing: 18) {
                 HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 ForEach(rooms) { room in
-                    RoomCard(room: room)
-                        .overlay(alignment: .topTrailing) {
-                            if isSelectingRooms && room.owner == session.profile?.userId {
-                                let selected = selectedRoomIDs.contains(room.id)
-                                ZStack {
-                                    Circle().fill(selected ? Color.mint.opacity(0.24) : Color.black.opacity(0.26))
-                                    Circle().stroke(selected ? Color.mint.opacity(0.95) : Color.white.opacity(0.38), lineWidth: 1.2)
-                                    if selected {
-                                        Image(systemName: "checkmark")
-                                            .font(.system(size: 12, weight: .bold))
-                                            .foregroundStyle(.white)
-                                    }
-                                }
-                                .frame(width: 27, height: 27)
-                                .shadow(color: selected ? .mint.opacity(0.35) : .black.opacity(0.25), radius: 7, y: 2)
-                                .padding(9)
-                                .scaleEffect(selected ? 1 : 0.92)
-                                .animation(.spring(response: 0.25, dampingFraction: 0.72), value: selected)
-                            }
+                    let canSelect = room.owner == session.profile?.userId
+                    let selected = selectedRoomIDs.contains(room.id)
+                    HStack(spacing: 11) {
+                        if isSelectingRooms && canSelect {
+                            RoomSelectionIndicator(selected: selected)
+                                .transition(.move(edge: .leading).combined(with: .opacity))
                         }
+                        RoomCard(room: room)
+                            .scaleEffect(selected ? 0.985 : 1)
+                            .opacity(isSelectingRooms && !canSelect ? 0.56 : 1)
+                    }
+                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSelectingRooms)
+                        .animation(.spring(response: 0.24, dampingFraction: 0.74), value: selected)
                         .contentShape(RoundedRectangle(cornerRadius: 22))
                         .gesture(
                             LongPressGesture(minimumDuration: 0.42)
                                 .onEnded { _ in if !isSelectingRooms { previewedRoom = room } }
                                 .exclusively(before: TapGesture().onEnded {
-                                    if isSelectingRooms, room.owner == session.profile?.userId {
-                                        if selectedRoomIDs.contains(room.id) { selectedRoomIDs.remove(room.id) }
-                                        else { selectedRoomIDs.insert(room.id) }
+                                    if isSelectingRooms, canSelect {
+                                        toggleRoomSelection(room.id)
                                     } else if !isSelectingRooms { path.append(room) }
                                 })
                         )
@@ -285,13 +277,34 @@ struct HomeView: View {
     private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
     private var selectionToolbar: some View {
         HStack(spacing: 10) {
+            Button { cancelRoomSelection() } label: {
+                Image(systemName: "xmark")
+                    .font(.subheadline.weight(.bold))
+                    .frame(width: 36, height: 36)
+                    .liquidCard(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Отменить выбор")
             Text("Выбрано: \(selectedRoomIDs.count)").font(.subheadline.weight(.semibold))
             Spacer()
-            Button { isSelectingRooms = false; selectedRoomIDs = [] } label: { Image(systemName: "xmark").frame(width: 36, height: 36).liquidCard(Circle()) }.buttonStyle(.plain)
             Button(role: .destructive) { showBulkDeleteConfirmation = true } label: { Label("Удалить", systemImage: "trash").font(.subheadline.weight(.semibold)).padding(.horizontal, 12).frame(height: 36).liquidCard(Capsule()) }.buttonStyle(.plain).disabled(selectedRoomIDs.isEmpty || isDeletingSelectedRooms)
         }
         .padding(9)
         .liquidCard(RoundedRectangle(cornerRadius: 19, style: .continuous))
+    }
+    private func toggleRoomSelection(_ roomID: Int) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.76)) {
+            if selectedRoomIDs.contains(roomID) { selectedRoomIDs.remove(roomID) }
+            else { selectedRoomIDs.insert(roomID) }
+        }
+    }
+    private func cancelRoomSelection() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
+            selectedRoomIDs.removeAll()
+            isSelectingRooms = false
+        }
     }
     private func deleteSelectedRooms() async {
         isDeletingSelectedRooms = true
@@ -301,6 +314,28 @@ struct HomeView: View {
         selectedRoomIDs = []
         isSelectingRooms = false
         isDeletingSelectedRooms = false
+    }
+}
+
+private struct RoomSelectionIndicator: View {
+    let selected: Bool
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(selected ? Color.cyan.opacity(0.24) : Color.white.opacity(0.055))
+            Circle()
+                .stroke(selected ? Color.cyan.opacity(0.95) : Color.white.opacity(0.2), lineWidth: selected ? 1.6 : 1)
+            if selected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .transition(.scale(scale: 0.55).combined(with: .opacity))
+            }
+        }
+        .frame(width: 32, height: 32)
+        .shadow(color: selected ? Color.cyan.opacity(0.3) : Color.clear, radius: 9, y: 3)
+        .accessibilityHidden(true)
     }
 }
 
