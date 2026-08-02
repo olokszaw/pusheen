@@ -170,6 +170,10 @@ final class APIClient {
         return try decoder.decode(MovieCatalogResponse.self, from: data).results.filter { $0.kind == "feature-movie" }
     }
     func messages(roomID: Int) async throws -> [ChatMessage] { let data = try await request("/api/rooms/\(roomID)/messages/"); return try decoder.decode([ChatMessage].self, from: data) }
+    func sendMessage(roomID: Int, text: String, image: String = "") async throws -> ChatMessage {
+        let data = try await request("/api/rooms/\(roomID)/messages/", method: "POST", body: ["text": text, "image_data_url": image])
+        return try decoder.decode(ChatMessage.self, from: data)
+    }
     func members(roomID: Int) async throws -> [RoomMember] { let data = try await request("/api/rooms/\(roomID)/members/"); return try decoder.decode([RoomMember].self, from: data) }
     func moderateMember(roomID: Int, userID: Int, action: String) async throws { _ = try await request("/api/rooms/\(roomID)/members/\(userID)/moderate/", method: "POST", body: ["action": action]) }
     func stream(roomID: Int) async throws -> VideoStream { let data = try await request("/api/rooms/\(roomID)/stream/"); return try decoder.decode(VideoStream.self, from: data) }

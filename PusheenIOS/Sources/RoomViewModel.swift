@@ -22,6 +22,7 @@ final class RoomViewModel: ObservableObject {
     private var itemStatusObservation: NSKeyValueObservation?
     private var audioObservers: [NSObjectProtocol] = []
     private var activityTask: Task<Void, Never>?
+    private var messageSyncTask: Task<Void, Never>?
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
 
@@ -37,10 +38,15 @@ final class RoomViewModel: ObservableObject {
             configureAudioSession()
             async let history = api.messages(roomID: room.id)
             async let people = api.members(roomID: room.id)
+            // Chat is independent from the player. A bad/slow video source
+            // must never make a persisted conversation look empty.
+            if let loadedHistory = try? await history { messages = loadedHistory }
+            if let loadedPeople = try? await people {
+                members = loadedPeople
+                isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
+            }
             let stream = try await api.stream(roomID: room.id)
             streamGenres = stream.genres
-            messages = try await history; members = try await people
-            isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
             guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
             let assetOptions: [String: Any] = stream.headers.isEmpty ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": stream.headers]
             let item = AVPlayerItem(asset: AVURLAsset(url: streamURL, options: assetOptions))
@@ -69,12 +75,15 @@ final class RoomViewModel: ObservableObject {
             }
             socket.onEvent = { [weak self] event in self?.apply(event) }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
+            startMessageSync()
             startActivityReporting()
         } catch let caughtError { error = caughtError.localizedDescription }
     }
     func stop() {
         activityTask?.cancel()
         activityTask = nil
+        messageSyncTask?.cancel()
+        messageSyncTask = nil
         socket.close()
     }
     private func startActivityReporting() {
@@ -93,6 +102,18 @@ final class RoomViewModel: ObservableObject {
                 // Stats are fetched by Profile when it appears; this preserves
                 // the player ownership and keeps reporting off the main UI path.
                 _ = stats
+            }
+        }
+    }
+    private func startMessageSync() {
+        messageSyncTask?.cancel()
+        messageSyncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if let serverMessages = try? await self.api.messages(roomID: self.room.id) {
+                    self.mergeServerMessages(serverMessages)
+                }
+                try? await Task.sleep(for: .seconds(3))
             }
         }
     }
@@ -133,7 +154,17 @@ final class RoomViewModel: ObservableObject {
             let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
             messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], createdAt: ISO8601DateFormatter().string(from: Date())))
         }
-        socket.chat(text: text, image: image)
+        // HTTP persists first; the server then broadcasts to every socket.
+        // This prevents a message disappearing when a room socket reconnects.
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let persisted = try await self.api.sendMessage(roomID: self.room.id, text: text, image: image)
+                self.mergeServerMessages([persisted])
+            } catch {
+                self.error = "Не удалось отправить сообщение. Проверь подключение."
+            }
+        }
     }
     func react(messageID: Int, emoji: String) { socket.reaction(messageID: messageID, emoji: emoji) }
     func moderate(member: RoomMember, action: String) async {
@@ -233,6 +264,18 @@ final class RoomViewModel: ObservableObject {
                 isMuted = true
             }
         default: break
+        }
+    }
+    private func mergeServerMessages(_ serverMessages: [ChatMessage]) {
+        for message in serverMessages where !messages.contains(where: { $0.id == message.id }) {
+            if let pending = messages.firstIndex(where: {
+                $0.id < 0 && $0.authorId == message.authorId &&
+                $0.text == message.text && $0.imageDataURL == message.imageDataURL
+            }) {
+                messages[pending] = message
+            } else {
+                messages.append(message)
+            }
         }
     }
     private func compensatedPosition(remote: Double, isPlaying: Bool, event: [String: Any]) -> Double {

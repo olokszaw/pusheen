@@ -23,6 +23,20 @@ class RoomApiTests(APITestCase):
     def authenticate(self, token):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
 
+    def test_message_post_is_persisted_and_visible_to_another_member(self):
+        room = Room.objects.create(owner=self.owner, title="Durable chat")
+        RoomMember.objects.create(room=room, user=self.owner)
+        RoomMember.objects.create(room=room, user=self.guest)
+        self.authenticate(self.owner_token)
+        posted = self.client.post(
+            f"/api/rooms/{room.id}/messages/", {"text": "Visible message"}, format="json"
+        )
+        self.assertEqual(posted.status_code, 201, posted.data)
+        self.authenticate(self.guest_token)
+        history = self.client.get(f"/api/rooms/{room.id}/messages/")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual([item["text"] for item in history.data], ["Visible message"])
+
     @patch("watchparty.views.timezone.localdate", return_value=date(2026, 8, 2))
     def test_activity_persists_server_calculated_month_increase(self, _localdate):
         ViewingActivity.objects.create(

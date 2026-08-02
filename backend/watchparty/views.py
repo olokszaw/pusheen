@@ -692,11 +692,30 @@ def room_uploaded_media(request, room_id):
     return response
 
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 def room_messages(request, room_id):
     room = get_object_or_404(Room, id=room_id)
     if not RoomMember.objects.filter(room=room, user=request.user).exists():
         return Response({"detail": "Вы не участник комнаты"}, status=403)
+    if request.method == "POST":
+        if RoomMute.objects.filter(room=room, user=request.user).exists():
+            return Response({"detail": "You are muted in this room"}, status=403)
+        text = str(request.data.get("text") or "").strip()[:500]
+        image_data_url = str(request.data.get("image_data_url") or "").strip()
+        if len(image_data_url) > 2_800_000:
+            return Response({"detail": "Image is too large"}, status=413)
+        if not text and not image_data_url:
+            return Response({"detail": "Message is empty"}, status=400)
+        # Persist before fan-out: a socket reconnect must never lose chat.
+        message = ChatMessage.objects.create(
+            room=room, user=request.user, text=text, image_data_url=image_data_url
+        )
+        payload = ChatMessageSerializer(message, context={"request": request}).data
+        async_to_sync(get_channel_layer().group_send)(
+            f"watch_room_{room.id}",
+            {"type": "room.chat", "payload": dict(payload)},
+        )
+        return Response(payload, status=status.HTTP_201_CREATED)
     messages = list(
         ChatMessage.objects.filter(room=room)
         .select_related("user", "user__watch_profile", "user__client_identity")
