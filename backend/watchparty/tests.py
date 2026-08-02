@@ -458,9 +458,14 @@ class RoomSocketTests(TransactionTestCase):
 
         # The guest loses internet and is not present when this is sent.
         await guest_socket.disconnect()
-        await owner_socket.send_json_to({"type": "chat_message", "text": "while-offline"})
+        retry_id = "socket-offline-retry"
+        await owner_socket.send_json_to({"type": "chat_message", "text": "while-offline", "client_message_id": retry_id})
         owner_message = await self._next_event(owner_socket, "chat_message")
         self.assertEqual(owner_message["text"], "while-offline")
+        # The same interaction may be sent through both the socket and HTTP.
+        # Retrying its id must not create another row or another broadcast.
+        await owner_socket.send_json_to({"type": "chat_message", "text": "while-offline", "client_message_id": retry_id})
+        self.assertTrue(await owner_socket.receive_nothing(timeout=0.1))
         self.assertEqual(await self._room_message_texts(), ["while-offline"])
 
         # After reconnect, the client loads this persisted history, then

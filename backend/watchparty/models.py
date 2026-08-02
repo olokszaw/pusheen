@@ -195,6 +195,16 @@ class ChatMessage(models.Model):
 
     class Meta:
         ordering = ("created_at",)
+        constraints = [
+            # HTTP persistence and the live socket can race for the same user
+            # action. Only non-empty ids participate so legacy socket messages
+            # without an id stay valid.
+            models.UniqueConstraint(
+                fields=("room", "user", "client_message_id"),
+                condition=~models.Q(client_message_id=""),
+                name="unique_room_user_client_message",
+            )
+        ]
 
 
 class MessageReaction(models.Model):

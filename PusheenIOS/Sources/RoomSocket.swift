@@ -4,6 +4,7 @@ import Foundation
 final class RoomSocket: ObservableObject {
     @Published private(set) var connected = false
     var onEvent: (([String: Any]) -> Void)?
+    var onReady: (() -> Void)?
 
     private var task: URLSessionWebSocketTask?
     private var endpoint: URL?
@@ -12,6 +13,7 @@ final class RoomSocket: ObservableObject {
     private var wasClosedByView = false
     private var reconnectDelay: UInt64 = 1
     private var heartbeatCount = 0
+    private var receivedFirstEvent = false
 
     func connect(baseURL: URL, roomID: Int, token: String) {
         close()
@@ -35,7 +37,14 @@ final class RoomSocket: ObservableObject {
     }
 
     func playback(action: String, isPlaying: Bool, position: Double, videoURL: String? = nil) { var value: [String: Any] = ["type": "playback_command", "action": action, "is_playing": isPlaying, "position_seconds": position]; if let videoURL { value["vk_video_url"] = videoURL }; send(value) }
-    func chat(text: String, image: String = "") { send(["type": "chat_message", "text": text, "image_data_url": image]) }
+    func chat(text: String, image: String = "", clientMessageID: String) {
+        send([
+            "type": "chat_message",
+            "text": text,
+            "image_data_url": image,
+            "client_message_id": clientMessageID,
+        ])
+    }
     func reaction(messageID: Int, emoji: String) { send(["type": "message_reaction", "message_id": messageID, "emoji": emoji]) }
 
     func close() {
@@ -57,6 +66,7 @@ final class RoomSocket: ObservableObject {
         connected = true
         reconnectDelay = 1
         heartbeatCount = 0
+        receivedFirstEvent = false
         receive(from: socket)
         startHeartbeat()
     }
@@ -86,7 +96,14 @@ final class RoomSocket: ObservableObject {
             case .success(let message):
                 let text: String? = if case .string(let value) = message { value } else { nil }
                 if let text, let data = text.data(using: .utf8), let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    Task { @MainActor in self.onEvent?(event) }
+                    Task { @MainActor in
+                        guard self.task === socket else { return }
+                        if !self.receivedFirstEvent {
+                            self.receivedFirstEvent = true
+                            self.onReady?()
+                        }
+                        self.onEvent?(event)
+                    }
                 }
                 Task { @MainActor in
                     guard self.task === socket else { return }

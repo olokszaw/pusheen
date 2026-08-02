@@ -89,6 +89,11 @@ final class RoomViewModel: ObservableObject {
                 if value.isFinite && value > 0 && abs(self.duration - value) >= 0.1 { self.duration = value }
             }
             socket.onEvent = { [weak self] event in self?.apply(event) }
+            socket.onReady = { [weak self] in
+                Task { @MainActor [weak self] in
+                    await self?.recoverMessagesImmediately()
+                }
+            }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
             startActivityReporting()
         } catch let caughtError { error = caughtError.localizedDescription }
@@ -171,6 +176,10 @@ final class RoomViewModel: ObservableObject {
         }
         let pendingID = UUID().uuidString
         pendingMessages.append(PendingChatMessage(id: pendingID, text: text, image: image))
+        // Fan out through the live socket immediately. The HTTP request below
+        // uses the same id, so it is an idempotent persistence fallback rather
+        // than a second chat message.
+        socket.chat(text: text, image: image, clientMessageID: pendingID)
         // HTTP persists first; the server then broadcasts to every socket.
         // This prevents a message disappearing when a room socket reconnects.
         Task { [weak self] in
@@ -333,6 +342,12 @@ final class RoomViewModel: ObservableObject {
                 return
             }
         }
+    }
+    private func recoverMessagesImmediately() async {
+        if let serverMessages = try? await api.messages(roomID: room.id) {
+            mergeServerMessages(serverMessages)
+        }
+        await flushPendingMessages()
     }
     private func compensatedPosition(remote: Double, isPlaying: Bool, event: [String: Any]) -> Double {
         guard isPlaying,

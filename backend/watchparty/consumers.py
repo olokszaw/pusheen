@@ -52,7 +52,11 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         elif event == "playback_command":
             await self.apply_playback_command(content)
         elif event == "chat_message":
-            await self.broadcast_chat(content.get("text", ""), content.get("image_data_url", ""))
+            await self.broadcast_chat(
+                content.get("text", ""),
+                content.get("image_data_url", ""),
+                content.get("client_message_id", ""),
+            )
         elif event == "message_reaction":
             await self.toggle_reaction(content.get("message_id"), content.get("emoji", ""))
 
@@ -93,7 +97,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             }
         )
 
-    async def broadcast_chat(self, text, image_data_url):
+    async def broadcast_chat(self, text, image_data_url, client_message_id=""):
         if await self.is_muted():
             await self.send_json({"type": "error", "code": "muted", "detail": "Вы не можете писать в этой комнате"})
             return
@@ -103,11 +107,12 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "error", "detail": "Изображение слишком большое"})
             return
         if text or image_data_url:
-            message = await self.save_chat(text, image_data_url)
-            await self.channel_layer.group_send(
-                self.group_name,
-                {"type": "room.chat", "payload": message},
-            )
+            message, created = await self.save_chat(text, image_data_url, client_message_id)
+            if created:
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {"type": "room.chat", "payload": message},
+                )
 
     async def room_chat(self, event):
         await self.send_json({"type": "chat_message", **event["payload"]})
@@ -180,13 +185,23 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         return {"room_id": room.id, "command": action, "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
 
     @database_sync_to_async
-    def save_chat(self, text, image_data_url):
-        message = ChatMessage.objects.create(
-            room_id=self.room_id,
-            user=self.scope["user"],
-            text=text,
-            image_data_url=image_data_url,
-        )
+    def save_chat(self, text, image_data_url, client_message_id):
+        client_message_id = str(client_message_id or "").strip()[:64]
+        if client_message_id:
+            message, created = ChatMessage.objects.get_or_create(
+                room_id=self.room_id,
+                user=self.scope["user"],
+                client_message_id=client_message_id,
+                defaults={"text": text, "image_data_url": image_data_url},
+            )
+        else:
+            message = ChatMessage.objects.create(
+                room_id=self.room_id,
+                user=self.scope["user"],
+                text=text,
+                image_data_url=image_data_url,
+            )
+            created = True
         profile = getattr(self.scope["user"], "watch_profile", None)
         identity = getattr(self.scope["user"], "client_identity", None)
         return {
@@ -199,7 +214,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             "image_data_url": image_data_url,
             "reactions": [],
             "created_at": message.created_at.isoformat(),
-        }
+        }, created
 
     @database_sync_to_async
     def save_reaction(self, message_id, emoji):
