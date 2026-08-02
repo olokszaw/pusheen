@@ -254,7 +254,7 @@ final class RoomViewModel: ObservableObject {
             } else if userID != 0 {
                 members.append(member)
             }
-            if event["changed"] as? Bool == true {
+            if false && event["changed"] as? Bool == true {
                 let timestamp = Int(Date().timeIntervalSince1970 * 1000)
                 messages.append(ChatMessage(id: -timestamp, authorId: 0, nickname: "", text: online ? "\(nickname) присоединился к просмотру" : "\(nickname) вышел из комнаты", imageDataURL: "", avatarDataURL: "", reactions: [], isSystem: true))
             }
@@ -293,6 +293,11 @@ final class RoomViewModel: ObservableObject {
     private func mergeServerMessages(_ serverMessages: [ChatMessage]) {
         var changed = false
         for message in serverMessages where !messages.contains(where: { $0.id == message.id }) {
+            // Older servers can accept one send through both WebSocket and
+            // HTTP, yielding two ids. Keep a single visible delivery.
+            if messages.contains(where: { isDuplicateDelivery($0, of: message) }) {
+                continue
+            }
             if let pending = messages.firstIndex(where: {
                 $0.id < 0 && $0.authorId == message.authorId &&
                 $0.text == message.text && $0.imageDataURL == message.imageDataURL
@@ -322,6 +327,16 @@ final class RoomViewModel: ObservableObject {
         let standard = ISO8601DateFormatter()
         standard.formatOptions = [.withInternetDateTime]
         return standard.date(from: value)
+    }
+    private func isDuplicateDelivery(_ existing: ChatMessage, of incoming: ChatMessage) -> Bool {
+        guard existing.id > 0,
+              incoming.id > 0,
+              existing.authorId == incoming.authorId,
+              existing.text == incoming.text,
+              existing.imageDataURL == incoming.imageDataURL,
+              let existingDate = chatMessageDate(existing),
+              let incomingDate = chatMessageDate(incoming) else { return false }
+        return abs(existingDate.timeIntervalSince(incomingDate)) < 3
     }
     private func flushPendingMessages() async {
         guard !isFlushingMessages else { return }
