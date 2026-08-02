@@ -2096,7 +2096,7 @@ private struct ViewingHeatmapCard: View {
     }
     private var monthIncreasePercentage: Int {
         if let backendMonthIncreasePercentage { return backendMonthIncreasePercentage }
-        ActivityCalendarLayout.monthIncreasePercentage(
+        return ActivityCalendarLayout.monthIncreasePercentage(
             daily: daily,
             today: today,
             calendar: calendar
