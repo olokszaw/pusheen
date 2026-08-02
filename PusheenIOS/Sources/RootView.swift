@@ -1023,6 +1023,7 @@ struct NativeChatPane: View {
                     LazyVStack(spacing: 8) {
                         ForEach(messages) { message in
                             NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
+                                .equatable()
                                 .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
                                 .id(message.id)
                         }
@@ -1034,8 +1035,8 @@ struct NativeChatPane: View {
                 .contentShape(Rectangle())
                 .onTapGesture { focused = false; inputFocused = false }
                 .onScrollGeometryChange(for: Bool.self, of: { geometry in
-                    max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
-                    < 44
+                    let distanceToBottom = max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
+                    return distanceToBottom < 44
                 }, action: { wasAtBottom, isAtBottom in
                     // Avoid changing @State on every scroll frame.
                     guard wasAtBottom != isAtBottom else { return }
@@ -1536,9 +1537,14 @@ private struct PersistentChatTextField: UIViewRepresentable {
     }
 }
 
-struct NativeMessageBubble: View {
+struct NativeMessageBubble: View, Equatable {
     let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
     @State private var showsReactionPicker = false
+
+    static func == (lhs: NativeMessageBubble, rhs: NativeMessageBubble) -> Bool {
+        // `react` is an action, not display data. Redraw only when this row's content changes.
+        lhs.message == rhs.message && lhs.isMine == rhs.isMine && lhs.quickReactions == rhs.quickReactions
+    }
     private var containsEmoji: Bool {
         message.text.unicodeScalars.contains { scalar in
             (0x1F000...0x1FAFF).contains(Int(scalar.value)) || (0x2600...0x27FF).contains(Int(scalar.value))

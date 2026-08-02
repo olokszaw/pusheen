@@ -79,9 +79,14 @@ final class RoomViewModel: ObservableObject {
                     }
                 }
             }
-            timer = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.75, preferredTimescale: 600), queue: .main) { [weak self] time in
-                guard let self else { return }; self.position = time.seconds.isFinite ? time.seconds : 0
-                let value = self.player?.currentItem?.duration.seconds ?? 0; if value.isFinite && value > 0 { self.duration = value }
+            timer = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main) { [weak self] time in
+                guard let self else { return }
+                // The clock is display-only. Publishing it more often forces the
+                // whole room hierarchy to reevaluate while the user scrolls chat.
+                let nextPosition = time.seconds.isFinite ? time.seconds : 0
+                if abs(self.position - nextPosition) >= 0.5 { self.position = nextPosition }
+                let value = self.player?.currentItem?.duration.seconds ?? 0
+                if value.isFinite && value > 0 && abs(self.duration - value) >= 0.1 { self.duration = value }
             }
             socket.onEvent = { [weak self] event in self?.apply(event) }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
