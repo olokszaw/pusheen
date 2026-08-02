@@ -1345,12 +1345,11 @@ struct NativeMessageBubble: View {
         if emojiOnly.count == 1 { return 72 }
         if emojiOnly.count == 2 { return 112 }
         let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines) as NSString
-        let font = UIFont.preferredFont(forTextStyle: .subheadline)
+        let font = UIFont.systemFont(ofSize: 15, weight: .regular)
         let measuredText = ceil(text.size(withAttributes: [.font: font]).width)
         let timeFont = UIFont.systemFont(ofSize: 9, weight: .regular)
         let measuredTime = ceil((sentTime as NSString).size(withAttributes: [.font: timeFont]).width)
-        let naturalWidth = min(238, max(54, max(measuredText, measuredTime) + 20))
-        return message.reactions.isEmpty ? naturalWidth : max(96, naturalWidth)
+        return min(238, max(54, max(measuredText, measuredTime) + 18))
     }
     private var emojiOnly: [String] {
         let characters = message.text.filter { !$0.isWhitespace }
@@ -1376,7 +1375,7 @@ struct NativeMessageBubble: View {
                 FluentInlineText(message.text).multilineTextAlignment(.leading).layoutPriority(1)
             } else {
                 Text(message.text)
-                    .font(.subheadline)
+                    .font(.system(size: 15, weight: .regular))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1394,31 +1393,12 @@ struct NativeMessageBubble: View {
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            if !message.reactions.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 5) {
-                        ForEach(message.reactions) { item in
-                            Button { react(message.id, item.emoji) } label: {
-                                HStack(spacing: 3) {
-                                    FluentEmojiGlyph(item.emoji, size: 16)
-                                    Text("\(item.count)")
-                                }
-                                .font(.caption2)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .scrollIndicators(.hidden)
-            }
         }
-        .padding(10)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
         .frame(width: bubbleWidth, alignment: .leading)
-        .background(isMine ? Color.indigo.opacity(0.28) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12)))
+        .background(isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(0.08)))
         .onLongPressGesture(minimumDuration: 0.34) {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.85)
             showsReactionPicker = true
@@ -1431,6 +1411,35 @@ struct NativeMessageBubble: View {
             .presentationCompactAdaptation(.popover)
         }
     }
+
+    @ViewBuilder private var reactionStrip: some View {
+        if !message.reactions.isEmpty {
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) {
+                    ForEach(message.reactions) { item in
+                        Button { react(message.id, item.emoji) } label: {
+                            HStack(spacing: 3) {
+                                FluentEmojiGlyph(item.emoji, size: 15)
+                                Text("\(item.count)")
+                                    .font(.system(size: 10, weight: .semibold))
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(
+                                item.reacted ? Color.cyan.opacity(0.18) : Color.white.opacity(0.055),
+                                in: Capsule()
+                            )
+                            .overlay(Capsule().stroke(.white.opacity(item.reacted ? 0.18 : 0.08), lineWidth: 0.7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+            .frame(width: 238, height: 25, alignment: isMine ? .trailing : .leading)
+        }
+    }
+
     var body: some View {
         if message.isSystem {
             Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
@@ -1446,6 +1455,7 @@ struct NativeMessageBubble: View {
                         .padding(.horizontal, 5)
                         .frame(width: bubbleWidth, alignment: isMine ? .trailing : .leading)
                     bubble
+                    reactionStrip
                 }
                 .frame(width: 238, alignment: isMine ? .trailing : .leading)
                 if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false) } else { Spacer(minLength: 0) }
