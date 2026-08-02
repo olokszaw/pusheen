@@ -1729,7 +1729,7 @@ private struct ViewingInsightsPager: View {
                         }
                 )
             }
-            .frame(height: 350)
+            .frame(height: 440)
 
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
@@ -1939,7 +1939,7 @@ private struct ViewingHeatmapCard: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .scaleEffect(pinchScale, anchor: .center)
             }
-            .frame(height: 136)
+            .frame(height: 195)
 
             HStack(spacing: 8) {
                 Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(.cyan).font(.caption.weight(.bold))
