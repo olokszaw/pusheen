@@ -176,16 +176,12 @@ final class RoomViewModel: ObservableObject {
         }
         let pendingID = UUID().uuidString
         pendingMessages.append(PendingChatMessage(id: pendingID, text: text, image: image))
-        // Fan out through the live socket immediately. The HTTP request below
-        // uses the same id, so it is an idempotent persistence fallback rather
-        // than a second chat message.
-        socket.chat(text: text, image: image, clientMessageID: pendingID)
-        // HTTP persists first; the server then broadcasts to every socket.
-        // This prevents a message disappearing when a room socket reconnects.
+        // A single FIFO HTTP outbox is the source of truth for send order.
+        // The server broadcasts each persisted row to all WebSocket listeners.
         Task { [weak self] in
             guard let self else { return }
             await self.flushPendingMessages()
-            return
+            /*
             do {
                 let persisted = try await self.api.sendMessage(roomID: self.room.id, text: text, image: image, clientMessageID: pendingID)
                 self.mergeServerMessages([persisted])
@@ -193,6 +189,7 @@ final class RoomViewModel: ObservableObject {
             } catch {
                 self.error = "Не удалось отправить сообщение. Проверь подключение."
             }
+            */
         }
     }
     func react(messageID: Int, emoji: String) { socket.reaction(messageID: messageID, emoji: emoji) }
