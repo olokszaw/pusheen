@@ -1683,6 +1683,10 @@ private struct ViewingInsightsPager: View {
         ]
     }
 
+    private var pageHeight: CGFloat {
+        page == 1 ? 390 : 278
+    }
+
     var body: some View {
         VStack(spacing: 10) {
             GeometryReader { proxy in
@@ -1691,7 +1695,8 @@ private struct ViewingInsightsPager: View {
                 HStack(spacing: 0) {
                     ForEach(pages.indices, id: \.self) { index in
                         pages[index]
-                            .frame(width: width, height: proxy.size.height)
+                            .frame(width: width, height: proxy.size.height, alignment: .topLeading)
+                            .clipped()
                     }
                 }
                 // A real interactive offset fixes the old UIPageViewController
@@ -1729,7 +1734,8 @@ private struct ViewingInsightsPager: View {
                         }
                 )
             }
-            .frame(height: 390)
+            .frame(height: pageHeight)
+            .animation(.interactiveSpring(response: 0.36, dampingFraction: 0.88), value: pageHeight)
 
             HStack(spacing: 6) {
                 ForEach(0..<3, id: \.self) { index in
@@ -1759,11 +1765,14 @@ private struct GenreOnlyCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
-                    .frame(width: 176, height: 176)
+                    .frame(width: 148, height: 148)
                     .frame(maxWidth: .infinity)
+                    .clipShape(Circle())
                 GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
         .contentShape(RoundedRectangle(cornerRadius: 26))
         .onTapGesture { withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { selectedGenreID = nil } }
         .onAppear { selectedGenreID = nil }
@@ -1836,22 +1845,21 @@ private struct ViewingHeatmapCard: View {
                 .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.8))
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 Image(systemName: "calendar")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.cyan)
-                    .frame(width: 30, height: 30)
-                    .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                Text(Self.detailFormatter.string(from: highlightedDay)).font(.subheadline.weight(.bold)).foregroundStyle(.cyan)
+                    .frame(width: 26, height: 26)
+                    .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                Text(Self.detailFormatter.string(from: highlightedDay)).font(.caption.weight(.bold)).foregroundStyle(.cyan)
                 Text("•").foregroundStyle(.blue.opacity(0.7))
-                Text(durationText(for: highlightedDay)).font(.subheadline.weight(.semibold))
+                Text(durationText(for: highlightedDay)).font(.caption.weight(.semibold))
                 Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(.cyan).font(.caption2.bold())
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 7)
-            .background(LinearGradient(colors: [.cyan.opacity(0.17), .blue.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.cyan.opacity(0.25), lineWidth: 0.9))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(LinearGradient(colors: [.cyan.opacity(0.17), .blue.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(.cyan.opacity(0.25), lineWidth: 0.9))
 
             GeometryReader { proxy in
                 let layout = calendarLayout
