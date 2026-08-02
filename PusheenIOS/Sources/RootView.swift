@@ -1631,8 +1631,9 @@ struct NativeMessageBubble: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                         .padding(.horizontal, 5)
-                        .frame(width: bubbleWidth, alignment: isMine ? .trailing : .leading)
+                        .frame(width: 238, alignment: isMine ? .trailing : .leading)
                     bubble
                     reactionStrip
                 }
