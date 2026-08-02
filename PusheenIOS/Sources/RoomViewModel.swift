@@ -184,6 +184,8 @@ final class RoomViewModel: ObservableObject {
         // This prevents a message disappearing when a room socket reconnects.
         Task { [weak self] in
             guard let self else { return }
+            await self.flushPendingMessages()
+            return
             do {
                 let persisted = try await self.api.sendMessage(roomID: self.room.id, text: text, image: image, clientMessageID: pendingID)
                 self.mergeServerMessages([persisted])
