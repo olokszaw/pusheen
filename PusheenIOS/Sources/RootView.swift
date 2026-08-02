@@ -436,7 +436,6 @@ struct RoomView: View {
     @State private var chatFocused = false
     @State private var copiedCode = false
     @State private var copyFeedbackTick = 0
-    @State private var roomSwipeOffset: CGFloat = 0
     @State private var keyboardHeight: CGFloat = 0
     @State private var controlsVisible = false
     @State private var isScrubbingPlayer = false
@@ -493,47 +492,19 @@ struct RoomView: View {
                 .animation(.spring(response: 0.34, dampingFraction: 0.88), value: chatFocused)
                 .animation(.easeOut(duration: 0.22), value: keyboardHeight)
             }
-            .offset(x: max(0, roomSwipeOffset))
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12)
-                    .onChanged { value in
-                        let horizontal = abs(value.translation.width)
-                        let vertical = abs(value.translation.height)
-                        let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? playerHeight + 188 : playerHeight + 80)
-                        guard !isScrubbingPlayer,
-                              value.startLocation.y > playerInteractionBottom,
-                              value.startLocation.x <= 44,
-                              value.translation.width > 0,
-                              horizontal > vertical * 1.25 else { return }
-                        roomSwipeOffset = min(value.translation.width, 420)
-                    }
                     .onEnded { value in
                         let horizontal = abs(value.translation.width)
                         let vertical = abs(value.translation.height)
                         let playerInteractionBottom: CGFloat = contentTop + (controlsVisible ? playerHeight + 188 : playerHeight + 80)
                         let beganOutsidePlayer = value.startLocation.y > playerInteractionBottom
-                        let exitsFromLeftEdge = !isScrubbingPlayer && beganOutsidePlayer && value.startLocation.x <= 44 && value.translation.width > 0
                         let opensMembersFromRightEdge = beganOutsidePlayer && value.startLocation.x >= geometry.size.width - 44 && value.translation.width < 0
-                        guard horizontal > vertical * 1.25, exitsFromLeftEdge || opensMembersFromRightEdge else {
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { roomSwipeOffset = 0 }
-                            return
-                        }
-                        if value.translation.width < -70 {
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) { roomSwipeOffset = 0 }
-                            presentMembers()
-                        } else if value.translation.width > 0 {
-                            let shouldLeave = value.translation.width > 145 || value.predictedEndTranslation.width > 270
-                            if shouldLeave {
-                                withAnimation(.easeOut(duration: 0.2)) { roomSwipeOffset = 520 }
-                                Task {
-                                    try? await Task.sleep(for: .milliseconds(190))
-                                    guard !Task.isCancelled else { return }
-                                    await MainActor.run { dismiss() }
-                                }
-                            } else {
-                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { roomSwipeOffset = 0 }
-                            }
-                        }
+                        guard !isScrubbingPlayer,
+                              horizontal > vertical * 1.25,
+                              opensMembersFromRightEdge,
+                              value.translation.width < -70 else { return }
+                        presentMembers()
                     }
             )
         }
