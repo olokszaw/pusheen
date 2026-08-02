@@ -1876,17 +1876,22 @@ private struct ViewingHeatmapCard: View {
                 .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.8))
             }
 
-            HStack(spacing: 11) {
-                Image(systemName: "calendar").font(.headline.weight(.semibold)).foregroundStyle(.cyan).frame(width: 38, height: 38).background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                Text(Self.detailFormatter.string(from: highlightedDay)).font(.headline.weight(.bold)).foregroundStyle(.cyan)
+            HStack(spacing: 8) {
+                Image(systemName: "calendar")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.cyan)
+                    .frame(width: 30, height: 30)
+                    .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Text(Self.detailFormatter.string(from: highlightedDay)).font(.subheadline.weight(.bold)).foregroundStyle(.cyan)
                 Text("•").foregroundStyle(.blue.opacity(0.7))
-                Text(durationText(for: highlightedDay)).font(.headline.weight(.bold))
+                Text(durationText(for: highlightedDay)).font(.subheadline.weight(.semibold))
                 Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(.cyan).font(.caption.bold())
+                Image(systemName: "chevron.right").foregroundStyle(.cyan).font(.caption2.bold())
             }
-            .padding(10)
-            .background(LinearGradient(colors: [.cyan.opacity(0.17), .blue.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.cyan.opacity(0.25), lineWidth: 0.9))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(LinearGradient(colors: [.cyan.opacity(0.17), .blue.opacity(0.10)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.cyan.opacity(0.25), lineWidth: 0.9))
 
             GeometryReader { proxy in
                 let groups = monthGroups
