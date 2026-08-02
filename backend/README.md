@@ -19,7 +19,7 @@ cd C:\Users\luiin\OneDrive\Desktop\rave\backend
 .\run_tunnel_windows.ps1
 ```
 
-The app is configured for `trio-anderson-istanbul-definition.trycloudflare.com`.
+The app is configured for `bradford-advice-convinced-manager.trycloudflare.com`.
 Quick Tunnel URLs change after a restart; rebuild the Flutter app with
 `--dart-define=API_BASE_URL=https://NEW-URL.trycloudflare.com` when Cloudflare
 prints a different address.
