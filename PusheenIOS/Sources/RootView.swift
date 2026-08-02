@@ -1522,15 +1522,17 @@ struct NativeMessageBubble: View {
     // buckets. A one-letter reply stays Telegram-compact while sentences grow
     // naturally until they reach the readable maximum width.
     private var bubbleWidth: CGFloat {
-        if !message.imageDataURL.isEmpty { return 230 }
-        if emojiOnly.count == 1 { return 72 }
-        if emojiOnly.count == 2 { return 112 }
+        let reactionWidth: CGFloat = message.reactions.count >= 2 ? 116 : message.reactions.isEmpty ? 0 : 58
+        if !message.imageDataURL.isEmpty { return max(230, reactionWidth) }
+        if emojiOnly.count == 1 { return max(72, reactionWidth) }
+        if emojiOnly.count == 2 { return max(112, reactionWidth) }
         let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines) as NSString
         let font = UIFont.systemFont(ofSize: 15, weight: .regular)
         let measuredText = ceil(text.size(withAttributes: [.font: font]).width)
         let timeFont = UIFont.systemFont(ofSize: 9, weight: .regular)
         let measuredTime = ceil((sentTime as NSString).size(withAttributes: [.font: timeFont]).width)
-        return min(238, max(54, max(measuredText, measuredTime) + 18))
+        let naturalWidth = min(238, max(54, max(measuredText, measuredTime) + 18))
+        return max(naturalWidth, reactionWidth)
     }
     private var emojiOnly: [String] {
         let characters = message.text.filter { !$0.isWhitespace }
@@ -1574,6 +1576,7 @@ struct NativeMessageBubble: View {
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
+            reactionChips
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -1593,7 +1596,7 @@ struct NativeMessageBubble: View {
         }
     }
 
-    @ViewBuilder private var reactionStrip: some View {
+    @ViewBuilder private var reactionChips: some View {
         if !message.reactions.isEmpty {
             HStack(spacing: 5) {
                 ForEach(Array(message.reactions.prefix(2))) { item in
@@ -1614,8 +1617,7 @@ struct NativeMessageBubble: View {
                     .buttonStyle(.plain)
                 }
             }
-            .frame(width: bubbleWidth, height: 31, alignment: isMine ? .trailing : .leading)
-            .clipped()
+            .frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
         }
     }
 
@@ -1635,7 +1637,6 @@ struct NativeMessageBubble: View {
                         .padding(.horizontal, 5)
                         .frame(width: 238, alignment: isMine ? .trailing : .leading)
                     bubble
-                    reactionStrip
                 }
                 .frame(width: 238, alignment: isMine ? .trailing : .leading)
                 if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false) } else { Spacer(minLength: 0) }
