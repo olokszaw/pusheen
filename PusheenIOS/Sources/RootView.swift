@@ -195,6 +195,7 @@ private struct UsernamePreview: View {
 }
 
 struct HomeView: View {
+    private static let roomsCacheKey = "pusheen.cached-rooms"
     @EnvironmentObject private var session: SessionStore
     @State private var rooms: [Room] = []
     @State private var path = NavigationPath()
@@ -260,6 +261,7 @@ struct HomeView: View {
                     }) {
                         try? await session.api.deleteRoom(id: room.id)
                         rooms.removeAll { $0.id == room.id }
+                        saveRoomsCache()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { previewedRoom = nil }
                     }
                     .transition(.opacity.combined(with: .scale(scale: 0.92)))
@@ -267,14 +269,29 @@ struct HomeView: View {
             }
             .animation(.spring(response: 0.34, dampingFraction: 0.84), value: previewedRoom?.id)
             .navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }
-            .sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
-            .sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); path.append(room) } }
+            .sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); saveRoomsCache(); path.append(room) } }
+            .sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); saveRoomsCache(); path.append(room) } }
             .confirmationDialog("Удалить выбранные комнаты?", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
                 Button("Удалить \(selectedRoomIDs.count)", role: .destructive) { Task { await deleteSelectedRooms() } }
             } message: { Text("Видео, загруженные в эти комнаты, тоже удалятся с сервера.") }
         }
     }
-    private func load() async { rooms = (try? await session.api.rooms()) ?? [] }
+    private func load() async {
+        // Render the last known room list immediately, then refresh it without
+        // flashing an empty screen when a tunnel or mobile connection is slow.
+        if rooms.isEmpty,
+           let data = UserDefaults.standard.data(forKey: Self.roomsCacheKey),
+           let cached = try? JSONDecoder().decode([Room].self, from: data) {
+            rooms = cached
+        }
+        guard let refreshed = try? await session.api.rooms() else { return }
+        rooms = refreshed
+        saveRoomsCache()
+    }
+    private func saveRoomsCache() {
+        guard let data = try? JSONEncoder().encode(rooms) else { return }
+        UserDefaults.standard.set(data, forKey: Self.roomsCacheKey)
+    }
     private var selectionToolbar: some View {
         HStack(spacing: 10) {
             Button { cancelRoomSelection() } label: {
@@ -311,6 +328,7 @@ struct HomeView: View {
         let ids = selectedRoomIDs
         for id in ids { try? await session.api.deleteRoom(id: id) }
         rooms.removeAll { ids.contains($0.id) }
+        saveRoomsCache()
         selectedRoomIDs = []
         isSelectingRooms = false
         isDeletingSelectedRooms = false

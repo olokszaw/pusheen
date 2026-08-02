@@ -29,12 +29,14 @@ final class SessionStore: ObservableObject {
     private var knownIncomingRequestIDs = Set<Int>()
     private var hasPrimedFriendRequests = false
     private let cachedProfileKey = "pusheen.cached-profile"
+    private let cachedViewingStatsKey = "pusheen.cached-viewing-stats"
 
     init() {
         token = UserDefaults.standard.string(forKey: "pusheen.token")
         if let token {
             api.token = token
             profile = Self.loadCachedProfile()
+            viewingStats = Self.loadCachedViewingStats()
             authenticationState = .signedIn
             Task { await restore() }
         } else {
@@ -49,7 +51,7 @@ final class SessionStore: ObservableObject {
             authenticationState = .signedIn
             isOffline = false
             restoreRetryTask = nil
-            viewingStats = try? await api.viewingStats()
+            if let stats = try? await api.viewingStats() { viewingStats = stats; saveCachedViewingStats() }
             startFriendRequestPolling()
             startActivityHeartbeat()
         } catch APIError.unauthorized {
@@ -63,17 +65,27 @@ final class SessionStore: ObservableObject {
     }
     func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
     func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
-    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; saveCachedProfile(); api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startFriendRequestPolling(); startActivityHeartbeat(); Task { self.viewingStats = try? await self.api.viewingStats() } }
-    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey) }
+    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; saveCachedProfile(); api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startFriendRequestPolling(); startActivityHeartbeat(); Task { if let stats = try? await self.api.viewingStats() { self.viewingStats = stats; self.saveCachedViewingStats() } } }
+    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey) }
 
     private static func loadCachedProfile() -> Profile? {
         guard let data = UserDefaults.standard.data(forKey: "pusheen.cached-profile") else { return nil }
         return try? JSONDecoder().decode(Profile.self, from: data)
     }
 
+    private static func loadCachedViewingStats() -> ViewingStats? {
+        guard let data = UserDefaults.standard.data(forKey: "pusheen.cached-viewing-stats") else { return nil }
+        return try? JSONDecoder().decode(ViewingStats.self, from: data)
+    }
+
     private func saveCachedProfile() {
         guard let profile, let data = try? JSONEncoder().encode(profile) else { return }
         UserDefaults.standard.set(data, forKey: cachedProfileKey)
+    }
+
+    private func saveCachedViewingStats() {
+        guard let viewingStats, let data = try? JSONEncoder().encode(viewingStats) else { return }
+        UserDefaults.standard.set(data, forKey: cachedViewingStatsKey)
     }
 
     private func startOfflineRetry() {
@@ -103,7 +115,7 @@ final class SessionStore: ObservableObject {
         await refreshFriendRequests()
     }
 
-    func refreshViewingStats() async { viewingStats = try? await api.viewingStats() }
+    func refreshViewingStats() async { if let stats = try? await api.viewingStats() { viewingStats = stats; saveCachedViewingStats() } }
 
     private func startFriendRequestPolling() {
         friendRequestPollingTask?.cancel()

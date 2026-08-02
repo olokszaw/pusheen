@@ -36,6 +36,7 @@ jobs:
             watchparty.tests.RoomApiTests.test_watched_heartbeat_does_not_double_calendar_activity \
             watchparty.tests.RoomApiTests.test_message_post_is_persisted_and_visible_to_another_member \
             watchparty.tests.RoomApiTests.test_retrying_client_message_id_does_not_duplicate_chat \
+            watchparty.tests.RoomSocketTests.test_guest_recovers_history_and_live_chat_after_reconnect \
             --verbosity 2
 
       - name: Install XcodeGen

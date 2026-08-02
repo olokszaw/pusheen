@@ -3,6 +3,7 @@ from datetime import date
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
 from asgiref.sync import async_to_sync
+from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
 from unittest.mock import patch
 from rest_framework.authtoken.models import Token
@@ -426,6 +427,47 @@ class RoomSocketTests(TransactionTestCase):
 
     def test_only_owner_can_change_shared_timeline(self):
         async_to_sync(self._assert_owner_control)()
+
+    def test_guest_recovers_history_and_live_chat_after_reconnect(self):
+        async_to_sync(self._assert_chat_recovery)()
+
+    async def _assert_chat_recovery(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        guest_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+        await self._next_event(guest_socket, "playback_state")
+
+        # The guest loses internet and is not present when this is sent.
+        await guest_socket.disconnect()
+        await owner_socket.send_json_to({"type": "chat_message", "text": "while-offline"})
+        owner_message = await self._next_event(owner_socket, "chat_message")
+        self.assertEqual(owner_message["text"], "while-offline")
+        self.assertEqual(await self._room_message_texts(), ["while-offline"])
+
+        # After reconnect, the client loads this persisted history, then
+        # receives subsequent messages through its fresh WebSocket.
+        recovered_guest = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await recovered_guest.connect())[0])
+        await self._next_event(recovered_guest, "playback_state")
+        self.assertEqual(await self._room_message_texts(), ["while-offline"])
+
+        await owner_socket.send_json_to({"type": "chat_message", "text": "after-reconnect"})
+        guest_message = await self._next_event(recovered_guest, "chat_message")
+        self.assertEqual(guest_message["text"], "after-reconnect")
+        await owner_socket.disconnect()
+        await recovered_guest.disconnect()
+
+    @database_sync_to_async
+    def _room_message_texts(self):
+        return list(ChatMessage.objects.filter(room=self.room).values_list("text", flat=True))
 
     async def _assert_owner_control(self):
         owner_socket = WebsocketCommunicator(
