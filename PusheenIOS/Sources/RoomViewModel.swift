@@ -131,7 +131,7 @@ final class RoomViewModel: ObservableObject {
         // message with its permanent id a moment later.
         if let profile {
             let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
-            messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: []))
+            messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], createdAt: ISO8601DateFormatter().string(from: Date())))
         }
         socket.chat(text: text, image: image)
     }

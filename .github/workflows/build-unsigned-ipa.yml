@@ -30,7 +30,7 @@ jobs:
       - name: Test activity calendar layout
         working-directory: PusheenIOS
         run: |
-          swiftc Sources/ActivityCalendarLayout.swift Tests/ActivityCalendarLayoutTests/main.swift -o /tmp/activity-calendar-tests
+          swiftc Sources/ActivityCalendarLayout.swift Sources/ChatTimestampFormatter.swift Sources/Models.swift Tests/ActivityCalendarLayoutTests/main.swift -o /tmp/activity-calendar-tests
           /tmp/activity-calendar-tests
 
       - name: Build native SwiftUI app

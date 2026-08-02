@@ -976,7 +976,11 @@ struct NativeChatPane: View {
     @State private var didInitialScroll = false
     @State private var forceScrollOnNextMessage = false
     @State private var latestDistanceToBottom: CGFloat = 0
-    private let quickReactions = ["👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨"]
+    private let quickReactions = [
+        "👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨",
+        "🥰", "🤣", "😍", "🤔", "😎", "🥳", "😡", "💀", "💯", "👎",
+        "🙏", "🙌", "🤝", "💔", "🎉", "🤩", "🥺", "😴", "🤯", "🫡",
+    ]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ScrollViewReader { proxy in
@@ -1323,25 +1327,30 @@ private struct PersistentChatTextField: UIViewRepresentable {
 
 struct NativeMessageBubble: View {
     let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
+    @State private var showsReactionPicker = false
     private var containsEmoji: Bool {
         message.text.unicodeScalars.contains { scalar in
             (0x1F000...0x1FAFF).contains(Int(scalar.value)) || (0x2600...0x27FF).contains(Int(scalar.value))
         }
     }
-    // Bubbles use their content length, not the whole chat width. This keeps a
-    // one-word reply compact while giving a real sentence enough readable space.
+    private var sentTime: String {
+        ChatTimestampFormatter.string(from: message.createdAt)
+    }
+
+    // Measure the actual rendered text instead of assigning broad character
+    // buckets. A one-letter reply stays Telegram-compact while sentences grow
+    // naturally until they reach the readable maximum width.
     private var bubbleWidth: CGFloat {
         if !message.imageDataURL.isEmpty { return 230 }
         if emojiOnly.count == 1 { return 72 }
         if emojiOnly.count == 2 { return 112 }
-        let count = message.text.trimmingCharacters(in: .whitespacesAndNewlines).count
-        switch count {
-        case 0...5: return 88
-        case 6...12: return 128
-        case 13...24: return 184
-        case 25...42: return 218
-        default: return 238
-        }
+        let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines) as NSString
+        let font = UIFont.preferredFont(forTextStyle: .subheadline)
+        let measuredText = ceil(text.size(withAttributes: [.font: font]).width)
+        let timeFont = UIFont.systemFont(ofSize: 9, weight: .regular)
+        let measuredTime = ceil((sentTime as NSString).size(withAttributes: [.font: timeFont]).width)
+        let naturalWidth = min(238, max(54, max(measuredText, measuredTime) + 20))
+        return message.reactions.isEmpty ? naturalWidth : max(96, naturalWidth)
     }
     private var emojiOnly: [String] {
         let characters = message.text.filter { !$0.isWhitespace }
@@ -1378,29 +1387,98 @@ struct NativeMessageBubble: View {
         VStack(alignment: .leading, spacing: 4) {
             messageContent
             if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
-            if !message.reactions.isEmpty { HStack(spacing: 5) { ForEach(message.reactions) { item in Button { react(message.id, item.emoji) } label: { HStack(spacing: 3) { FluentEmojiGlyph(item.emoji, size: 16); Text("\(item.count)") }.font(.caption2).padding(.horizontal, 7).padding(.vertical, 3).background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule()) }.buttonStyle(.plain) } } }
+            if !sentTime.isEmpty {
+                Text(sentTime)
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            if !message.reactions.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 5) {
+                        ForEach(message.reactions) { item in
+                            Button { react(message.id, item.emoji) } label: {
+                                HStack(spacing: 3) {
+                                    FluentEmojiGlyph(item.emoji, size: 16)
+                                    Text("\(item.count)")
+                                }
+                                .font(.caption2)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(item.reacted ? Color.teal.opacity(0.38) : Color.white.opacity(0.08), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
         }
         .padding(10)
         .frame(width: bubbleWidth, alignment: .leading)
         .background(isMine ? Color.indigo.opacity(0.28) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12)))
-        .contextMenu { ForEach(quickReactions, id: \.self) { emoji in Button(emoji) { react(message.id, emoji) } } }
+        .onLongPressGesture(minimumDuration: 0.34) {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.85)
+            showsReactionPicker = true
+        }
+        .popover(isPresented: $showsReactionPicker, attachmentAnchor: .rect(.bounds), arrowEdge: isMine ? .trailing : .leading) {
+            ReactionPickerBar(emojis: quickReactions) { emoji in
+                react(message.id, emoji)
+                showsReactionPicker = false
+            }
+            .presentationCompactAdaptation(.popover)
+        }
     }
     var body: some View {
         if message.isSystem {
             Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
         } else {
-            HStack(alignment: .bottom, spacing: 9) {
-                if !isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 42) }
+            HStack(alignment: .top, spacing: 8) {
+                if !isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false) }
                 if isMine { Spacer(minLength: 0) }
                 VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
-                    Text(message.nickname).font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
-                    bubble.frame(maxWidth: .infinity, alignment: isMine ? .trailing : .leading)
+                    Text(message.nickname)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .frame(width: bubbleWidth, alignment: isMine ? .trailing : .leading)
+                    bubble
                 }
                 .frame(width: 238, alignment: isMine ? .trailing : .leading)
-                if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 42) } else { Spacer(minLength: 0) }
+                if isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false) } else { Spacer(minLength: 0) }
             }
         }
+    }
+}
+
+private struct ReactionPickerBar: View {
+    let emojis: [String]
+    let select: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 6) {
+                ForEach(emojis, id: \.self) { emoji in
+                    Button {
+                        select(emoji)
+                    } label: {
+                        FluentEmojiGlyph(emoji, size: 29)
+                            .frame(width: 38, height: 38)
+                            .background(.white.opacity(0.055), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 8)
+        }
+        .scrollIndicators(.hidden)
+        .frame(width: 300, height: 54)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onAppear { emojis.forEach { FluentEmojiCache.shared.prefetch(in: $0) } }
     }
 }
 
@@ -1591,12 +1669,25 @@ struct DataURLImage: View {
 }
 
 struct AvatarView: View {
-    let dataURL: String; let name: String; let size: CGFloat
+    let dataURL: String
+    let name: String
+    let size: CGFloat
+    let showsBorder: Bool
+
+    init(dataURL: String, name: String, size: CGFloat, showsBorder: Bool = true) {
+        self.dataURL = dataURL
+        self.name = name
+        self.size = size
+        self.showsBorder = showsBorder
+    }
+
     var body: some View {
         ZStack {
             Circle().fill(LinearGradient(colors: [Color(red: 0.13, green: 0.52, blue: 0.56), Color(red: 0.16, green: 0.28, blue: 0.52)], startPoint: .topLeading, endPoint: .bottomTrailing))
             if !dataURL.isEmpty {
-                DataURLImage(dataURL: dataURL).clipShape(Circle()).padding(2)
+                DataURLImage(dataURL: dataURL)
+                    .clipShape(Circle())
+                    .padding(showsBorder ? 2 : 0)
             } else {
                 Text(name.prefix(1)).font(.system(size: max(12, size * 0.38), weight: .bold, design: .rounded))
             }

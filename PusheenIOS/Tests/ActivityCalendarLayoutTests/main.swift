@@ -43,4 +43,25 @@ expect(
     "Month-over-month increase must be calculated from real activity totals"
 )
 
+let timestamp = "2026-08-02T16:05:00.000Z"
+let utc = TimeZone(secondsFromGMT: 0)!
+let russianTime = ChatTimestampFormatter.string(
+    from: timestamp,
+    locale: Locale(identifier: "ru_RU"),
+    timeZone: utc
+)
+let americanTime = ChatTimestampFormatter.string(
+    from: timestamp,
+    locale: Locale(identifier: "en_US"),
+    timeZone: utc
+)
+expect(russianTime.contains("16:05"), "24-hour locales must receive 24-hour message times")
+expect(americanTime.contains("4:05") && americanTime.uppercased().contains("PM"), "12-hour locales must receive AM/PM message times")
+
+let messageJSON = """
+{"id":1,"author_id":7,"nickname":"Test","text":"Hi","image_data_url":"","avatar_data_url":"","reactions":[],"created_at":"2026-08-02T16:05:00Z"}
+""".data(using: .utf8)!
+let decodedMessage = try JSONDecoder().decode(ChatMessage.self, from: messageJSON)
+expect(decodedMessage.createdAt == "2026-08-02T16:05:00Z", "Chat messages must decode the server creation timestamp")
+
 print("ActivityCalendarLayout tests passed")
