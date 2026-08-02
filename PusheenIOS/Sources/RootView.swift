@@ -1775,7 +1775,7 @@ private struct ViewingInsightsPager: View {
     }
 
     private var pageHeight: CGFloat {
-        page == 1 ? 390 : 278
+        page == 1 ? 360 : 278
     }
 
     var body: some View {
@@ -1858,7 +1858,6 @@ private struct GenreOnlyCard: View {
                 GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
                     .frame(width: 148, height: 148)
                     .frame(maxWidth: .infinity)
-                    .clipShape(Circle())
                 GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
             }
         }
@@ -1914,26 +1913,26 @@ private struct ViewingHeatmapCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 13) {
                 Image(systemName: "chart.bar.xaxis")
-                    .font(.title3.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.cyan)
-                    .frame(width: 42, height: 42)
-                    .background(.cyan.opacity(0.09), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.cyan.opacity(0.30), lineWidth: 1))
+                    .frame(width: 34, height: 34)
+                    .background(.cyan.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.cyan.opacity(0.30), lineWidth: 1))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Активность").font(.title3.bold())
-                    Text(visibleMonths == 1 ? "Последний месяц" : "Последние 3 месяца").font(.caption).foregroundStyle(.secondary)
+                    Text("Активность").font(.headline.bold())
+                    Text(visibleMonths == 1 ? "Последний месяц" : "Последние 3 месяца").font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
-                HStack(spacing: 7) {
-                    Image(systemName: "flame.fill").foregroundStyle(.cyan)
+                HStack(spacing: 5) {
+                    Image(systemName: "flame.fill").font(.subheadline).foregroundStyle(.cyan)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text("\(streakDays) дней подряд").font(.caption.weight(.bold)).foregroundStyle(.cyan)
-                        Text("Текущая серия").font(.caption2).foregroundStyle(.secondary)
+                        Text("\(streakDays) дней подряд").font(.caption2.weight(.bold)).foregroundStyle(.cyan)
+                        Text("Текущая серия").font(.system(size: 9)).foregroundStyle(.secondary)
                     }
                 }
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(.cyan.opacity(0.045), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.8))
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(.cyan.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.8))
             }
 
             HStack(spacing: 7) {
