@@ -1012,6 +1012,11 @@ struct NativeChatPane: View {
     @State private var sticksToBottom = true
     @State private var didInitialScroll = false
     @State private var forceScrollOnNextMessage = false
+    @State private var unreadMessageCount = 0
+    @State private var unreadSenderNickname = ""
+    @State private var unreadSenderAvatar = ""
+    @State private var showsUnreadSender = false
+    @State private var unreadPreviewToken = UUID()
     private let quickReactions = [
         "👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨",
         "🥰", "🤣", "😍", "🤔", "😎", "🥳", "😡", "💀", "💯", "👎",
@@ -1020,51 +1025,81 @@ struct NativeChatPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(messages) { message in
-                            NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
-                                .equatable()
-                                .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
-                                .id(message.id)
+                ZStack(alignment: .bottomTrailing) {
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(messages) { message in
+                                NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
+                                    .equatable()
+                                    .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
+                                    .id(message.id)
+                            }
+                        }
+                        .padding(.top, 2)
+                        .padding(.bottom, 2)
+                        .scrollTargetLayout()
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { focused = false; inputFocused = false }
+                    .onScrollGeometryChange(for: Bool.self, of: { geometry in
+                        let distanceToBottom = max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
+                        // A small manual scroll should still follow the live chat.
+                        // Only a deliberate, deeper history scroll pauses it.
+                        return distanceToBottom < 260
+                    }, action: { wasNearBottom, isNearBottom in
+                        // Avoid changing @State on every scroll frame.
+                        guard wasNearBottom != isNearBottom else { return }
+                        sticksToBottom = isNearBottom
+                        if isNearBottom { clearUnreadMessages() }
+                    })
+                    .onChange(of: messages.count) { oldCount, newCount in
+                        let addedCount = max(0, newCount - oldCount)
+                        guard addedCount > 0 else { return }
+                        if forceScrollOnNextMessage || !didInitialScroll || sticksToBottom {
+                            scrollToLatestMessage(proxy, animated: didInitialScroll)
+                            clearUnreadMessages()
+                            didInitialScroll = true
+                            forceScrollOnNextMessage = false
+                        } else {
+                            let unread = messages.suffix(addedCount).filter {
+                                !$0.isSystem && $0.authorId != currentUserID
+                            }
+                            if let newest = unread.last {
+                                showUnreadMessage(from: newest, addedCount: unread.count)
+                            }
                         }
                     }
-                    .padding(.top, 2)
-                    .padding(.bottom, 2)
-                    .scrollTargetLayout()
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { focused = false; inputFocused = false }
-                .onScrollGeometryChange(for: Bool.self, of: { geometry in
-                    let distanceToBottom = max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
-                    return distanceToBottom < 44
-                }, action: { wasAtBottom, isAtBottom in
-                    // Avoid changing @State on every scroll frame.
-                    guard wasAtBottom != isAtBottom else { return }
-                    sticksToBottom = isAtBottom
-                })
-                .onChange(of: messages.last?.id) { oldID, newID in
-                    guard newID != nil, newID != oldID else { return }
-                    if forceScrollOnNextMessage || !didInitialScroll || sticksToBottom {
-                        scrollToLatestMessage(proxy, animated: didInitialScroll)
-                        didInitialScroll = true
-                        forceScrollOnNextMessage = false
+                    .onChange(of: keyboardHeight) { oldHeight, newHeight in
+                        // The chat becomes taller as the keyboard closes. Keep
+                        // the newest bubbles attached to the composer instead of
+                        // leaving them at the top of the expanded scroll view.
+                        guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
+                        DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
+                    }
+                    .onAppear {
+                        guard !didInitialScroll, messages.last != nil else { return }
+                        DispatchQueue.main.async {
+                            scrollToLatestMessage(proxy, animated: false)
+                            didInitialScroll = true
+                        }
+                    }
+
+                    if unreadMessageCount > 0 {
+                        Button {
+                            sticksToBottom = true
+                            clearUnreadMessages()
+                            scrollToLatestMessage(proxy, animated: true)
+                        } label: {
+                            unreadMessagesIndicator
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 10)
+                        .padding(.bottom, 12)
+                        .transition(.scale(scale: 0.82).combined(with: .opacity))
+                        .zIndex(5)
                     }
                 }
-                .onChange(of: keyboardHeight) { oldHeight, newHeight in
-                    // The chat becomes taller as the keyboard closes. Keep
-                    // the newest bubbles attached to the composer instead of
-                    // leaving them at the top of the expanded scroll view.
-                    guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
-                    DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
-                }
-                .onAppear {
-                    guard !didInitialScroll, messages.last != nil else { return }
-                    DispatchQueue.main.async {
-                        scrollToLatestMessage(proxy, animated: false)
-                        didInitialScroll = true
-                    }
-                }
+                .animation(.spring(response: 0.32, dampingFraction: 0.82), value: unreadMessageCount > 0)
             }
             .frame(maxHeight: .infinity)
             HStack(alignment: .bottom, spacing: 10) {
@@ -1193,6 +1228,63 @@ struct NativeChatPane: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) { proxy.scrollTo(lastID, anchor: .bottom) }
         }
+    }
+    private var unreadMessagesIndicator: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                if showsUnreadSender {
+                    AvatarView(dataURL: unreadSenderAvatar, name: unreadSenderNickname, size: 32, showsBorder: false)
+                        .transition(.scale.combined(with: .opacity))
+                } else {
+                    Text("\(unreadMessageCount)")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.cyan)
+                        .contentTransition(.numericText())
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .frame(width: 32, height: 32)
+
+            if showsUnreadSender {
+                Text(unreadSenderNickname)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 132, alignment: .leading)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                Text("+\(unreadMessageCount)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.cyan)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, showsUnreadSender ? 9 : 5)
+        .frame(height: 42)
+        .liquidCard(Capsule())
+        .animation(.spring(response: 0.36, dampingFraction: 0.84), value: showsUnreadSender)
+        .accessibilityLabel("Новых сообщений: \(unreadMessageCount)")
+    }
+    private func showUnreadMessage(from message: ChatMessage, addedCount: Int) {
+        unreadMessageCount += addedCount
+        unreadSenderNickname = message.nickname
+        unreadSenderAvatar = message.avatarDataURL
+        let token = UUID()
+        unreadPreviewToken = token
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+            showsUnreadSender = true
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard unreadPreviewToken == token, unreadMessageCount > 0 else { return }
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+                showsUnreadSender = false
+            }
+        }
+    }
+    private func clearUnreadMessages() {
+        unreadPreviewToken = UUID()
+        unreadMessageCount = 0
+        showsUnreadSender = false
     }
 }
 
