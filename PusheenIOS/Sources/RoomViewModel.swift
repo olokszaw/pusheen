@@ -34,6 +34,9 @@ final class RoomViewModel: ObservableObject {
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
     private var hasAppliedInitialPlaybackState = false
+    // Quick Tunnel reconnects can repeat the same presence transition several
+    // times. Keep genuine join/leave notices while suppressing identical noise.
+    private var lastPresenceNoticeAt: [String: Date] = [:]
 
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token }
     func setCurrentUserID(_ id: Int?) { currentUserID = id }
@@ -251,6 +254,7 @@ final class RoomViewModel: ObservableObject {
             let userID = (event["user_id"] as? NSNumber)?.intValue ?? 0
             let nickname = event["nickname"] as? String ?? "Участник"
             let online = event["is_online"] as? Bool ?? true
+            let previousOnline = members.first(where: { $0.userId == userID })?.isOnline
             let member = RoomMember(
                 userId: userID,
                 username: event["username"] as? String ?? "",
@@ -264,9 +268,15 @@ final class RoomViewModel: ObservableObject {
             } else if userID != 0 {
                 members.append(member)
             }
-            if false && event["changed"] as? Bool == true {
-                let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-                messages.append(ChatMessage(id: -timestamp, authorId: 0, nickname: "", text: online ? "\(nickname) присоединился к просмотру" : "\(nickname) вышел из комнаты", imageDataURL: "", avatarDataURL: "", reactions: [], isSystem: true))
+            if userID != 0, event["changed"] as? Bool == true, previousOnline != online {
+                let now = Date()
+                let noticeKey = "\(userID):\(online)"
+                let isRepeatedReconnect = lastPresenceNoticeAt[noticeKey].map { now.timeIntervalSince($0) < 12 } ?? false
+                if !isRepeatedReconnect {
+                    lastPresenceNoticeAt[noticeKey] = now
+                    let timestamp = Int(now.timeIntervalSince1970 * 1_000_000)
+                    messages.append(ChatMessage(id: -timestamp, authorId: 0, nickname: "", text: online ? "\(nickname) присоединился к просмотру" : "\(nickname) вышел из комнаты", imageDataURL: "", avatarDataURL: "", reactions: [], isSystem: true))
+                }
             }
             // The event updates the UI immediately; a lightweight fetch then
             // reconciles the list in case the client missed a prior event.

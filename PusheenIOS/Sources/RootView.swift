@@ -318,6 +318,7 @@ struct HomeView: View {
     }
     private func cancelRoomSelection() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        showBulkDeleteConfirmation = false
         withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
             selectedRoomIDs.removeAll()
             isSelectingRooms = false
