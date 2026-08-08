@@ -372,9 +372,12 @@ final class RoomViewModel: ObservableObject {
     private func compensatedPosition(remote: Double, isPlaying: Bool, event: [String: Any]) -> Double {
         guard isPlaying,
               let date = playbackStateDate(from: event) else { return remote }
-        // The server timestamp is authoritative; compensate transit time so a
-        // remote player starts at the live position instead of 1–2 sec behind.
-        let livePosition = max(0, remote + Date().timeIntervalSince(date))
+        // Compensate only normal transit time. A server clock in another
+        // timezone (or with a bad clock) must never turn a paused seek into
+        // an hours-long offset that clamps playback to the end of the video.
+        let transitSeconds = Date().timeIntervalSince(date)
+        guard transitSeconds >= 0, transitSeconds <= 5 else { return remote }
+        let livePosition = max(0, remote + transitSeconds)
         if duration.isFinite, duration > 0 { return min(livePosition, duration) }
         return livePosition
     }
