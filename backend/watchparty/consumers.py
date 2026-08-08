@@ -170,7 +170,14 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     def current_state(self):
         room = Room.objects.select_related("playback").get(id=self.room_id)
         state = room.playback
-        return {"room_id": room.id, "command": "state", "is_owner": room.owner_id == self.scope["user"].id, "is_muted": RoomMute.objects.filter(room=room, user=self.scope["user"]).exists(), "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
+        now = datetime.now(timezone.utc)
+        position = state.position_seconds
+        if state.is_playing:
+            # PlaybackState stores the position at the last play/seek command.
+            # A heartbeat snapshot must advance it to "now"; otherwise every
+            # client periodically seeks back to that old value (often zero).
+            position = max(0.0, position + max(0.0, (now - state.updated_at).total_seconds()))
+        return {"room_id": room.id, "command": "state", "is_owner": room.owner_id == self.scope["user"].id, "is_muted": RoomMute.objects.filter(room=room, user=self.scope["user"]).exists(), "is_playing": state.is_playing, "position_seconds": position, "server_updated_at": now.isoformat(), "server_sent_at": now.isoformat(), "vk_video_url": room.vk_video_url}
 
     @database_sync_to_async
     def save_playback(self, action, is_playing, position, video_url):
