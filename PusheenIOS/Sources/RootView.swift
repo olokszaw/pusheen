@@ -206,6 +206,7 @@ struct HomeView: View {
     @State private var isSelectingRooms = false
     @State private var showBulkDeleteConfirmation = false
     @State private var isDeletingSelectedRooms = false
+    @State private var roomNavigationBlockedUntil = Date.distantPast
     var body: some View {
         NavigationStack(path: $path) {
             ZStack {
@@ -233,7 +234,9 @@ struct HomeView: View {
                                 .exclusively(before: TapGesture().onEnded {
                                     if isSelectingRooms, canSelect {
                                         toggleRoomSelection(room.id)
-                                    } else if !isSelectingRooms { path.append(room) }
+                                    } else if !isSelectingRooms, Date() >= roomNavigationBlockedUntil {
+                                        path.append(room)
+                                    }
                                 })
                         )
                 }
@@ -261,9 +264,11 @@ struct HomeView: View {
                     RoomPreviewOverlay(room: room, canDelete: room.owner == session.profile?.userId, canSelectAll: rooms.contains { $0.owner == session.profile?.userId && $0.id != room.id }, close: {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { previewedRoom = nil }
                     }, selectAll: {
+                        blockRoomNavigation()
                         selectedRoomIDs = Set(rooms.filter { $0.owner == session.profile?.userId }.map(\.id))
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { isSelectingRooms = true; previewedRoom = nil }
                     }) {
+                        blockRoomNavigation()
                         try? await session.api.deleteRoom(id: room.id)
                         rooms.removeAll { $0.id == room.id }
                         saveRoomsCache()
@@ -314,7 +319,26 @@ struct HomeView: View {
             .accessibilityAction { cancelRoomSelection() }
             Text("Выбрано: \(selectedRoomIDs.count)").font(.subheadline.weight(.semibold))
             Spacer()
-            Button(role: .destructive) { showBulkDeleteConfirmation = true } label: { Label("Удалить", systemImage: "trash").font(.subheadline.weight(.semibold)).padding(.horizontal, 12).frame(height: 36).liquidCard(Capsule()) }.buttonStyle(.plain).disabled(selectedRoomIDs.isEmpty || isDeletingSelectedRooms)
+            Label("Удалить", systemImage: "trash")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 12)
+                .frame(height: 42)
+                .liquidCard(Capsule())
+                .foregroundStyle(.red)
+                .opacity(selectedRoomIDs.isEmpty || isDeletingSelectedRooms ? 0.42 : 1)
+                .contentShape(Rectangle())
+                .highPriorityGesture(TapGesture().onEnded {
+                    guard !selectedRoomIDs.isEmpty, !isDeletingSelectedRooms else { return }
+                    blockRoomNavigation()
+                    showBulkDeleteConfirmation = true
+                })
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction {
+                    guard !selectedRoomIDs.isEmpty, !isDeletingSelectedRooms else { return }
+                    blockRoomNavigation()
+                    showBulkDeleteConfirmation = true
+                }
         }
         .padding(9)
         .liquidCard(RoundedRectangle(cornerRadius: 19, style: .continuous))
@@ -328,6 +352,7 @@ struct HomeView: View {
     }
     private func cancelRoomSelection() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        blockRoomNavigation()
         withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
             showBulkDeleteConfirmation = false
             selectedRoomIDs.removeAll()
@@ -336,6 +361,7 @@ struct HomeView: View {
         }
     }
     private func deleteSelectedRooms() async {
+        blockRoomNavigation()
         isDeletingSelectedRooms = true
         let ids = selectedRoomIDs
         for id in ids { try? await session.api.deleteRoom(id: id) }
@@ -344,6 +370,9 @@ struct HomeView: View {
         selectedRoomIDs = []
         isSelectingRooms = false
         isDeletingSelectedRooms = false
+    }
+    private func blockRoomNavigation() {
+        roomNavigationBlockedUntil = Date().addingTimeInterval(0.8)
     }
 }
 
@@ -747,16 +776,25 @@ private struct RoomPreviewOverlay: View {
                     .buttonStyle(.bordered)
                     .liquidCard(Capsule())
                 }
-                Button(role: .destructive) {
-                    Task { deleting = true; await delete(); deleting = false }
-                } label: {
-                    Label(deleting ? "Удаление…" : "Удалить комнату", systemImage: "trash")
-                        .frame(maxWidth: .infinity).padding(.vertical, 6)
-                }
-                .disabled(deleting)
-                .buttonStyle(.bordered)
-                .tint(.red)
+                Label(deleting ? "Удаление…" : "Удалить комнату", systemImage: "trash")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .foregroundStyle(.red)
                 .liquidCard(Capsule())
+                .opacity(deleting ? 0.42 : 1)
+                .contentShape(Rectangle())
+                .highPriorityGesture(TapGesture().onEnded {
+                    guard !deleting else { return }
+                    deleting = true
+                    Task { await delete(); deleting = false }
+                })
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction {
+                    guard !deleting else { return }
+                    deleting = true
+                    Task { await delete(); deleting = false }
+                }
             }
         }
         .padding(16)
