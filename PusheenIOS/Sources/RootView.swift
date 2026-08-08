@@ -2087,7 +2087,7 @@ private struct GenreOnlyCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
-                    .frame(width: 148, height: 148)
+                    .frame(width: 158, height: 158)
                     .frame(maxWidth: .infinity)
                 GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
             }
