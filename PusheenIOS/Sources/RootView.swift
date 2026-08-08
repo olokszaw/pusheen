@@ -243,10 +243,15 @@ struct HomeView: View {
                 .blur(radius: previewedRoom == nil ? 0 : 17)
                 .allowsHitTesting(previewedRoom == nil)
                 if isSelectingRooms {
-                    selectionToolbar
-                        .padding(.horizontal, 18)
-                        .padding(.bottom, 12)
-                        .frame(maxHeight: .infinity, alignment: .bottom)
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        selectionToolbar
+                            .padding(.horizontal, 18)
+                            .padding(.bottom, 12)
+                    }
+                    .zIndex(40)
+                    .allowsHitTesting(true)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 if let room = previewedRoom {
@@ -294,14 +299,19 @@ struct HomeView: View {
     }
     private var selectionToolbar: some View {
         HStack(spacing: 10) {
-            Button { cancelRoomSelection() } label: {
+            ZStack {
                 Image(systemName: "xmark")
                     .font(.subheadline.weight(.bold))
                     .frame(width: 36, height: 36)
                     .liquidCard(Circle())
             }
-            .buttonStyle(.plain)
+            .frame(width: 46, height: 46)
+            .contentShape(Rectangle())
+            .highPriorityGesture(TapGesture().onEnded { cancelRoomSelection() })
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isButton)
             .accessibilityLabel("Отменить выбор")
+            .accessibilityAction { cancelRoomSelection() }
             Text("Выбрано: \(selectedRoomIDs.count)").font(.subheadline.weight(.semibold))
             Spacer()
             Button(role: .destructive) { showBulkDeleteConfirmation = true } label: { Label("Удалить", systemImage: "trash").font(.subheadline.weight(.semibold)).padding(.horizontal, 12).frame(height: 36).liquidCard(Capsule()) }.buttonStyle(.plain).disabled(selectedRoomIDs.isEmpty || isDeletingSelectedRooms)
@@ -318,10 +328,11 @@ struct HomeView: View {
     }
     private func cancelRoomSelection() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        showBulkDeleteConfirmation = false
         withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
+            showBulkDeleteConfirmation = false
             selectedRoomIDs.removeAll()
             isSelectingRooms = false
+            previewedRoom = nil
         }
     }
     private func deleteSelectedRooms() async {
