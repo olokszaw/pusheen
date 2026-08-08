@@ -33,6 +33,7 @@ final class RoomViewModel: ObservableObject {
     private var isFlushingMessages = false
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
+    private var hasAppliedInitialPlaybackState = false
 
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token }
     func setCurrentUserID(_ id: Int?) { currentUserID = id }
@@ -207,7 +208,10 @@ final class RoomViewModel: ObservableObject {
             let stateDate = playbackStateDate(from: event)
             if let stateDate, let latestPlaybackStateAt, stateDate < latestPlaybackStateAt { return }
             if let stateDate { latestPlaybackStateAt = stateDate }
-            isOwner = event["is_owner"] as? Bool ?? false; isPlaying = event["is_playing"] as? Bool ?? false
+            let command = event["command"] as? String ?? "state"
+            let nextIsPlaying = event["is_playing"] as? Bool ?? false
+            isOwner = event["is_owner"] as? Bool ?? false
+            isPlaying = nextIsPlaying
             if let muted = event["is_muted"] as? Bool { isMuted = muted }
             let remote = (event["position_seconds"] as? NSNumber)?.doubleValue ?? 0
             // The creator receives their own broadcast too. Never seek it back to
@@ -215,10 +219,16 @@ final class RoomViewModel: ObservableObject {
             let authoritative = compensatedPosition(remote: remote, isPlaying: isPlaying, event: event)
             // Correct actual drift promptly, but do not chase normal network
             // jitter frame-by-frame. This keeps participants within ~1 sec.
-            if !isOwner && abs(position - authoritative) > 0.85 {
+            // A periodic/reconnect `state` snapshot must not seek an already
+            // playing participant. Quick tunnels can reconnect repeatedly,
+            // which previously produced the 5–10 second rewind loop. Explicit
+            // owner commands and the very first room snapshot remain authoritative.
+            let shouldApplyPosition = !hasAppliedInitialPlaybackState || command != "state" || !nextIsPlaying
+            if !isOwner && shouldApplyPosition && abs(position - authoritative) > 0.85 {
                 player?.seek(to: CMTime(seconds: authoritative, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
                 position = authoritative
             }
+            hasAppliedInitialPlaybackState = true
             // Apply the authoritative play/pause state to every client,
             // including the room creator on the initial socket snapshot.
             // Seeking is still skipped for the creator to avoid the old
