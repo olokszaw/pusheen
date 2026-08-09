@@ -3002,21 +3002,25 @@ private struct ViewingInsightsPager: View {
             .animation(.interactiveSpring(response: 0.36, dampingFraction: 0.88), value: pageHeight)
 
             GeometryReader { proxy in
-                HStack(spacing: 0) {
+                HStack(spacing: 6) {
                     ForEach(pages.indices, id: \.self) { index in
                         Capsule()
-                            .fill(index == page ? Color.primary.opacity(0.78) : Color.white.opacity(0.16))
-                            .frame(width: index == page ? 22 : 9, height: index == page ? 9 : 9)
-                            .scaleEffect(indicatorPressed && index == page ? 1.22 : 1)
-                            .shadow(color: indicatorPressed && index == page ? Color.white.opacity(0.18) : .clear, radius: 7)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .contentShape(Rectangle())
+                            .fill(index == page ? Color.primary.opacity(0.72) : Color.white.opacity(0.16))
+                            .frame(width: index == page ? 20 : 8, height: 8)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .scaleEffect(indicatorPressed ? 1.11 : 1)
+                .shadow(color: indicatorPressed ? Color.white.opacity(0.14) : .clear, radius: 6)
                 .contentShape(Rectangle())
                 .highPriorityGesture(indicatorScrubGesture(width: proxy.size.width))
+                .simultaneousGesture(
+                    SpatialTapGesture().onEnded { value in
+                        updateIndicatorPage(at: value.location.x, width: proxy.size.width)
+                    }
+                )
             }
-            .frame(width: 82, height: 30)
+            .frame(width: 58, height: 30)
             .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.76), value: indicatorPressed)
             .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.80), value: page)
         }
@@ -3033,7 +3037,7 @@ private struct ViewingInsightsPager: View {
                 case .first(true):
                     guard !indicatorPressed else { return }
                     indicatorPressed = true
-                    UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.72)
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.80)
                 case .second(true, let drag):
                     if !indicatorPressed { indicatorPressed = true }
                     guard let drag else { return }
@@ -3057,7 +3061,7 @@ private struct ViewingInsightsPager: View {
         let normalized = min(0.999, max(0, x / width))
         let target = min(pages.count - 1, Int(normalized * CGFloat(pages.count)))
         guard target != page else { return }
-        UISelectionFeedbackGenerator().selectionChanged()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.88)
         withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.82, blendDuration: 0.04)) {
             page = target
         }
