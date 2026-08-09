@@ -3025,8 +3025,77 @@ struct RoomCard: View {
     }
 }
 
+private enum PusheenTab: Hashable { case rooms, friends, profile }
+
 struct PusheenTabs: View {
-    var body: some View { TabView { HomeView().tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }; FriendsGlassView().tabItem { Label("Друзья", systemImage: "person.2.fill") }; ProfileGlassView().tabItem { Label("Профиль", systemImage: "person.crop.circle.fill") } }.tint(.indigo) }
+    @State private var selection: PusheenTab = .rooms
+    @State private var showProfileQuickAction = false
+    @State private var showSettings = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            TabView(selection: $selection) {
+                HomeView().tag(PusheenTab.rooms).tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }
+                FriendsGlassView().tag(PusheenTab.friends).tabItem { Label("Друзья", systemImage: "person.2.fill") }
+                ProfileGlassView().tag(PusheenTab.profile).tabItem { Label("Профиль", systemImage: "person.crop.circle.fill") }
+            }
+            .tint(.indigo)
+            .overlay(alignment: .bottomTrailing) {
+                // Keep the native Liquid Glass tab bar untouched. This clear
+                // interaction layer only adds tap/hold behavior to Profile.
+                Color.clear
+                    .frame(width: proxy.size.width / 3, height: 76)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        LongPressGesture(minimumDuration: 0.42, maximumDistance: 10)
+                            .exclusively(before: TapGesture())
+                            .onEnded { result in
+                                switch result {
+                                case .first(true):
+                                    selection = .profile
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.88)
+                                    withAnimation(.spring(response: 0.32, dampingFraction: 0.80)) {
+                                        showProfileQuickAction = true
+                                    }
+                                case .second:
+                                    selection = .profile
+                                    if showProfileQuickAction {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
+                                            showProfileQuickAction = false
+                                        }
+                                    }
+                                default:
+                                    break
+                                }
+                            }
+                    )
+            }
+            .overlay(alignment: .bottom) {
+                if showProfileQuickAction {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.16)) { showProfileQuickAction = false }
+                        showSettings = true
+                    } label: {
+                        Label("Настройки", systemImage: "gearshape.fill")
+                            .font(.body.weight(.semibold))
+                            .padding(.horizontal, 24)
+                            .frame(height: 54)
+                            .contentShape(Capsule())
+                            .liquidCard(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 82)
+                    .transition(.move(edge: .bottom).combined(with: .scale(scale: 0.9)).combined(with: .opacity))
+                    .zIndex(50)
+                }
+            }
+            .onChange(of: selection) { _, value in
+                guard value != .profile, showProfileQuickAction else { return }
+                withAnimation(.easeOut(duration: 0.16)) { showProfileQuickAction = false }
+            }
+        }
+        .sheet(isPresented: $showSettings) { TelegramStickerSettingsSheet() }
+    }
 }
 
 struct LegacyFriendsGlassView: View {
@@ -3041,37 +3110,19 @@ struct ProfileGlassView: View {
     @State private var edit = false
     @State private var avatarPicker: PhotosPickerItem?
     @State private var friends: [FriendProfile] = []
-    @State private var showSettingsAction = false
-    @State private var showSettings = false
     var body: some View {
         ZStack {
             AcrylicBackground()
             ScrollView {
                 VStack(spacing: 14) {
                     Spacer(minLength: 22)
-                    ZStack(alignment: .bottomTrailing) {
                     PhotosPicker(selection: $avatarPicker, matching: .images) {
                         ZStack(alignment: .bottomTrailing) {
                             AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 112)
                             Image(systemName: "camera.fill").font(.caption.weight(.bold)).padding(8).liquidCard(Circle())
                         }
                     }
-                    .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.82)
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { showSettingsAction = true }
-                    })
                     .onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
-                    if showSettingsAction {
-                        Button {
-                            showSettingsAction = false; showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape.fill").frame(width: 42, height: 42).liquidCard(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .offset(x: 34, y: 8)
-                        .transition(.scale.combined(with: .opacity))
-                    }
-                    }
                     if !edit {
                         VStack(spacing: 3) {
                             Text(session.profile?.nickname ?? "").font(.title2.bold())
@@ -3086,7 +3137,6 @@ struct ProfileGlassView: View {
                 }.padding(20)
             }
         }
-        .sheet(isPresented: $showSettings) { TelegramStickerSettingsSheet() }
         .onAppear {
             Task {
                 await session.refreshViewingStats()
