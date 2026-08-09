@@ -2168,24 +2168,26 @@ private struct ReactionPickerBar: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            LazyHStack(spacing: 6) {
+            LazyHStack(spacing: 4) {
                 ForEach(emojis, id: \.self) { emoji in
                     Button {
                         select(emoji)
                     } label: {
-                        FluentReactionGlyph(emoji: emoji, size: 29)
-                            .frame(width: 38, height: 38)
+                        FluentReactionGlyph(emoji: emoji, size: 23)
+                            .frame(width: 23, height: 23)
+                            .clipped()
+                            .frame(width: 34, height: 34)
                             .background(.white.opacity(0.055), in: Circle())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 7)
         }
         .scrollIndicators(.hidden)
-        .frame(width: 300, height: 54)
+        .frame(width: 282, height: 48)
         .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onAppear { emojis.forEach { FluentEmojiCache.shared.prefetch(in: $0) } }
     }
 }
@@ -3843,6 +3845,11 @@ private struct FluentReactionGlyph: UIViewRepresentable {
         let view = UIImageView()
         view.contentMode = .scaleAspectFit
         view.backgroundColor = .clear
+        view.clipsToBounds = true
+        view.setContentHuggingPriority(.required, for: .horizontal)
+        view.setContentHuggingPriority(.required, for: .vertical)
+        view.setContentCompressionResistancePriority(.required, for: .horizontal)
+        view.setContentCompressionResistancePriority(.required, for: .vertical)
         return view
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIImageView, context: Context) -> CGSize {
