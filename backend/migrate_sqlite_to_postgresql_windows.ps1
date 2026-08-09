@@ -36,7 +36,14 @@ $fixture = Join-Path $backupDirectory "sqlite-export-$stamp.json"
 Copy-Item -LiteralPath $sqlitePath -Destination $sqliteBackup
 
 $sqliteUrl = 'sqlite:///' + ($sqlitePath -replace '\\', '/')
+$oldPythonUtf8 = $env:PYTHONUTF8
+$oldPythonIoEncoding = $env:PYTHONIOENCODING
 try {
+    # Windows may otherwise use CP1251 for dumpdata --output.  User names and
+    # messages can contain combining Unicode characters that CP1251 cannot
+    # encode, so force a UTF-8 export before opening the fixture file.
+    $env:PYTHONUTF8 = '1'
+    $env:PYTHONIOENCODING = 'utf-8'
     $env:DATABASE_URL = $sqliteUrl
     & $venvPython manage.py dumpdata `
         --natural-foreign --natural-primary `
@@ -60,6 +67,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Backend check failed after migration.' }
 } finally {
     $env:DATABASE_URL = $DatabaseUrl
+    $env:PYTHONUTF8 = $oldPythonUtf8
+    $env:PYTHONIOENCODING = $oldPythonIoEncoding
 }
 
 Write-Host 'PostgreSQL migration completed.' -ForegroundColor Green
