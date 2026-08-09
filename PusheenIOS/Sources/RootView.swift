@@ -32,7 +32,11 @@ struct RootView: View {
         }
             .preferredColorScheme(.dark)
             .overlay(alignment: .top) {
-                if let invitation = session.roomInvitationNotice {
+                if let status = session.roomInvitationStatusNotice {
+                    RoomInvitationStatusToast(text: status)
+                        .padding(.horizontal, 18).padding(.top, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity)).zIndex(24)
+                } else if let invitation = session.roomInvitationNotice {
                     RoomInvitationToast(invitation: invitation)
                         .padding(.horizontal, 16)
                         .padding(.top, 10)
@@ -51,6 +55,7 @@ struct RootView: View {
                     .environmentObject(session)
             }
             .animation(.spring(response: 0.4, dampingFraction: 0.82), value: session.roomInvitationNotice?.id)
+            .animation(.spring(response: 0.35, dampingFraction: 0.84), value: session.roomInvitationStatusNotice)
             .animation(.spring(response: 0.38, dampingFraction: 0.84), value: session.friendRequestNotice?.id)
     }
 }
@@ -154,6 +159,18 @@ extension View {
             .scaleEffect(active ? 0.986 : 1)
             .allowsHitTesting(!active)
             .animation(.spring(response: 0.32, dampingFraction: 0.84), value: active)
+    }
+}
+
+private struct RoomInvitationStatusToast: View {
+    let text: String
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.circle")
+            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .padding(.horizontal, 14).padding(.vertical, 11)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.8))
+            .shadow(color: .black.opacity(0.28), radius: 16, y: 8)
     }
 }
 

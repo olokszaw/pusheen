@@ -22,6 +22,7 @@ final class SessionStore: ObservableObject {
     @Published var friendRequestNotice: FriendRequestProfile?
     @Published var roomInvitations: [RoomInvitation] = []
     @Published var roomInvitationNotice: RoomInvitation?
+    @Published var roomInvitationStatusNotice: String?
     @Published var acceptedInvitedRoom: Room?
     @Published var viewingStats: ViewingStats?
     @Published private(set) var isOffline = false
@@ -69,7 +70,7 @@ final class SessionStore: ObservableObject {
     func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
     func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
     func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; saveCachedProfile(); api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startFriendRequestPolling(); startActivityHeartbeat(); Task { if let stats = try? await self.api.viewingStats() { self.viewingStats = stats; self.saveCachedViewingStats() } } }
-    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; roomInvitations = []; roomInvitationNotice = nil; acceptedInvitedRoom = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey) }
+    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; roomInvitations = []; roomInvitationNotice = nil; roomInvitationStatusNotice = nil; acceptedInvitedRoom = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey) }
 
     private static func loadCachedProfile() -> Profile? {
         guard let data = UserDefaults.standard.data(forKey: "pusheen.cached-profile") else { return nil }
@@ -129,6 +130,7 @@ final class SessionStore: ObservableObject {
 
     func respond(to invitation: RoomInvitation, accept: Bool) async {
         do {
+            roomInvitationStatusNotice = nil
             let response = try await api.respondToRoomInvitation(id: invitation.id, accept: accept)
             roomInvitations.removeAll { $0.id == invitation.id }
             if roomInvitationNotice?.id == invitation.id { roomInvitationNotice = nil }
@@ -137,6 +139,11 @@ final class SessionStore: ObservableObject {
         } catch {
             roomInvitations.removeAll { $0.id == invitation.id }
             roomInvitationNotice = nil
+            roomInvitationStatusNotice = error.localizedDescription.isEmpty ? "Приглашение больше недействительно" : error.localizedDescription
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2.4))
+                self?.roomInvitationStatusNotice = nil
+            }
         }
     }
 
