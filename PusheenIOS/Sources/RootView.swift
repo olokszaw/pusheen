@@ -1356,6 +1356,7 @@ struct NativeChatPane: View {
     // it to false, which immediately dismisses the keyboard after any tap.
     @State private var inputFocused = false
     @State private var inputHeight: CGFloat = 38
+    @State private var showPhotoLibrary = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
@@ -1480,24 +1481,31 @@ struct NativeChatPane: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             HStack(alignment: .bottom, spacing: 10) {
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.72)
+                    showPhotoLibrary = true
+                } label: {
                     Image(systemName: "paperclip")
                         .font(.system(size: 21, weight: .semibold))
                         .frame(width: 46, height: 46)
                         .liquidCard(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ImmediateGalleryButtonStyle())
+                .photosPicker(isPresented: $showPhotoLibrary, selection: $selectedPhoto, matching: .images)
                 .disabled(isMuted)
                 .opacity(isMuted ? 0.42 : 1)
                 .onChange(of: selectedPhoto) { _, item in Task { await preparePhoto(item) } }
 
-                Button { showStickerPicker = true } label: {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.72)
+                    showStickerPicker = true
+                } label: {
                     Image(systemName: "face.smiling.inverse")
                         .font(.system(size: 20, weight: .semibold))
                         .frame(width: 42, height: 46)
                         .liquidCard(Circle())
                 }
-                .buttonStyle(.plain).disabled(isMuted).opacity(isMuted ? 0.42 : 1)
+                .buttonStyle(ImmediateGalleryButtonStyle()).disabled(isMuted).opacity(isMuted ? 0.42 : 1)
 
                 HStack(alignment: .bottom, spacing: 7) {
                     PersistentChatTextField(
@@ -1735,17 +1743,21 @@ private struct TelegramStickerPickerSheet: View {
     var body: some View {
         ZStack {
             AcrylicBackground()
-            VStack(spacing: 12) {
-                Capsule().fill(.secondary.opacity(0.55)).frame(width: 38, height: 5).padding(.top, 8)
+            VStack(spacing: 10) {
                 if packs.isEmpty { ContentUnavailableView("Нет наборов", systemImage: "face.smiling", description: Text("Импортируй набор в настройках профиля")) }
                 else {
                     ScrollView(.horizontal) { HStack { ForEach(Array(packs.enumerated()), id: \.element.id) { index, pack in Button(pack.title) { selectedPack = index }.font(.caption.weight(.semibold)).padding(.horizontal, 12).frame(height: 34).liquidCard(Capsule()).buttonStyle(.plain).foregroundStyle(index == selectedPack ? .cyan : .primary) } }.padding(.horizontal, 16) }.scrollIndicators(.hidden)
-                    ScrollView { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: 4), spacing: 9) { ForEach(packs[selectedPack].stickers) { sticker in Button { select(sticker); dismiss() } label: { TelegramStickerThumbnail(sticker: sticker).frame(height: 66).padding(5).passiveLiquidCard(RoundedRectangle(cornerRadius: 15)) }.buttonStyle(.plain) } }.padding(16) }
+                    ScrollView { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 5), spacing: 7) { ForEach(packs[selectedPack].stickers) { sticker in Button { UISelectionFeedbackGenerator().selectionChanged(); select(sticker); dismiss() } label: { TelegramStickerThumbnail(sticker: sticker).frame(height: 54).padding(3) }.buttonStyle(ImmediateGalleryButtonStyle()) } }.padding(.horizontal, 14).padding(.bottom, 12) }
                 }
             }
+            .padding(.top, 12)
         }
         .task { packs = (try? await session.api.stickerPacks()) ?? []; selectedPack = min(selectedPack, max(0, packs.count - 1)) }
-        .presentationDetents([.medium, .large]).presentationBackground(.clear).presentationDragIndicator(.hidden)
+        .presentationDetents([.height(330)])
+        .presentationBackground(.ultraThinMaterial)
+        .presentationCornerRadius(30)
+        .presentationDragIndicator(.visible)
+        .presentationContentInteraction(.scrolls)
     }
 }
 
@@ -2128,6 +2140,9 @@ struct NativeMessageBubble: View, Equatable {
     private var sentTime: String {
         ChatTimestampFormatter.string(from: message.createdAt)
     }
+    private var isStickerMessage: Bool {
+        message.text.isEmpty && message.imageDataURL.lowercased().hasPrefix("data:image/webp;")
+    }
     private var interactiveAvatar: some View {
         AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false)
             .contentShape(Circle())
@@ -2142,6 +2157,7 @@ struct NativeMessageBubble: View, Equatable {
     // naturally until they reach the readable maximum width.
     private var bubbleWidth: CGFloat {
         let reactionWidth: CGFloat = message.reactions.count >= 2 ? 116 : message.reactions.isEmpty ? 0 : 58
+        if isStickerMessage { return max(142, reactionWidth) }
         if !message.imageDataURL.isEmpty { return max(230, reactionWidth) }
         if emojiOnly.count == 1 { return max(72, reactionWidth) }
         if emojiOnly.count == 2 { return max(112, reactionWidth) }
@@ -2202,7 +2218,15 @@ struct NativeMessageBubble: View, Equatable {
                 .buttonStyle(.plain)
             }
             messageContent
-            if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
+            if isStickerMessage {
+                DataURLImage(dataURL: message.imageDataURL, contentMode: .fit)
+                    .frame(width: 132, height: 132)
+            } else if !message.imageDataURL.isEmpty {
+                DataURLImage(dataURL: message.imageDataURL)
+                    .frame(maxWidth: 210, minHeight: 80, maxHeight: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .onTapGesture { }
+            }
             if !sentTime.isEmpty {
                 Text(sentTime)
                     .font(.system(size: 9, weight: .regular))
@@ -2212,11 +2236,11 @@ struct NativeMessageBubble: View, Equatable {
             }
             reactionChips
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
+        .padding(.horizontal, isStickerMessage ? 5 : 9)
+        .padding(.vertical, isStickerMessage ? 3 : 7)
         .frame(width: bubbleWidth, alignment: .leading)
-        .background(isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(0.08)))
+        .background(isStickerMessage ? Color.clear : (isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055)), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(isStickerMessage ? 0 : 0.08)))
         .onLongPressGesture(minimumDuration: 0.44, maximumDistance: 8) { showContext(message) }
         .simultaneousGesture(
             DragGesture(minimumDistance: 16).onEnded { value in
