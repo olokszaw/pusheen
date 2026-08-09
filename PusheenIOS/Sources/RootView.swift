@@ -2835,6 +2835,7 @@ private struct ViewingInsightsPager: View {
     let stats: ViewingStats?
     let friends: [FriendProfile]
     @State private var page = 0
+    @State private var indicatorPressed = false
     @GestureState private var dragTranslation: CGFloat = 0
 
     private var pages: [AnyView] {
@@ -2903,18 +2904,66 @@ private struct ViewingInsightsPager: View {
             .frame(height: pageHeight)
             .animation(.interactiveSpring(response: 0.36, dampingFraction: 0.88), value: pageHeight)
 
-            HStack(spacing: 6) {
-                ForEach(0..<3, id: \.self) { index in
-                    Capsule()
-                        .fill(index == page ? Color.primary.opacity(0.72) : Color.white.opacity(0.16))
-                        .frame(width: index == page ? 20 : 8, height: 8)
-                        .animation(.spring(response: 0.32, dampingFraction: 0.78), value: page)
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    ForEach(pages.indices, id: \.self) { index in
+                        Capsule()
+                            .fill(index == page ? Color.primary.opacity(0.78) : Color.white.opacity(0.16))
+                            .frame(width: index == page ? 22 : 9, height: index == page ? 9 : 9)
+                            .scaleEffect(indicatorPressed && index == page ? 1.22 : 1)
+                            .shadow(color: indicatorPressed && index == page ? Color.white.opacity(0.18) : .clear, radius: 7)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                    }
                 }
+                .contentShape(Rectangle())
+                .highPriorityGesture(indicatorScrubGesture(width: proxy.size.width))
             }
+            .frame(width: 82, height: 30)
+            .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.76), value: indicatorPressed)
+            .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.80), value: page)
         }
         .padding(15)
         .liquidCard(RoundedRectangle(cornerRadius: 26))
         .accessibilityLabel("Страницы статистики")
+    }
+
+    private func indicatorScrubGesture(width: CGFloat) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.22, maximumDistance: 16)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .onChanged { value in
+                switch value {
+                case .first(true):
+                    guard !indicatorPressed else { return }
+                    indicatorPressed = true
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.72)
+                case .second(true, let drag):
+                    if !indicatorPressed { indicatorPressed = true }
+                    guard let drag else { return }
+                    updateIndicatorPage(at: drag.location.x, width: width)
+                default:
+                    break
+                }
+            }
+            .onEnded { value in
+                if case .second(true, let drag) = value, let drag {
+                    updateIndicatorPage(at: drag.location.x, width: width)
+                }
+                withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.8)) {
+                    indicatorPressed = false
+                }
+            }
+    }
+
+    private func updateIndicatorPage(at x: CGFloat, width: CGFloat) {
+        guard width > 0, !pages.isEmpty else { return }
+        let normalized = min(0.999, max(0, x / width))
+        let target = min(pages.count - 1, Int(normalized * CGFloat(pages.count)))
+        guard target != page else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.82, blendDuration: 0.04)) {
+            page = target
+        }
     }
 }
 
