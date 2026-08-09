@@ -1506,17 +1506,24 @@ struct NativeChatPane: View {
         }
         if let selected = contextMessage {
             ContextPreviewGlass(close: { withAnimation { contextMessage = nil } }) {
-                MessageContextPreview(message: selected, isMine: selected.authorId == currentUserID, emojis: quickReactions) { emoji in
-                    react(selected.id, emoji)
-                    withAnimation { contextMessage = nil }
-                } copy: {
-                    UIPasteboard.general.string = selected.text
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
-                    withAnimation { contextMessage = nil }
-                } profile: selected.authorId == currentUserID ? nil : {
-                    openProfile(selected)
-                    withAnimation { contextMessage = nil }
-                }
+                MessageContextPreview(
+                    message: selected,
+                    isMine: selected.authorId == currentUserID,
+                    emojis: quickReactions,
+                    react: { emoji in
+                        react(selected.id, emoji)
+                        withAnimation { contextMessage = nil }
+                    },
+                    copy: {
+                        UIPasteboard.general.string = selected.text
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        withAnimation { contextMessage = nil }
+                    },
+                    profile: selected.authorId == currentUserID ? nil : {
+                        openProfile(selected)
+                        withAnimation { contextMessage = nil }
+                    }
+                )
             }
         }
         }
