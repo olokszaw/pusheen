@@ -1876,39 +1876,66 @@ private struct TelegramStickerKeyboard: View {
 private struct TelegramStickerThumbnail: View {
     @EnvironmentObject private var session: SessionStore
     let sticker: TelegramSticker
-    @State private var mediaDataURL = ""
     @State private var image: UIImage?
     var body: some View {
         Group {
-            if !mediaDataURL.isEmpty {
-                TelegramStickerMedia(dataURL: mediaDataURL)
-            } else if let image {
+            if let image {
                 Image(uiImage: image).resizable().scaledToFit()
             } else {
-                ProgressView().controlSize(.small)
+                ZStack {
+                    Color.white.opacity(0.035)
+                    if sticker.emoji.isEmpty {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(sticker.emoji).font(.system(size: 24))
+                    }
+                }
             }
         }
         .frame(width: 54, height: 54)
         .clipped()
         .task(id: sticker.id) {
-            if sticker.format == "animated",
-               let data = try? await session.api.stickerData(id: sticker.id, preview: false) {
-                mediaDataURL = "data:application/json;base64," + data.base64EncodedString()
-            } else if let data = try? await session.api.stickerData(id: sticker.id, preview: true) {
-                image = UIImage(data: data)
+            if let cached = StickerThumbnailCache.shared.image(for: sticker.id) {
+                image = cached
+                return
+            }
+            // Telegram provides a lightweight, correctly framed WebP preview.
+            // Playing every full Lottie JSON in a scrolling grid saturates the
+            // main thread/GPU and is the source of the picker stutter.
+            if let data = try? await session.api.stickerData(id: sticker.id, preview: true) {
+                let decoded = UIImage(data: data)
+                image = decoded
+                if let decoded { StickerThumbnailCache.shared.insert(decoded, for: sticker.id) }
             }
         }
     }
 }
 
+private final class StickerThumbnailCache {
+    static let shared = StickerThumbnailCache()
+    private let cache = NSCache<NSNumber, UIImage>()
+
+    private init() {
+        cache.countLimit = 240
+        cache.totalCostLimit = 20 * 1_024 * 1_024
+    }
+
+    func image(for id: Int) -> UIImage? { cache.object(forKey: NSNumber(value: id)) }
+    func insert(_ image: UIImage, for id: Int) {
+        let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        cache.setObject(image, forKey: NSNumber(value: id), cost: cost)
+    }
+}
+
 private struct TelegramStickerMedia: View {
     let dataURL: String
+    @State private var isVisible = false
     var body: some View {
         Group {
             if dataURL.lowercased().hasPrefix("data:application/json;") {
-                LottieStickerView(dataURL: dataURL)
+                LottieStickerView(dataURL: dataURL, isPlaying: isVisible)
             } else if dataURL.lowercased().hasPrefix("data:video/") {
-                WebVideoStickerView(dataURL: dataURL)
+                WebVideoStickerView(dataURL: dataURL, isPlaying: isVisible)
             } else {
                 DataURLImage(dataURL: dataURL, contentMode: .fit)
             }
@@ -1916,27 +1943,24 @@ private struct TelegramStickerMedia: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .accessibilityHidden(true)
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false }
     }
 }
 
 private struct LottieStickerView: UIViewRepresentable {
     let dataURL: String
+    let isPlaying: Bool
 
-    func makeUIView(context: Context) -> LottieAnimationView {
-        let view = LottieAnimationView()
-        view.contentMode = .scaleAspectFit
-        view.clipsToBounds = true
-        view.layer.masksToBounds = true
-        view.loopMode = .loop
-        view.backgroundBehavior = .pauseAndRestore
-        view.isUserInteractionEnabled = false
+    func makeUIView(context: Context) -> ContainerView {
+        let view = ContainerView()
         load(into: view, coordinator: context.coordinator)
         return view
     }
 
-    func updateUIView(_ view: LottieAnimationView, context: Context) {
+    func updateUIView(_ view: ContainerView, context: Context) {
         guard context.coordinator.loadedDataURL != dataURL else {
-            if !view.isAnimationPlaying { view.play() }
+            updatePlayback(of: view.animationView)
             return
         }
         load(into: view, coordinator: context.coordinator)
@@ -1944,13 +1968,21 @@ private struct LottieStickerView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    private func load(into view: LottieAnimationView, coordinator: Coordinator) {
+    private func load(into view: ContainerView, coordinator: Coordinator) {
         guard let data = Self.data(from: dataURL),
               let animation = try? LottieAnimation.from(data: data) else { return }
         coordinator.loadedDataURL = dataURL
-        view.animation = animation
-        view.currentProgress = 0
-        view.play()
+        view.animationView.animation = animation
+        view.animationView.currentProgress = 0
+        updatePlayback(of: view.animationView)
+    }
+
+    private func updatePlayback(of view: LottieAnimationView) {
+        if isPlaying {
+            if !view.isAnimationPlaying { view.play() }
+        } else if view.isAnimationPlaying {
+            view.pause()
+        }
     }
 
     private static func data(from dataURL: String) -> Data? {
@@ -1961,10 +1993,39 @@ private struct LottieStickerView: UIViewRepresentable {
     final class Coordinator {
         var loadedDataURL = ""
     }
+
+    final class ContainerView: UIView {
+        let animationView = LottieAnimationView()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            clipsToBounds = true
+            layer.masksToBounds = true
+            animationView.translatesAutoresizingMaskIntoConstraints = false
+            animationView.contentMode = .scaleAspectFit
+            animationView.clipsToBounds = true
+            animationView.layer.masksToBounds = true
+            animationView.loopMode = .loop
+            animationView.backgroundBehavior = .pauseAndRestore
+            animationView.isUserInteractionEnabled = false
+            addSubview(animationView)
+            NSLayoutConstraint.activate([
+                animationView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                animationView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                animationView.topAnchor.constraint(equalTo: topAnchor),
+                animationView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override var intrinsicContentSize: CGSize { .zero }
+    }
 }
 
 private struct WebVideoStickerView: UIViewRepresentable {
     let dataURL: String
+    let isPlaying: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -1983,16 +2044,27 @@ private struct WebVideoStickerView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: WKWebView, context: Context) {
-        guard context.coordinator.loadedDataURL != dataURL else { return }
-        load(into: view, coordinator: context.coordinator)
+        if context.coordinator.loadedDataURL != dataURL {
+            load(into: view, coordinator: context.coordinator)
+        } else {
+            updatePlayback(of: view)
+        }
     }
 
     private func load(into view: WKWebView, coordinator: Coordinator) {
         coordinator.loadedDataURL = dataURL
+        let autoplay = isPlaying ? "autoplay" : ""
         let html = """
-        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}video{width:100%;height:100%;object-fit:contain}</style></head><body><video src="\(dataURL)" autoplay loop muted playsinline></video></body></html>
+        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}video{width:100%;height:100%;object-fit:contain}</style></head><body><video src="\(dataURL)" \(autoplay) loop muted playsinline></video></body></html>
         """
         view.loadHTMLString(html, baseURL: nil)
+    }
+
+    private func updatePlayback(of view: WKWebView) {
+        let command = isPlaying
+            ? "document.querySelector('video')?.play().catch(()=>{});"
+            : "document.querySelector('video')?.pause();"
+        view.evaluateJavaScript(command)
     }
 
     final class Coordinator {
