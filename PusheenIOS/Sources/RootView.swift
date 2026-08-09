@@ -472,6 +472,7 @@ struct CreateRoomSheet: View {
     let created: (Room) -> Void
     @State private var url = ""
     @State private var selectedMovie: PhotosPickerItem?
+    @State private var showsMoviePicker = false
     @State private var movieURL: URL?
     @State private var movieError = ""
     @State private var isPrivate = false
@@ -481,10 +482,14 @@ struct CreateRoomSheet: View {
         Text("Новая комната").font(.title2.bold())
         Text("Вставь ссылку VK Видео, сайта или выбери файл из галереи.").font(.subheadline).foregroundStyle(.secondary)
         TextField("Ссылка на видео", text: $url, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
-        PhotosPicker(selection: $selectedMovie, matching: .videos) {
+        Button {
+            showsMoviePicker = true
+        } label: {
             HStack { Image(systemName: "video.badge.plus"); Text(movieURL == nil ? "Выбрать видео из галереи" : movieURL!.lastPathComponent); Spacer(); if movieURL != nil { Image(systemName: "checkmark.circle.fill").foregroundStyle(.mint) } }
-                .lineLimit(1).padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
+                .lineLimit(1).padding(12).passiveLiquidCard(RoundedRectangle(cornerRadius: 17))
         }
+        .buttonStyle(ImmediateGalleryButtonStyle())
+        .photosPicker(isPresented: $showsMoviePicker, selection: $selectedMovie, matching: .videos)
         .onChange(of: selectedMovie) { _, item in Task { await loadMovie(item) } }
         Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
         if !movieError.isEmpty { Text(movieError).font(.caption).foregroundStyle(.red) }
@@ -535,6 +540,8 @@ struct RoomView: View {
     @State private var isScrubbingPlayer = false
     @State private var isLeavingRoom = false
     @State private var controlsHideTask: Task<Void, Never>?
+    @State private var profilePreview: UserProfileReference?
+    @State private var fullProfile: UserProfileReference?
     private let roomPlayerHeight: CGFloat = 214
     @StateObject private var model: RoomViewModel
     init(room: Room, api: APIClient, token: String) { self.room = room; self.api = api; self.token = token; _model = StateObject(wrappedValue: RoomViewModel(room: room, api: api, token: token)) }
@@ -573,7 +580,13 @@ struct RoomView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                             .zIndex(20)
                     }
-                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardHeight: keyboardHeight, isMuted: model.isMuted, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) })
+                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardHeight: keyboardHeight, isMuted: model.isMuted, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }, previewProfile: { message in
+                        guard message.authorId != session.profile?.userId else { return }
+                        profilePreview = UserProfileReference(message)
+                    }, openProfile: { message in
+                        guard message.authorId != session.profile?.userId else { return }
+                        fullProfile = UserProfileReference(message)
+                    })
                         .frame(maxHeight: .infinity)
                         .layoutPriority(2)
                 }
@@ -635,6 +648,7 @@ struct RoomView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(isLeavingRoom ? .visible : .hidden, for: .tabBar)
+        .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .task { model.setCurrentUserID(session.profile?.userId); await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(members: model.members, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
@@ -883,6 +897,9 @@ struct MembersSheet: View {
     let canModerate: Bool
     let moderate: (RoomMember, String) async -> Void
     @State private var selected: RoomMember?
+    @State private var profilePreview: UserProfileReference?
+    @State private var fullProfile: UserProfileReference?
+    @State private var selectedDetent: PresentationDetent = .medium
     var body: some View {
         ZStack {
             AcrylicBackground()
@@ -890,15 +907,26 @@ struct MembersSheet: View {
                 Text("Участники").font(.title2.bold())
                 ForEach(members) { member in
                     HStack(spacing: 11) {
-                        AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 46)
-                        VStack(alignment: .leading) {
-                            HStack { Text(member.nickname).bold(); if member.isOwner { Image(systemName: "crown.fill").font(.caption).foregroundStyle(.yellow) }; if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
-                            Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 11) {
+                            AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 46)
+                            VStack(alignment: .leading) {
+                                HStack { Text(member.nickname).bold(); if member.isOwner { Image(systemName: "crown.fill").font(.caption).foregroundStyle(.yellow) }; if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
+                                Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard member.userId != currentID else { return }
+                            profilePreview = UserProfileReference(member)
                         }
                         Spacer(); if member.isMuted { Image(systemName: "speaker.slash.fill").font(.caption).foregroundStyle(.orange) }; Circle().fill(member.isOnline ? .green : .gray).frame(width: 8, height: 8)
                     }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 17))
                         .contentShape(RoundedRectangle(cornerRadius: 17))
-                        .onLongPressGesture { guard canModerate && !member.isOwner else { return }; withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { selected = member } }
+                        .onLongPressGesture(minimumDuration: 0.38) {
+                            guard member.userId != currentID else { return }
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.82)
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { selected = member }
+                        }
                 }; Spacer()
             }
             .padding(20)
@@ -912,7 +940,10 @@ struct MembersSheet: View {
                     .contentShape(Rectangle())
                     .onTapGesture { closeModerationMenu() }
                     .transition(.opacity)
-                MemberModerationOverlay(member: member) { action in
+                MemberModerationOverlay(member: member, canModerate: canModerate && !member.isOwner, profile: {
+                    closeModerationMenu()
+                    fullProfile = UserProfileReference(member)
+                }) { action in
                     closeModerationMenu()
                     Task { await moderate(member, action) }
                 }
@@ -921,8 +952,10 @@ struct MembersSheet: View {
                 .zIndex(2)
             }
         }
+        .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .animation(.spring(response: 0.32, dampingFraction: 0.84), value: selected?.id)
-        .presentationDetents([.medium, .large]).presentationBackground(.clear)
+        .onChange(of: fullProfile?.id) { _, value in if value != nil { selectedDetent = .large } }
+        .presentationDetents([.medium, .large], selection: $selectedDetent).presentationBackground(.clear)
     }
 
     private func closeModerationMenu() {
@@ -932,6 +965,8 @@ struct MembersSheet: View {
 
 private struct MemberModerationOverlay: View {
     let member: RoomMember
+    let canModerate: Bool
+    let profile: () -> Void
     let action: (String) -> Void
     var body: some View {
         VStack(spacing: 0) {
@@ -948,13 +983,22 @@ private struct MemberModerationOverlay: View {
             Divider().overlay(.white.opacity(0.08))
 
             VStack(spacing: 0) {
-                moderationButton("speaker.slash.fill", member.isMuted ? "Снять заглушение" : "Заглушить", "mute", color: .orange)
-                menuDivider
-                moderationButton("rectangle.portrait.and.arrow.right", "Выгнать", "kick", color: .primary)
-                menuDivider
-                moderationButton("crown.fill", "Передать управление", "transfer", color: .yellow)
-                menuDivider
-                moderationButton("person.crop.circle.badge.xmark", "Заблокировать", "ban", color: .red)
+                Button(action: profile) {
+                    HStack(spacing: 13) {
+                        Image(systemName: "person.crop.circle").font(.system(size: 17, weight: .semibold)).frame(width: 23)
+                        Text("Профиль").font(.body.weight(.medium)); Spacer()
+                    }.padding(.horizontal, 16).frame(height: 49).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                if canModerate {
+                    menuDivider
+                    moderationButton("speaker.slash.fill", member.isMuted ? "Снять заглушение" : "Заглушить", "mute", color: .orange)
+                    menuDivider
+                    moderationButton("rectangle.portrait.and.arrow.right", "Выгнать", "kick", color: .primary)
+                    menuDivider
+                    moderationButton("crown.fill", "Передать управление", "transfer", color: .yellow)
+                    menuDivider
+                    moderationButton("person.crop.circle.badge.xmark", "Заблокировать", "ban", color: .red)
+                }
             }
         }
         .frame(maxWidth: 340)
@@ -1051,6 +1095,8 @@ struct NativeChatPane: View {
     let isMuted: Bool
     let send: (String, String) -> Void
     let react: (Int, String) -> Void
+    let previewProfile: (ChatMessage) -> Void
+    let openProfile: (ChatMessage) -> Void
     // UIKit owns first-responder state for PersistentChatTextField. Using
     // FocusState without a SwiftUI `.focused` attachment makes SwiftUI reset
     // it to false, which immediately dismisses the keyboard after any tap.
@@ -1078,7 +1124,7 @@ struct NativeChatPane: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             ForEach(messages) { message in
-                                NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions)
+                                NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, previewProfile: previewProfile, openProfile: openProfile)
                                     .equatable()
                                     .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
                                     .id(message.id)
@@ -1334,6 +1380,15 @@ struct NativeChatPane: View {
         unreadPreviewToken = UUID()
         unreadMessageCount = 0
         showsUnreadSender = false
+    }
+}
+
+private struct ImmediateGalleryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 
@@ -1681,6 +1736,8 @@ private struct PersistentChatTextField: UIViewRepresentable {
 
 struct NativeMessageBubble: View, Equatable {
     let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
+    let previewProfile: (ChatMessage) -> Void
+    let openProfile: (ChatMessage) -> Void
     @State private var showsReactionPicker = false
 
     static func == (lhs: NativeMessageBubble, rhs: NativeMessageBubble) -> Bool {
@@ -1694,6 +1751,14 @@ struct NativeMessageBubble: View, Equatable {
     }
     private var sentTime: String {
         ChatTimestampFormatter.string(from: message.createdAt)
+    }
+    private var interactiveAvatar: some View {
+        AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false)
+            .contentShape(Circle())
+            .onTapGesture { previewProfile(message) }
+            .contextMenu {
+                Button("Профиль", systemImage: "person.crop.circle") { openProfile(message) }
+            }
     }
 
     // Measure the actual rendered text instead of assigning broad character
@@ -1804,7 +1869,7 @@ struct NativeMessageBubble: View, Equatable {
             Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
         } else {
             HStack(alignment: .top, spacing: 8) {
-                if !isMine { AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false) }
+                if !isMine { interactiveAvatar }
                 if isMine { Spacer(minLength: 0) }
                 VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
                     Text(message.nickname)
@@ -2065,6 +2130,236 @@ struct AvatarView: View {
         .clipShape(Circle())
         .shadow(color: .black.opacity(0.26), radius: 7, y: 3)
     }
+}
+
+struct UserProfileReference: Identifiable, Hashable {
+    let id: Int
+    let username: String
+    let nickname: String
+    let avatarDataURL: String
+    let isFriend: Bool
+
+    init(id: Int, username: String, nickname: String, avatarDataURL: String, isFriend: Bool = false) {
+        self.id = id
+        self.username = username
+        self.nickname = nickname
+        self.avatarDataURL = avatarDataURL
+        self.isFriend = isFriend
+    }
+    init(_ person: FriendProfile) {
+        self.init(id: person.userId, username: person.username, nickname: person.nickname, avatarDataURL: person.avatarDataURL, isFriend: person.isFriend)
+    }
+    init(_ member: RoomMember) {
+        self.init(id: member.userId, username: member.username, nickname: member.nickname, avatarDataURL: member.avatarDataURL)
+    }
+    init(_ message: ChatMessage) {
+        self.init(id: message.authorId, username: "", nickname: message.nickname, avatarDataURL: message.avatarDataURL)
+    }
+}
+
+private struct UserProfilePresentationModifier: ViewModifier {
+    @Binding var preview: UserProfileReference?
+    @Binding var fullProfile: UserProfileReference?
+
+    func body(content: Content) -> some View {
+        ZStack {
+            content
+                .allowsHitTesting(preview == nil && fullProfile == nil)
+            if let user = preview, fullProfile == nil {
+                Color.black.opacity(0.34)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { closePreview() }
+                    .transition(.opacity)
+                    .zIndex(80)
+                VStack {
+                    Spacer(minLength: 42)
+                    UserProfilePreviewCard(user: user, close: closePreview) {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+                            preview = nil
+                            fullProfile = user
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 16)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(81)
+            }
+            if let user = fullProfile {
+                PublicProfileScreen(user: user) {
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) { fullProfile = nil }
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .zIndex(90)
+            }
+        }
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: preview?.id)
+        .animation(.spring(response: 0.38, dampingFraction: 0.88), value: fullProfile?.id)
+    }
+
+    private func closePreview() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) { preview = nil }
+    }
+}
+
+private extension View {
+    func userProfilePresentation(preview: Binding<UserProfileReference?>, fullProfile: Binding<UserProfileReference?>) -> some View {
+        modifier(UserProfilePresentationModifier(preview: preview, fullProfile: fullProfile))
+    }
+}
+
+private struct UserProfilePreviewCard: View {
+    @EnvironmentObject private var session: SessionStore
+    let user: UserProfileReference
+    let close: () -> Void
+    let openFull: () -> Void
+    @State private var profile: PublicUserProfile?
+    @GestureState private var dragY: CGFloat = 0
+
+    private var shownName: String { profile?.nickname ?? user.nickname }
+    private var shownUsername: String { profile?.username ?? user.username }
+    private var shownAvatar: String { profile?.avatarDataURL ?? user.avatarDataURL }
+
+    var body: some View {
+        VStack(spacing: 13) {
+            Capsule().fill(.white.opacity(0.28)).frame(width: 38, height: 5).padding(.top, 2)
+            AvatarView(dataURL: shownAvatar, name: shownName, size: 84, showsBorder: false)
+            VStack(spacing: 2) {
+                Text(shownName).font(.title3.bold()).lineLimit(1)
+                if !shownUsername.isEmpty { Text("@\(shownUsername)").font(.subheadline).foregroundStyle(.secondary) }
+            }
+            if let stats = profile?.stats {
+                HStack(spacing: 8) {
+                    previewMetric("play.fill", compactDuration(stats.watchedSeconds), "просмотрено")
+                    previewMetric("flame.fill", "\(stats.currentStreakDays ?? 0)", "дней подряд")
+                    previewMetric("film.fill", "\(stats.genres.count)", "жанров")
+                }
+                if !stats.genres.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(stats.genres.prefix(3)) { genre in
+                            Text(genre.name).font(.caption2.weight(.semibold)).lineLimit(1)
+                                .padding(.horizontal, 9).padding(.vertical, 6).liquidCard(Capsule())
+                        }
+                    }
+                }
+            } else if profile?.analyticsVisible == false {
+                Label("Аналитика доступна друзьям", systemImage: "lock.fill")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Button(action: openFull) {
+                Label("Открыть профиль", systemImage: "person.crop.circle")
+                    .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 11)
+            }
+            .buttonStyle(.plain)
+            .liquidCard(Capsule())
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).stroke(.white.opacity(0.16), lineWidth: 0.8))
+        .shadow(color: .black.opacity(0.36), radius: 26, y: 14)
+        .offset(y: max(0, dragY))
+        .gesture(DragGesture(minimumDistance: 8)
+            .updating($dragY) { value, state, _ in if value.translation.height > 0 { state = value.translation.height } }
+            .onEnded { value in if value.translation.height > 78 || value.predictedEndTranslation.height > 150 { close() } })
+        .task(id: user.id) { profile = try? await session.api.publicProfile(userID: user.id) }
+    }
+
+    private func previewMetric(_ icon: String, _ value: String, _ title: String) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: icon).font(.caption).foregroundStyle(.cyan)
+            Text(value).font(.caption.weight(.bold)).lineLimit(1)
+            Text(title).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 8).liquidCard(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct PublicProfileScreen: View {
+    @EnvironmentObject private var session: SessionStore
+    let user: UserProfileReference
+    let close: () -> Void
+    @State private var profile: PublicUserProfile?
+    @State private var loading = true
+    @State private var friendshipBusy = false
+
+    private var shownName: String { profile?.nickname ?? user.nickname }
+    private var shownUsername: String { profile?.username ?? user.username }
+    private var shownAvatar: String { profile?.avatarDataURL ?? user.avatarDataURL }
+
+    var body: some View {
+        ZStack {
+            AcrylicBackground()
+            ScrollView {
+                VStack(spacing: 14) {
+                    HStack {
+                        Button(action: close) { Image(systemName: "xmark").font(.subheadline.bold()).frame(width: 40, height: 40).liquidCard(Circle()) }.buttonStyle(.plain)
+                        Spacer()
+                        Text("Профиль").font(.headline)
+                        Spacer()
+                        Color.clear.frame(width: 40, height: 40)
+                    }
+                    AvatarView(dataURL: shownAvatar, name: shownName, size: 112, showsBorder: false)
+                    VStack(spacing: 3) {
+                        Text(shownName).font(.title2.bold())
+                        if !shownUsername.isEmpty { Text("@\(shownUsername)").foregroundStyle(.secondary) }
+                        Text("Участник Pusheen").font(.caption).foregroundStyle(.secondary).padding(.top, 2)
+                    }
+                    if let loaded = profile, loaded.userId != session.profile?.userId {
+                        Button { Task { await toggleFriend(loaded) } } label: {
+                            Label(loaded.isFriend ? "Удалить из друзей" : "Добавить в друзья", systemImage: loaded.isFriend ? "person.badge.minus" : "person.badge.plus")
+                                .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 9)
+                        }
+                        .buttonStyle(.plain).liquidCard(Capsule()).disabled(friendshipBusy)
+                    }
+                    if let stats = profile?.stats {
+                        HStack(spacing: 9) {
+                            fullMetric("play.rectangle.fill", compactDuration(stats.watchedSeconds), "просмотры")
+                            fullMetric("clock.fill", compactDuration(stats.appSeconds), "в приложении")
+                            fullMetric("film.fill", compactDuration(stats.longestMovieSeconds), "макс. фильм")
+                        }
+                        ViewingInsightsPager(stats: stats, friends: [])
+                    } else if profile?.analyticsVisible == false {
+                        ContentUnavailableView("Статистика скрыта", systemImage: "lock.shield", description: Text("Агрегированная аналитика доступна только подтверждённым друзьям."))
+                            .padding(.vertical, 32).liquidCard(RoundedRectangle(cornerRadius: 25))
+                    } else if loading {
+                        ProgressView().padding(.vertical, 42)
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .task(id: user.id) { await load() }
+    }
+
+    private func fullMetric(_ icon: String, _ value: String, _ title: String) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: icon).foregroundStyle(.cyan)
+            Text(value).font(.caption.weight(.bold)).lineLimit(1)
+            Text(title).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+        }.frame(maxWidth: .infinity).padding(.vertical, 11).liquidCard(RoundedRectangle(cornerRadius: 17))
+    }
+    private func load() async {
+        loading = true
+        profile = try? await session.api.publicProfile(userID: user.id)
+        loading = false
+    }
+    private func toggleFriend(_ loaded: PublicUserProfile) async {
+        guard !friendshipBusy else { return }
+        friendshipBusy = true; defer { friendshipBusy = false }
+        if loaded.isFriend { try? await session.api.removeFriend(username: loaded.username) }
+        else { try? await session.api.addFriend(username: loaded.username) }
+        await load()
+        await session.refreshFriendRequests()
+    }
+}
+
+private func compactDuration(_ seconds: Int) -> String {
+    let hours = seconds / 3_600
+    let minutes = (seconds % 3_600) / 60
+    return hours > 0 ? "\(hours) ч" : "\(minutes) мин"
 }
 
 struct RoomCard: View {
@@ -3250,6 +3545,8 @@ struct FriendsGlassView: View {
     @State private var friends: [FriendProfile] = []
     @State private var results: [FriendProfile] = []
     @State private var requestFilter: FriendRequestFilter?
+    @State private var profilePreview: UserProfileReference?
+    @State private var fullProfile: UserProfileReference?
     @FocusState private var searchFocused: Bool
     var body: some View {
         ZStack { AcrylicBackground()
@@ -3290,6 +3587,8 @@ struct FriendsGlassView: View {
                                 person: person,
                                 showAdd: expanded && !person.isFriend,
                                 pending: session.friendRequests.outgoing.contains { $0.userId == person.userId },
+                                preview: { profilePreview = UserProfileReference(person) },
+                                openProfile: { fullProfile = UserProfileReference(person) },
                                 add: {
                                     try? await session.api.addFriend(username: person.username)
                                     await session.refreshFriendRequests()
@@ -3313,6 +3612,7 @@ struct FriendsGlassView: View {
                 }
             }.padding(20)
         }
+        .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .task { await loadFriends(); await session.refreshFriendRequests() }
         .onChange(of: session.friendRequests) { _, _ in Task { await loadFriends() } }
     }
@@ -3368,6 +3668,8 @@ private struct FriendSwipeRow: View {
     let person: FriendProfile
     let showAdd: Bool
     let pending: Bool
+    let preview: () -> Void
+    let openProfile: () -> Void
     let add: () async -> Void
     let remove: () async -> Void
     @State private var revealed = false
@@ -3442,10 +3744,22 @@ private struct FriendSwipeRow: View {
                 .zIndex(0)
             }
             HStack(spacing: 11) {
-                AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(person.nickname).bold().lineLimit(1)
-                    Text("@\(person.username)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 11) {
+                    AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(person.nickname).bold().lineLimit(1)
+                        Text("@\(person.username)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { preview() }
+                .contextMenu {
+                    Button("Профиль", systemImage: "person.crop.circle") { openProfile() }
+                    if person.isFriend {
+                        Button("Удалить из друзей", systemImage: "person.badge.minus", role: .destructive) { requestDeleteConfirmation() }
+                    } else if !pending {
+                        Button("Добавить в друзья", systemImage: "person.badge.plus") { Task { await add() } }
+                    }
                 }
                 Spacer(minLength: 8)
                 if showAdd {

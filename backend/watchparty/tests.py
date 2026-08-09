@@ -10,7 +10,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from config.asgi import application
-from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute, UserProfile, ViewingActivity
+from .models import ChatMessage, FriendLink, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute, UserProfile, ViewingActivity
 
 
 class RoomApiTests(APITestCase):
@@ -247,7 +247,7 @@ class RoomApiTests(APITestCase):
         self.assertEqual(duplicate.status_code, 409)
         self.assertEqual(invalid.status_code, 400)
 
-    def test_user_can_find_and_add_friend_by_username(self):
+    def test_user_can_find_request_and_confirm_friend_by_username(self):
         UserProfile.objects.create(user=self.owner, nickname="Создатель")
         UserProfile.objects.create(user=self.guest, nickname="Гость")
         self.authenticate(self.owner_token)
@@ -260,8 +260,46 @@ class RoomApiTests(APITestCase):
         self.assertEqual(search.data[0]["username"], "guest")
         self.assertFalse(search.data[0]["is_friend"])
         self.assertEqual(added.status_code, 201)
-        self.assertTrue(added.data["is_friend"])
-        self.assertEqual(friends.data[0]["username"], "guest")
+        self.assertFalse(added.data["is_friend"])
+        self.assertEqual(added.data["status"], "pending")
+        self.assertEqual(friends.data, [])
+
+        self.authenticate(self.guest_token)
+        requests = self.client.get("/api/friends/requests/")
+        accepted = self.client.post(
+            "/api/friends/requests/",
+            {"request_id": requests.data["incoming"][0]["id"], "action": "accept"},
+            format="json",
+        )
+        self.assertEqual(accepted.status_code, 200)
+
+        self.authenticate(self.owner_token)
+        confirmed = self.client.get("/api/friends/")
+        self.assertEqual(confirmed.data[0]["username"], "guest")
+        self.assertTrue(confirmed.data[0]["is_friend"])
+
+    def test_public_profile_hides_analytics_from_non_friend(self):
+        UserProfile.objects.create(user=self.guest, nickname="Guest profile")
+        ViewingActivity.objects.create(user=self.guest, watched_seconds=7200, genre_counts={"Drama": 7200})
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["username"], "guest")
+        self.assertFalse(response.data["analytics_visible"])
+        self.assertIsNone(response.data["stats"])
+
+    def test_confirmed_friend_can_see_aggregate_profile_analytics(self):
+        UserProfile.objects.create(user=self.guest, nickname="Guest profile")
+        ViewingActivity.objects.create(user=self.guest, watched_seconds=7200, genre_counts={"Drama": 7200})
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        FriendLink.objects.create(user=self.guest, friend=self.owner)
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_friend"])
+        self.assertTrue(response.data["analytics_visible"])
+        self.assertEqual(response.data["stats"]["watched_seconds"], 7200)
+        self.assertEqual(response.data["stats"]["genres"][0]["name"], "Drama")
 
     def test_message_history_contains_photo_profile_and_reactions(self):
         profile = UserProfile.objects.create(user=self.owner, nickname="Создатель")

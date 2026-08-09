@@ -172,6 +172,7 @@ final class APIClient {
     func login(username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/login/", method: "POST", body: ["username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
     func register(nickname: String, username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/register/", method: "POST", body: ["nickname": nickname, "username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
     func profile() async throws -> Profile { let data = try await request("/api/profile/"); return try decoder.decode(Profile.self, from: data) }
+    func publicProfile(userID: Int) async throws -> PublicUserProfile { let data = try await request("/api/users/\(userID)/profile/"); return try decoder.decode(PublicUserProfile.self, from: data) }
     func rooms() async throws -> [Room] { let data = try await request("/api/rooms/"); return try decoder.decode([Room].self, from: data) }
     func searchMovies(_ query: String) async throws -> [MovieCatalogItem] {
         var components = URLComponents(string: "https://itunes.apple.com/search")!

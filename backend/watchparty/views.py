@@ -306,6 +306,37 @@ def profile(request):
     return Response(public_profile(request.user))
 
 
+@api_view(["GET"])
+def public_user_profile(request, user_id):
+    """Return a safe public profile and friend-only aggregate analytics.
+
+    Basic identity is visible to authenticated users because it is already
+    shown in rooms and friend search. Viewing analytics never expose raw room
+    history and are available only to the owner or a confirmed friend.
+    """
+    target = get_object_or_404(
+        get_user_model().objects.select_related("watch_profile", "client_identity"),
+        pk=user_id,
+    )
+    is_self = target.pk == request.user.pk
+    is_friend = FriendLink.objects.filter(user=request.user, friend=target).exists()
+    analytics_visible = is_self or is_friend
+    payload = {
+        **public_profile(target),
+        "is_friend": is_friend,
+        "analytics_visible": analytics_visible,
+        "stats": None,
+    }
+    if analytics_visible:
+        activity_obj, _ = ViewingActivity.objects.get_or_create(user=target)
+        current_percent = month_increase_percent(activity_obj.daily_seconds)
+        if activity_obj.month_increase_percent != current_percent:
+            activity_obj.month_increase_percent = current_percent
+            activity_obj.save(update_fields=["month_increase_percent", "updated_at"])
+        payload["stats"] = activity_payload(activity_obj)
+    return Response(payload)
+
+
 def request_profile(friend_request, user):
     return {"id": friend_request.id, **public_profile(user)}
 
