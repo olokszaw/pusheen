@@ -1,17 +1,22 @@
 import mimetypes
 import os
 import re
+import json
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.conf import settings
-from django.http import HttpResponse, StreamingHttpResponse
+from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.utils.html import escape
 from django.utils import timezone
 from rest_framework import generics, status
@@ -36,6 +41,8 @@ from .models import (
     UserProfile,
     UserPresence,
     ViewingActivity,
+    TelegramSticker,
+    TelegramStickerPack,
 )
 from .permissions import IsRoomOwner
 from .serializers import (
@@ -45,6 +52,46 @@ from .serializers import (
     RoomSerializer,
     public_profile,
 )
+
+
+def _telegram_api(method, token, **params):
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    if params:
+        url += "?" + urlencode(params)
+    try:
+        with urlopen(Request(url, headers={"User-Agent": "Pusheen/1.0"}), timeout=15) as response:
+            payload = json.load(response)
+    except (HTTPError, URLError, TimeoutError, ValueError) as error:
+        raise ValueError("Telegram API недоступен") from error
+    if not payload.get("ok"):
+        raise ValueError(payload.get("description") or "Telegram отклонил набор")
+    return payload["result"]
+
+
+def _download_telegram_file(token, file_id):
+    info = _telegram_api("getFile", token, file_id=file_id)
+    path = info.get("file_path")
+    if not path:
+        raise ValueError("Telegram не вернул файл стикера")
+    url = f"https://api.telegram.org/file/bot{token}/{path}"
+    try:
+        with urlopen(Request(url, headers={"User-Agent": "Pusheen/1.0"}), timeout=20) as response:
+            data = response.read(3_000_001)
+    except (HTTPError, URLError, TimeoutError) as error:
+        raise ValueError("Не удалось загрузить файл стикера") from error
+    if len(data) > 3_000_000:
+        raise ValueError("Файл стикера слишком большой")
+    return data, os.path.splitext(path)[1] or ".webp"
+
+
+def sticker_payload(sticker):
+    return {
+        "id": sticker.id,
+        "emoji": sticker.emoji,
+        "format": sticker.format,
+        "file_url": f"/api/stickers/{sticker.id}/file/",
+        "preview_url": f"/api/stickers/{sticker.id}/preview/" if sticker.preview else f"/api/stickers/{sticker.id}/file/",
+    }
 from .video_stream import resolve_media_stream
 
 
@@ -449,6 +496,10 @@ def friend_requests(request):
 
     request_id = request.data.get("request_id")
     action = request.data.get("action")
+    if action == "cancel":
+        invite = get_object_or_404(FriendRequest, pk=request_id, sender=request.user)
+        invite.delete()
+        return Response({"status": "cancelled"})
     invite = get_object_or_404(FriendRequest, pk=request_id, recipient=request.user)
     if action == "accept":
         with transaction.atomic():
@@ -460,6 +511,61 @@ def friend_requests(request):
         invite.delete()
         return Response({"status": "declined"})
     return Response({"detail": "Unknown action"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["GET", "POST"])
+def telegram_sticker_packs(request):
+    if request.method == "GET":
+        packs = TelegramStickerPack.objects.filter(user=request.user).prefetch_related("stickers")
+        return Response([
+            {"id": pack.id, "short_name": pack.short_name, "title": pack.title,
+             "stickers": [sticker_payload(item) for item in pack.stickers.all()]}
+            for pack in packs
+        ])
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return Response({"detail": "На сервере не настроен TELEGRAM_BOT_TOKEN"}, status=503)
+    link = str(request.data.get("url") or "").strip()
+    match = re.fullmatch(r"https?://(?:t\.me|telegram\.me)/addstickers/([A-Za-z0-9_]{1,80})/?", link)
+    if not match:
+        return Response({"detail": "Нужна ссылка вида https://t.me/addstickers/name"}, status=400)
+    short_name = match.group(1)
+    try:
+        source = _telegram_api("getStickerSet", token, name=short_name)
+        with transaction.atomic():
+            pack, _ = TelegramStickerPack.objects.get_or_create(
+                user=request.user, short_name=short_name,
+                defaults={"title": source.get("title") or short_name},
+            )
+            pack.title = source.get("title") or short_name
+            pack.save(update_fields=["title"])
+            pack.stickers.all().delete()
+            for index, item in enumerate(source.get("stickers", [])[:120]):
+                data, extension = _download_telegram_file(token, item["file_id"])
+                format_name = "video" if item.get("is_video") else "animated" if item.get("is_animated") else "static"
+                sticker = TelegramSticker(
+                    pack=pack, telegram_file_id=item["file_id"], emoji=item.get("emoji", ""),
+                    format=format_name, order=index,
+                )
+                sticker.file.save(f"{item.get('file_unique_id', index)}{extension}", ContentFile(data), save=False)
+                thumbnail = item.get("thumbnail")
+                if thumbnail and thumbnail.get("file_id"):
+                    preview_data, preview_ext = _download_telegram_file(token, thumbnail["file_id"])
+                    sticker.preview.save(f"{item.get('file_unique_id', index)}-preview{preview_ext}", ContentFile(preview_data), save=False)
+                sticker.save()
+    except ValueError as error:
+        return Response({"detail": str(error)}, status=502)
+    pack = TelegramStickerPack.objects.prefetch_related("stickers").get(pk=pack.pk)
+    return Response({"id": pack.id, "short_name": pack.short_name, "title": pack.title, "stickers": [sticker_payload(item) for item in pack.stickers.all()]}, status=201)
+
+
+@api_view(["GET"])
+def telegram_sticker_file(request, sticker_id, preview=False):
+    sticker = get_object_or_404(TelegramSticker, pk=sticker_id)
+    stored = sticker.preview if preview and sticker.preview else sticker.file
+    response = FileResponse(stored.open("rb"), content_type=mimetypes.guess_type(stored.name)[0] or "application/octet-stream")
+    response["Cache-Control"] = "private, max-age=86400"
+    return response
 
 
 def room_invitation_payload(invitation):
@@ -910,15 +1016,21 @@ def room_messages(request, room_id):
         if not text and not image_data_url:
             return Response({"detail": "Message is empty"}, status=400)
         client_message_id = str(request.data.get("client_message_id") or "").strip()[:64]
+        reply_to = None
+        if request.data.get("reply_to_id"):
+            reply_to = get_object_or_404(
+                ChatMessage, id=request.data.get("reply_to_id"), room=room
+            )
         # Persist before fan-out: a socket reconnect must never lose chat.
         if client_message_id:
             message, created = ChatMessage.objects.get_or_create(
                 room=room, user=request.user, client_message_id=client_message_id,
-                defaults={"text": text, "image_data_url": image_data_url},
+                defaults={"text": text, "image_data_url": image_data_url, "reply_to": reply_to},
             )
         else:
             message = ChatMessage.objects.create(
-                room=room, user=request.user, text=text, image_data_url=image_data_url
+                room=room, user=request.user, text=text, image_data_url=image_data_url,
+                reply_to=reply_to,
             )
             created = True
         payload = ChatMessageSerializer(message, context={"request": request}).data
@@ -929,7 +1041,10 @@ def room_messages(request, room_id):
         return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
     messages = list(
         ChatMessage.objects.filter(room=room)
-        .select_related("user", "user__watch_profile", "user__client_identity")
+        .select_related(
+            "user", "user__watch_profile", "user__client_identity",
+            "reply_to", "reply_to__user", "reply_to__user__watch_profile",
+        )
         .prefetch_related("reactions")
         .order_by("-created_at")[:100]
     )

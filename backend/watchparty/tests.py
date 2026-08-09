@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone as datetime_timezone
 
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
+from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
@@ -10,7 +11,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from config.asgi import application
-from .models import ChatMessage, FriendLink, MessageReaction, PlaybackState, Room, RoomBan, RoomInvitation, RoomMember, RoomMute, UserPresence, UserProfile, ViewingActivity
+from .models import ChatMessage, FriendLink, FriendRequest, MessageReaction, PlaybackState, Room, RoomBan, RoomInvitation, RoomMember, RoomMute, UserPresence, UserProfile, ViewingActivity
 
 
 class RoomApiTests(APITestCase):
@@ -49,6 +50,45 @@ class RoomApiTests(APITestCase):
         self.assertEqual(retry.status_code, 200)
         self.assertEqual(first.data["id"], retry.data["id"])
         self.assertEqual(ChatMessage.objects.filter(room=room).count(), 1)
+
+    def test_reply_is_persisted_and_visible_to_every_member(self):
+        room = Room.objects.create(owner=self.owner, title="Reply chat")
+        RoomMember.objects.create(room=room, user=self.owner)
+        RoomMember.objects.create(room=room, user=self.guest)
+        original = ChatMessage.objects.create(room=room, user=self.guest, text="original")
+        self.authenticate(self.owner_token)
+        posted = self.client.post(
+            f"/api/rooms/{room.id}/messages/",
+            {"text": "answer", "reply_to_id": original.id}, format="json",
+        )
+        self.assertEqual(posted.status_code, 201, posted.data)
+        self.assertEqual(posted.data["reply_to"]["id"], original.id)
+        self.authenticate(self.guest_token)
+        history = self.client.get(f"/api/rooms/{room.id}/messages/")
+        self.assertEqual(history.data[-1]["reply_to"]["text"], "original")
+
+    def test_reply_cannot_reference_another_room(self):
+        room = Room.objects.create(owner=self.owner, title="Current")
+        other = Room.objects.create(owner=self.owner, title="Other")
+        RoomMember.objects.create(room=room, user=self.owner)
+        foreign = ChatMessage.objects.create(room=other, user=self.owner, text="private")
+        self.authenticate(self.owner_token)
+        response = self.client.post(
+            f"/api/rooms/{room.id}/messages/",
+            {"text": "bad", "reply_to_id": foreign.id}, format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_room_presence_expires_even_if_connection_counter_is_stale(self):
+        room = Room.objects.create(owner=self.owner, title="Presence")
+        member = RoomMember.objects.create(
+            room=room, user=self.owner, active_connections=9,
+            last_heartbeat_at=timezone.now() - timedelta(seconds=25),
+        )
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/rooms/{room.id}/members/")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data[0]["is_online"])
 
     def test_message_history_is_ordered_by_server_timestamp(self):
         room = Room.objects.create(owner=self.owner, title="Ordered chat")
@@ -277,6 +317,18 @@ class RoomApiTests(APITestCase):
         confirmed = self.client.get("/api/friends/")
         self.assertEqual(confirmed.data[0]["username"], "guest")
         self.assertTrue(confirmed.data[0]["is_friend"])
+
+    def test_sender_can_cancel_outgoing_friend_request(self):
+        invite = FriendRequest.objects.create(sender=self.owner, recipient=self.guest)
+        self.authenticate(self.owner_token)
+        response = self.client.post(
+            "/api/friends/requests/",
+            {"request_id": invite.id, "action": "cancel"}, format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(FriendRequest.objects.filter(pk=invite.id).exists())
+        self.authenticate(self.guest_token)
+        self.assertEqual(self.client.get("/api/friends/requests/").data["incoming"], [])
 
     def test_public_profile_hides_analytics_from_non_friend(self):
         UserProfile.objects.create(user=self.guest, nickname="Guest profile")

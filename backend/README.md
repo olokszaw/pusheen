@@ -7,9 +7,13 @@ cd C:\Users\luiin\OneDrive\Desktop\rave\backend
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+$env:TELEGRAM_BOT_TOKEN='123456:telegram-bot-token'
 python manage.py migrate
 .\run_backend_windows.ps1
 ```
+
+`TELEGRAM_BOT_TOKEN` нужен только серверу для официальных Bot API методов
+`getStickerSet`/`getFile`. Не добавляйте его в Swift-код, Info.plist или IPA.
 
 For the public Cloudflare quick tunnel, leave the backend running and open a
 second PowerShell window:

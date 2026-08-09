@@ -1,10 +1,11 @@
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.db import transaction
-from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute
+from django.utils import timezone as django_timezone
+from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute, UserPresence
 
 
 class RoomConsumer(AsyncJsonWebsocketConsumer):
@@ -46,6 +47,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         self.last_heartbeat = time.monotonic()
         event = content.get("type")
         if event == "heartbeat":
+            await self.mark_heartbeat()
             await self.send_json({"type": "heartbeat_ack"})
         elif event == "request_state":
             await self.send_json({"type": "playback_state", **await self.current_state()})
@@ -56,6 +58,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 content.get("text", ""),
                 content.get("image_data_url", ""),
                 content.get("client_message_id", ""),
+                content.get("reply_to_id"),
             )
         elif event == "message_reaction":
             await self.toggle_reaction(content.get("message_id"), content.get("emoji", ""))
@@ -97,7 +100,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             }
         )
 
-    async def broadcast_chat(self, text, image_data_url, client_message_id=""):
+    async def broadcast_chat(self, text, image_data_url, client_message_id="", reply_to_id=None):
         if await self.is_muted():
             await self.send_json({"type": "error", "code": "muted", "detail": "Вы не можете писать в этой комнате"})
             return
@@ -107,7 +110,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "error", "detail": "Изображение слишком большое"})
             return
         if text or image_data_url:
-            message, created = await self.save_chat(text, image_data_url, client_message_id)
+            message, created = await self.save_chat(text, image_data_url, client_message_id, reply_to_id)
             if created:
                 await self.channel_layer.group_send(
                     self.group_name,
@@ -192,14 +195,17 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         return {"room_id": room.id, "command": action, "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
 
     @database_sync_to_async
-    def save_chat(self, text, image_data_url, client_message_id):
+    def save_chat(self, text, image_data_url, client_message_id, reply_to_id):
         client_message_id = str(client_message_id or "").strip()[:64]
+        reply_to = None
+        if reply_to_id:
+            reply_to = ChatMessage.objects.filter(id=reply_to_id, room_id=self.room_id).first()
         if client_message_id:
             message, created = ChatMessage.objects.get_or_create(
                 room_id=self.room_id,
                 user=self.scope["user"],
                 client_message_id=client_message_id,
-                defaults={"text": text, "image_data_url": image_data_url},
+                defaults={"text": text, "image_data_url": image_data_url, "reply_to": reply_to},
             )
         else:
             message = ChatMessage.objects.create(
@@ -207,6 +213,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 user=self.scope["user"],
                 text=text,
                 image_data_url=image_data_url,
+                reply_to=reply_to,
             )
             created = True
         profile = getattr(self.scope["user"], "watch_profile", None)
@@ -220,6 +227,13 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             "text": text,
             "image_data_url": image_data_url,
             "reactions": [],
+            "reply_to": ({
+                "id": reply_to.id,
+                "author_id": reply_to.user_id,
+                "nickname": getattr(getattr(reply_to.user, "watch_profile", None), "nickname", reply_to.user.username),
+                "text": reply_to.text,
+                "has_image": bool(reply_to.image_data_url),
+            } if reply_to else None),
             "created_at": message.created_at.isoformat(),
         }, created
 
@@ -263,9 +277,19 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             member = RoomMember.objects.select_for_update().select_related("user", "room").get(
                 room_id=self.room_id, user=self.scope["user"]
             )
-            was_offline = member.active_connections == 0
+            was_offline = (
+                member.active_connections == 0
+                or not member.last_heartbeat_at
+                or member.last_heartbeat_at < django_timezone.now() - timedelta(seconds=24)
+            )
+            if was_offline:
+                # A dead process/socket can leave the diagnostic counter stale.
+                # TTL is authoritative, so start a fresh generation here.
+                member.active_connections = 0
             member.active_connections += 1
-            member.save(update_fields=["active_connections"])
+            member.last_heartbeat_at = django_timezone.now()
+            member.save(update_fields=["active_connections", "last_heartbeat_at"])
+            UserPresence.objects.update_or_create(user=member.user, defaults={"last_seen": django_timezone.now()})
             profile = getattr(member.user, "watch_profile", None)
             identity = getattr(member.user, "client_identity", None)
             return {
@@ -288,7 +312,13 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             except RoomMember.DoesNotExist:
                 return None
             member.active_connections = max(0, member.active_connections - 1)
-            member.save(update_fields=["active_connections"])
+            member.last_heartbeat_at = (
+                django_timezone.now()
+                if member.active_connections > 0
+                else django_timezone.now() - timedelta(seconds=25)
+            )
+            member.save(update_fields=["active_connections", "last_heartbeat_at"])
+            UserPresence.objects.update_or_create(user=member.user, defaults={"last_seen": django_timezone.now()})
             profile = getattr(member.user, "watch_profile", None)
             identity = getattr(member.user, "client_identity", None)
             return {
@@ -300,3 +330,27 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 "is_online": member.active_connections > 0,
                 "changed": member.active_connections == 0,
             }
+
+    @database_sync_to_async
+    def mark_heartbeat(self):
+        try:
+            member = RoomMember.objects.select_related("user", "room").get(
+                room_id=self.room_id, user=self.scope["user"]
+            )
+        except RoomMember.DoesNotExist:
+            return None
+        was_stale = not member.last_heartbeat_at or member.last_heartbeat_at < django_timezone.now() - timedelta(seconds=24)
+        member.last_heartbeat_at = django_timezone.now()
+        member.save(update_fields=["last_heartbeat_at"])
+        UserPresence.objects.update_or_create(user=member.user, defaults={"last_seen": django_timezone.now()})
+        profile = getattr(member.user, "watch_profile", None)
+        identity = getattr(member.user, "client_identity", None)
+        return {
+            "user_id": member.user_id,
+            "username": member.user.username,
+            "nickname": profile.nickname if profile else member.user.username,
+            "avatar_data_url": profile.avatar_data_url if profile and profile.avatar_data_url else getattr(identity, "avatar_data_url", ""),
+            "is_owner": member.room.owner_id == member.user_id,
+            "is_online": True,
+            "changed": was_stale,
+        }

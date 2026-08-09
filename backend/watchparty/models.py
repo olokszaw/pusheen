@@ -50,6 +50,7 @@ class RoomMember(models.Model):
     joined_at = models.DateTimeField(auto_now_add=True)
     is_muted = models.BooleanField(default=False)
     active_connections = models.PositiveSmallIntegerField(default=0)
+    last_heartbeat_at = models.DateTimeField(null=True, blank=True, db_index=True)
     class Meta:
         unique_together = ("room", "user")
 
@@ -207,6 +208,33 @@ class RoomInvitation(models.Model):
         ]
 
 
+class TelegramStickerPack(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="telegram_sticker_packs")
+    short_name = models.CharField(max_length=80)
+    title = models.CharField(max_length=120)
+    imported_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("user", "short_name"), name="unique_user_telegram_sticker_pack")]
+
+
+class TelegramSticker(models.Model):
+    STATIC = "static"
+    ANIMATED = "animated"
+    VIDEO = "video"
+    pack = models.ForeignKey(TelegramStickerPack, on_delete=models.CASCADE, related_name="stickers")
+    telegram_file_id = models.CharField(max_length=180)
+    emoji = models.CharField(max_length=32, blank=True, default="")
+    format = models.CharField(max_length=12, default=STATIC)
+    file = models.FileField(upload_to="telegram-stickers/%Y/%m/")
+    preview = models.FileField(upload_to="telegram-stickers/previews/%Y/%m/", blank=True, null=True)
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ("order", "id")
+        constraints = [models.UniqueConstraint(fields=("pack", "telegram_file_id"), name="unique_pack_telegram_sticker")]
+
+
 class ViewingActivity(models.Model):
     """Aggregated private viewing statistics for one profile."""
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="viewing_activity")
@@ -239,6 +267,9 @@ class ChatMessage(models.Model):
     text = models.CharField(max_length=500, blank=True)
     image_data_url = models.TextField(blank=True, default="")
     client_message_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    reply_to = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="replies"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -119,6 +119,11 @@ final class SessionStore: ObservableObject {
         await refreshFriendRequests()
     }
 
+    func cancel(_ request: FriendRequestProfile) async {
+        guard (try? await api.cancelFriendRequest(id: request.id)) != nil else { return }
+        await refreshFriendRequests()
+    }
+
     func refreshRoomInvitations() async {
         guard authenticationState == .signedIn, let invitations = try? await api.roomInvitations() else { return }
         roomInvitations = invitations
@@ -216,8 +221,10 @@ final class APIClient {
         return try decoder.decode(MovieCatalogResponse.self, from: data).results.filter { $0.kind == "feature-movie" }
     }
     func messages(roomID: Int) async throws -> [ChatMessage] { let data = try await request("/api/rooms/\(roomID)/messages/"); return try decoder.decode([ChatMessage].self, from: data) }
-    func sendMessage(roomID: Int, text: String, image: String = "", clientMessageID: String) async throws -> ChatMessage {
-        let data = try await request("/api/rooms/\(roomID)/messages/", method: "POST", body: ["text": text, "image_data_url": image, "client_message_id": clientMessageID])
+    func sendMessage(roomID: Int, text: String, image: String = "", clientMessageID: String, replyToID: Int? = nil) async throws -> ChatMessage {
+        var body: [String: Any] = ["text": text, "image_data_url": image, "client_message_id": clientMessageID]
+        if let replyToID { body["reply_to_id"] = replyToID }
+        let data = try await request("/api/rooms/\(roomID)/messages/", method: "POST", body: body)
         return try decoder.decode(ChatMessage.self, from: data)
     }
     func members(roomID: Int) async throws -> [RoomMember] { let data = try await request("/api/rooms/\(roomID)/members/"); return try decoder.decode([RoomMember].self, from: data) }
@@ -284,5 +291,9 @@ final class APIClient {
         return try decoder.decode(ViewingStats.self, from: data)
     }
     func respondToFriendRequest(id: Int, accept: Bool) async throws { _ = try await request("/api/friends/requests/", method: "POST", body: ["request_id": id, "action": accept ? "accept" : "decline"]) }
+    func cancelFriendRequest(id: Int) async throws { _ = try await request("/api/friends/requests/", method: "POST", body: ["request_id": id, "action": "cancel"]) }
+    func stickerPacks() async throws -> [TelegramStickerPack] { let data = try await request("/api/sticker-packs/"); return try decoder.decode([TelegramStickerPack].self, from: data) }
+    func importStickerPack(url: String) async throws -> TelegramStickerPack { let data = try await request("/api/sticker-packs/", method: "POST", body: ["url": url]); return try decoder.decode(TelegramStickerPack.self, from: data) }
+    func stickerData(id: Int, preview: Bool = true) async throws -> Data { try await request("/api/stickers/\(id)/\(preview ? "preview" : "file")/") }
     func updateProfile(nickname: String? = nil, username: String? = nil, avatar: String? = nil) async throws -> Profile { var body: [String: Any] = [:]; if let nickname { body["nickname"] = nickname }; if let username { body["username"] = username }; if let avatar { body["avatar_data_url"] = avatar }; let data = try await request("/api/profile/", method: "PATCH", body: body); return try decoder.decode(Profile.self, from: data) }
 }

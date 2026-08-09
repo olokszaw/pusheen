@@ -8,6 +8,7 @@ final class RoomViewModel: ObservableObject {
         let localMessageID: Int
         let text: String
         let image: String
+        let replyTo: ChatReplyPreview?
     }
     @Published var player: AVPlayer?
     @Published var messages: [ChatMessage] = []
@@ -169,18 +170,18 @@ final class RoomViewModel: ObservableObject {
     }
     func toggle() { guard isOwner else { return }; let next = !isPlaying; if next { player?.play() } else { player?.pause() }; isPlaying = next; socket.playback(action: next ? "play" : "pause", isPlaying: next, position: position) }
     func seek(_ value: Double) { guard isOwner else { return }; player?.seek(to: CMTime(seconds: value, preferredTimescale: 600)); position = value; socket.playback(action: "seek", isPlaying: isPlaying, position: value) }
-    func send(_ text: String, as profile: Profile?) { send(text: text, image: "", as: profile) }
-    func send(text: String, image: String, as profile: Profile?) {
+    func send(_ text: String, as profile: Profile?) { send(text: text, image: "", replyTo: nil, as: profile) }
+    func send(text: String, image: String, replyTo: ChatReplyPreview? = nil, as profile: Profile?) {
         guard !isMuted else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !image.isEmpty else { return }
         // Render immediately; the server confirmation replaces this temporary
         // message with its permanent id a moment later.
         let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
         if let profile {
-            messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], createdAt: ISO8601DateFormatter().string(from: Date())))
+            messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], replyTo: replyTo, createdAt: ISO8601DateFormatter().string(from: Date())))
         }
         let pendingID = UUID().uuidString
-        pendingMessages.append(PendingChatMessage(id: pendingID, localMessageID: localID, text: text, image: image))
+        pendingMessages.append(PendingChatMessage(id: pendingID, localMessageID: localID, text: text, image: image, replyTo: replyTo))
         // A single FIFO HTTP outbox is the source of truth for send order.
         // The server broadcasts each persisted row to all WebSocket listeners.
         Task { [weak self] in
@@ -364,7 +365,8 @@ final class RoomViewModel: ObservableObject {
                     roomID: room.id,
                     text: pending.text,
                     image: pending.image,
-                    clientMessageID: pending.id
+                    clientMessageID: pending.id,
+                    replyToID: pending.replyTo?.id
                 )
                 pendingMessages.removeAll { $0.id == pending.id }
                 confirmPersistedMessage(persisted, for: pending)

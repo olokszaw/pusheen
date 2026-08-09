@@ -55,9 +55,22 @@ struct ChatReaction: Codable, Hashable, Identifiable {
     var id: String { emoji }
 }
 
+struct ChatReplyPreview: Codable, Hashable, Identifiable {
+    let id: Int
+    let authorId: Int
+    let nickname: String
+    let text: String
+    let hasImage: Bool
+    enum CodingKeys: String, CodingKey {
+        case id, nickname, text
+        case authorId = "author_id"
+        case hasImage = "has_image"
+    }
+}
+
 struct ChatMessage: Codable, Identifiable, Hashable {
-    let id: Int; let authorId: Int; let nickname: String; let text: String; let imageDataURL: String; let avatarDataURL: String; var reactions: [ChatReaction]; var createdAt: String? = nil; var isSystem: Bool = false
-    enum CodingKeys: String, CodingKey { case id, nickname, text, reactions; case authorId = "author_id"; case imageDataURL = "image_data_url"; case avatarDataURL = "avatar_data_url"; case createdAt = "created_at" }
+    let id: Int; let authorId: Int; let nickname: String; let text: String; let imageDataURL: String; let avatarDataURL: String; var reactions: [ChatReaction]; var replyTo: ChatReplyPreview? = nil; var createdAt: String? = nil; var isSystem: Bool = false
+    enum CodingKeys: String, CodingKey { case id, nickname, text, reactions; case authorId = "author_id"; case imageDataURL = "image_data_url"; case avatarDataURL = "avatar_data_url"; case replyTo = "reply_to"; case createdAt = "created_at" }
 }
 
 struct RoomMember: Codable, Identifiable, Hashable {
@@ -225,4 +238,21 @@ struct FriendRequestProfile: Codable, Identifiable, Hashable {
 struct FriendRequestsResponse: Codable, Hashable {
     let incoming: [FriendRequestProfile]
     let outgoing: [FriendRequestProfile]
+}
+
+struct TelegramSticker: Codable, Identifiable, Hashable {
+    let id: Int
+    let emoji: String
+    let format: String
+    let fileURL: String
+    let previewURL: String
+    enum CodingKeys: String, CodingKey { case id, emoji, format; case fileURL = "file_url"; case previewURL = "preview_url" }
+}
+
+struct TelegramStickerPack: Codable, Identifiable, Hashable {
+    let id: Int
+    let shortName: String
+    let title: String
+    let stickers: [TelegramSticker]
+    enum CodingKeys: String, CodingKey { case id, title, stickers; case shortName = "short_name" }
 }

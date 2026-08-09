@@ -582,6 +582,7 @@ struct CreateRoomSheet: View {
     @State private var url = ""
     @State private var selectedMovie: PhotosPickerItem?
     @State private var showsMoviePicker = false
+    @State private var showsFilePicker = false
     @State private var movieURL: URL?
     @State private var movieError = ""
     @State private var isPrivate = false
@@ -600,6 +601,21 @@ struct CreateRoomSheet: View {
         .buttonStyle(ImmediateGalleryButtonStyle())
         .photosPicker(isPresented: $showsMoviePicker, selection: $selectedMovie, matching: .videos)
         .onChange(of: selectedMovie) { _, item in Task { await loadMovie(item) } }
+        Button { showsFilePicker = true } label: {
+            HStack { Image(systemName: "folder"); Text("Выбрать видео из файлов"); Spacer() }
+                .padding(12).passiveLiquidCard(RoundedRectangle(cornerRadius: 17))
+        }
+        .buttonStyle(ImmediateGalleryButtonStyle())
+        .fileImporter(isPresented: $showsFilePicker, allowedContentTypes: [.movie], allowsMultipleSelection: false) { result in
+            do {
+                guard let source = try result.get().first else { return }
+                let accessed = source.startAccessingSecurityScopedResource()
+                defer { if accessed { source.stopAccessingSecurityScopedResource() } }
+                let copy = URL.temporaryDirectory.appendingPathComponent("pusheen-file-\(UUID().uuidString)").appendingPathExtension(source.pathExtension.isEmpty ? "mp4" : source.pathExtension)
+                try FileManager.default.copyItem(at: source, to: copy)
+                movieURL = copy; movieError = ""; url = ""
+            } catch { movieError = "Не удалось получить видео из файлов" }
+        }
         Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
         if !movieError.isEmpty { Text(movieError).font(.caption).foregroundStyle(.red) }
         if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
@@ -689,7 +705,7 @@ struct RoomView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                             .zIndex(20)
                     }
-                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardHeight: keyboardHeight, isMuted: model.isMuted, send: { text, image in model.send(text: text, image: image, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }, previewProfile: { message in
+                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardHeight: keyboardHeight, isMuted: model.isMuted, send: { text, image, reply in model.send(text: text, image: image, replyTo: reply, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }, previewProfile: { message in
                         guard message.authorId != session.profile?.userId else { return }
                         profilePreview = UserProfileReference(message)
                     }, openProfile: { message in
@@ -1324,13 +1340,14 @@ struct PlaybackScrubber: View {
 }
 
 struct NativeChatPane: View {
+    @EnvironmentObject private var session: SessionStore
     let messages: [ChatMessage]
     let currentUserID: Int?
     @Binding var draft: String
     @Binding var focused: Bool
     let keyboardHeight: CGFloat
     let isMuted: Bool
-    let send: (String, String) -> Void
+    let send: (String, String, ChatReplyPreview?) -> Void
     let react: (Int, String) -> Void
     let previewProfile: (ChatMessage) -> Void
     let openProfile: (ChatMessage) -> Void
@@ -1350,6 +1367,9 @@ struct NativeChatPane: View {
     @State private var showsUnreadSender = false
     @State private var unreadPreviewToken = UUID()
     @State private var contextMessage: ChatMessage?
+    @State private var replyingTo: ChatReplyPreview?
+    @State private var requestedMessageID: Int?
+    @State private var showStickerPicker = false
     private let quickReactions = [
         "👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨",
         "🥰", "🤣", "😍", "🤔", "😎", "🥳", "😡", "💀", "💯", "👎",
@@ -1363,7 +1383,7 @@ struct NativeChatPane: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             ForEach(messages) { message in
-                                NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, previewProfile: previewProfile, openProfile: openProfile, showContext: { selected in
+                                NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, previewProfile: previewProfile, openProfile: openProfile, reply: beginReply, jumpToMessage: { requestedMessageID = $0 }, showContext: { selected in
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.84)
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { contextMessage = selected }
                                 })
@@ -1413,6 +1433,11 @@ struct NativeChatPane: View {
                         guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
                         DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
                     }
+                    .onChange(of: requestedMessageID) { _, messageID in
+                        guard let messageID else { return }
+                        withAnimation(.easeOut(duration: 0.24)) { proxy.scrollTo(messageID, anchor: .center) }
+                        requestedMessageID = nil
+                    }
                     .onAppear {
                         guard !didInitialScroll, messages.last != nil else { return }
                         DispatchQueue.main.async {
@@ -1439,6 +1464,21 @@ struct NativeChatPane: View {
                 .animation(.spring(response: 0.32, dampingFraction: 0.82), value: unreadMessageCount > 0)
             }
             .frame(maxHeight: .infinity)
+            VStack(spacing: 7) {
+            if let reply = replyingTo {
+                HStack(spacing: 9) {
+                    Capsule().fill(.cyan.opacity(0.76)).frame(width: 3, height: 30)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(reply.nickname).font(.caption.weight(.semibold)).foregroundStyle(.cyan)
+                        Text(reply.text.isEmpty ? "Изображение" : reply.text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button { withAnimation(.easeOut(duration: 0.16)) { replyingTo = nil } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .liquidCard(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             HStack(alignment: .bottom, spacing: 10) {
                 PhotosPicker(selection: $selectedPhoto, matching: .images) {
                     Image(systemName: "paperclip")
@@ -1450,6 +1490,14 @@ struct NativeChatPane: View {
                 .disabled(isMuted)
                 .opacity(isMuted ? 0.42 : 1)
                 .onChange(of: selectedPhoto) { _, item in Task { await preparePhoto(item) } }
+
+                Button { showStickerPicker = true } label: {
+                    Image(systemName: "face.smiling.inverse")
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 42, height: 46)
+                        .liquidCard(Circle())
+                }
+                .buttonStyle(.plain).disabled(isMuted).opacity(isMuted ? 0.42 : 1)
 
                 HStack(alignment: .bottom, spacing: 7) {
                     PersistentChatTextField(
@@ -1477,6 +1525,7 @@ struct NativeChatPane: View {
                 .padding(.trailing, 8)
                 .padding(.vertical, 6)
                 .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
+            }
             }
             // Keep the composer in the unified chat surface.  The old negative
             // offset could make it protrude beyond the lower rounded edge.
@@ -1517,8 +1566,22 @@ struct NativeChatPane: View {
             } send: { editedDataURL in
                 sticksToBottom = true
                 forceScrollOnNextMessage = true
-                send("", editedDataURL)
+                send("", editedDataURL, replyingTo)
+                replyingTo = nil
                 pendingPhoto = nil
+            }
+        }
+        .sheet(isPresented: $showStickerPicker) {
+            TelegramStickerPickerSheet { sticker in
+                Task {
+                    guard let data = try? await session.api.stickerData(id: sticker.id, preview: sticker.format != "static") else { return }
+                    let mime = sticker.format == "static" ? "image/webp" : "image/webp"
+                    let dataURL = "data:\(mime);base64," + data.base64EncodedString()
+                    await MainActor.run {
+                        sticksToBottom = true; forceScrollOnNextMessage = true
+                        send("", dataURL, replyingTo); replyingTo = nil; showStickerPicker = false
+                    }
+                }
             }
         }
         }
@@ -1541,6 +1604,10 @@ struct NativeChatPane: View {
                             UINotificationFeedbackGenerator().notificationOccurred(.success)
                             withAnimation { contextMessage = nil }
                         },
+                        reply: {
+                            beginReply(selected)
+                            withAnimation { contextMessage = nil }
+                        },
                         close: { withAnimation { contextMessage = nil } }
                     )
                 }
@@ -1552,7 +1619,8 @@ struct NativeChatPane: View {
         guard !text.isEmpty else { return }
         sticksToBottom = true
         forceScrollOnNextMessage = true
-        send(text, "")
+        send(text, "", replyingTo)
+        replyingTo = nil
         draft = ""
     }
     private func preparePhoto(_ item: PhotosPickerItem?) async {
@@ -1591,6 +1659,13 @@ struct NativeChatPane: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) { proxy.scrollTo(lastID, anchor: .bottom) }
         }
+    }
+    private func beginReply(_ message: ChatMessage) {
+        guard !message.isSystem, message.id > 0 else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.82)
+        replyingTo = ChatReplyPreview(id: message.id, authorId: message.authorId, nickname: message.nickname, text: message.text, hasImage: !message.imageDataURL.isEmpty)
+        inputFocused = true
+        focused = true
     }
     private var unreadMessagesIndicator: some View {
         HStack(spacing: 8) {
@@ -1649,6 +1724,36 @@ struct NativeChatPane: View {
         unreadMessageCount = 0
         showsUnreadSender = false
     }
+}
+
+private struct TelegramStickerPickerSheet: View {
+    @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    let select: (TelegramSticker) -> Void
+    @State private var packs: [TelegramStickerPack] = []
+    @State private var selectedPack = 0
+    var body: some View {
+        ZStack {
+            AcrylicBackground()
+            VStack(spacing: 12) {
+                Capsule().fill(.secondary.opacity(0.55)).frame(width: 38, height: 5).padding(.top, 8)
+                if packs.isEmpty { ContentUnavailableView("Нет наборов", systemImage: "face.smiling", description: Text("Импортируй набор в настройках профиля")) }
+                else {
+                    ScrollView(.horizontal) { HStack { ForEach(Array(packs.enumerated()), id: \.element.id) { index, pack in Button(pack.title) { selectedPack = index }.font(.caption.weight(.semibold)).padding(.horizontal, 12).frame(height: 34).liquidCard(Capsule()).buttonStyle(.plain).foregroundStyle(index == selectedPack ? .cyan : .primary) } }.padding(.horizontal, 16) }.scrollIndicators(.hidden)
+                    ScrollView { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: 4), spacing: 9) { ForEach(packs[selectedPack].stickers) { sticker in Button { select(sticker); dismiss() } label: { TelegramStickerThumbnail(sticker: sticker).frame(height: 66).padding(5).passiveLiquidCard(RoundedRectangle(cornerRadius: 15)) }.buttonStyle(.plain) } }.padding(16) }
+                }
+            }
+        }
+        .task { packs = (try? await session.api.stickerPacks()) ?? []; selectedPack = min(selectedPack, max(0, packs.count - 1)) }
+        .presentationDetents([.medium, .large]).presentationBackground(.clear).presentationDragIndicator(.hidden)
+    }
+}
+
+private struct TelegramStickerThumbnail: View {
+    @EnvironmentObject private var session: SessionStore
+    let sticker: TelegramSticker
+    @State private var image: UIImage?
+    var body: some View { Group { if let image { Image(uiImage: image).resizable().scaledToFit() } else { ProgressView().controlSize(.small) } }.task(id: sticker.id) { if let data = try? await session.api.stickerData(id: sticker.id, preview: true) { image = UIImage(data: data) } } }
 }
 
 private struct ImmediateGalleryButtonStyle: ButtonStyle {
@@ -2006,6 +2111,8 @@ struct NativeMessageBubble: View, Equatable {
     let message: ChatMessage; let isMine: Bool; let react: (Int, String) -> Void; let quickReactions: [String]
     let previewProfile: (ChatMessage) -> Void
     let openProfile: (ChatMessage) -> Void
+    let reply: (ChatMessage) -> Void
+    let jumpToMessage: (Int) -> Void
     let showContext: (ChatMessage) -> Void
     var reportsAnchor = true
 
@@ -2044,7 +2151,7 @@ struct NativeMessageBubble: View, Equatable {
         let timeFont = UIFont.systemFont(ofSize: 9, weight: .regular)
         let measuredTime = ceil((sentTime as NSString).size(withAttributes: [.font: timeFont]).width)
         let naturalWidth = min(238, max(54, max(measuredText, measuredTime) + 18))
-        return max(naturalWidth, reactionWidth)
+        return max(naturalWidth, reactionWidth, message.replyTo == nil ? 0 : 154)
     }
     private var emojiOnly: [String] {
         let characters = message.text.filter { !$0.isWhitespace }
@@ -2079,6 +2186,21 @@ struct NativeMessageBubble: View, Equatable {
     }
     @ViewBuilder private var bubble: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if let original = message.replyTo {
+                Button { jumpToMessage(original.id) } label: {
+                    HStack(spacing: 7) {
+                        Capsule().fill(.cyan.opacity(0.78)).frame(width: 3, height: 29)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(original.nickname).font(.caption2.weight(.semibold)).foregroundStyle(.cyan)
+                            Text(original.text.isEmpty ? "Изображение" : original.text).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(6)
+                    .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
             messageContent
             if !message.imageDataURL.isEmpty { DataURLImage(dataURL: message.imageDataURL).frame(maxWidth: 210, minHeight: 80, maxHeight: 150).clipShape(RoundedRectangle(cornerRadius: 12)).onTapGesture { } }
             if !sentTime.isEmpty {
@@ -2096,6 +2218,13 @@ struct NativeMessageBubble: View, Equatable {
         .background(isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(0.08)))
         .onLongPressGesture(minimumDuration: 0.44, maximumDistance: 8) { showContext(message) }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 16).onEnded { value in
+                guard value.translation.width > 52,
+                      abs(value.translation.width) > abs(value.translation.height) * 1.35 else { return }
+                reply(message)
+            }
+        )
     }
 
     @ViewBuilder private var reactionChips: some View {
@@ -2416,6 +2545,7 @@ private struct MessageAnchoredContextOverlay: View {
     let emojis: [String]
     let react: (String) -> Void
     let copy: () -> Void
+    let reply: () -> Void
     let close: () -> Void
 
     private var controlsX: CGFloat {
@@ -2447,6 +2577,8 @@ private struct MessageAnchoredContextOverlay: View {
                 quickReactions: emojis,
                 previewProfile: { _ in },
                 openProfile: { _ in },
+                reply: { _ in reply() },
+                jumpToMessage: { _ in },
                 showContext: { _ in },
                 reportsAnchor: false
             )
@@ -2455,17 +2587,26 @@ private struct MessageAnchoredContextOverlay: View {
             .shadow(color: .black.opacity(0.42), radius: 18, y: 10)
             .position(x: frame.midX, y: frame.midY)
 
-            if !message.text.isEmpty {
-                Button(action: copy) {
-                    Label("Скопировать", systemImage: "doc.on.doc")
+            HStack(spacing: 8) {
+                Button(action: reply) {
+                    Label("Ответить", systemImage: "arrowshape.turn.up.left")
                         .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 16).frame(height: 44)
+                        .padding(.horizontal, 13).frame(height: 44)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.15), lineWidth: 0.8))
                 }
-                .buttonStyle(.plain)
-                .position(x: controlsX, y: copyY)
+                if !message.text.isEmpty {
+                    Button(action: copy) {
+                        Label("Скопировать", systemImage: "doc.on.doc")
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 13).frame(height: 44)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.15), lineWidth: 0.8))
+                    }
+                }
             }
+            .buttonStyle(.plain)
+            .position(x: controlsX, y: copyY)
         }
         .transition(.opacity)
     }
@@ -2858,8 +2999,13 @@ private func presenceText(isOnline: Bool?, lastSeen: String?, visible: Bool?) ->
     if minutes < 2 { return "Был(а) недавно" }
     if minutes < 60 { return "Был(а) \(minutes) мин. назад" }
     let hours = minutes / 60
-    if hours < 24 { return "Был(а) \(hours) ч. назад" }
-    return "Был(а) недавно"
+    if hours < 6 { return "Был(а) \(hours) ч. назад" }
+    let calendar = Calendar.autoupdatingCurrent
+    let time = DateFormatter(); time.locale = .autoupdatingCurrent; time.timeStyle = .short; time.dateStyle = .none
+    if calendar.isDateInToday(date) { return "Был(а) сегодня в \(time.string(from: date))" }
+    if calendar.isDateInYesterday(date) { return "Был(а) вчера в \(time.string(from: date))" }
+    let full = DateFormatter(); full.locale = .autoupdatingCurrent; full.setLocalizedDateFormatFromTemplate("d MMM HH:mm")
+    return "Был(а) \(full.string(from: date))"
 }
 
 private func compactDuration(_ seconds: Int) -> String {
@@ -2895,18 +3041,37 @@ struct ProfileGlassView: View {
     @State private var edit = false
     @State private var avatarPicker: PhotosPickerItem?
     @State private var friends: [FriendProfile] = []
+    @State private var showSettingsAction = false
+    @State private var showSettings = false
     var body: some View {
         ZStack {
             AcrylicBackground()
             ScrollView {
                 VStack(spacing: 14) {
                     Spacer(minLength: 22)
+                    ZStack(alignment: .bottomTrailing) {
                     PhotosPicker(selection: $avatarPicker, matching: .images) {
                         ZStack(alignment: .bottomTrailing) {
                             AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 112)
                             Image(systemName: "camera.fill").font(.caption.weight(.bold)).padding(8).liquidCard(Circle())
                         }
-                    }.onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
+                    }
+                    .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.82)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { showSettingsAction = true }
+                    })
+                    .onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
+                    if showSettingsAction {
+                        Button {
+                            showSettingsAction = false; showSettings = true
+                        } label: {
+                            Image(systemName: "gearshape.fill").frame(width: 42, height: 42).liquidCard(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 34, y: 8)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+                    }
                     if !edit {
                         VStack(spacing: 3) {
                             Text(session.profile?.nickname ?? "").font(.title2.bold())
@@ -2920,7 +3085,9 @@ struct ProfileGlassView: View {
                     Button("Выйти") { session.logout() }.buttonStyle(.bordered).tint(.red).padding(.top, 8)
                 }.padding(20)
             }
-        }.onAppear {
+        }
+        .sheet(isPresented: $showSettings) { TelegramStickerSettingsSheet() }
+        .onAppear {
             Task {
                 await session.refreshViewingStats()
                 friends = (try? await session.api.friends()) ?? []
@@ -3067,6 +3234,38 @@ private struct ViewingInsightsPager: View {
         withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.82, blendDuration: 0.04)) {
             page = target
         }
+    }
+}
+
+private struct TelegramStickerSettingsSheet: View {
+    @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var link = ""
+    @State private var loading = false
+    @State private var statusText = ""
+    var body: some View {
+        ZStack {
+            AcrylicBackground()
+            VStack(alignment: .leading, spacing: 15) {
+                HStack { Text("Настройки").font(.title2.bold()); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
+                Label("Импортировать стикеры из Telegram", systemImage: "paperplane.fill").font(.headline)
+                TextField("https://t.me/addstickers/...", text: $link)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .padding(12).liquidCard(RoundedRectangle(cornerRadius: 16))
+                Button { Task { await importPack() } } label: {
+                    HStack { if loading { ProgressView().controlSize(.small) }; Text("Импортировать"); Spacer(); Image(systemName: "square.and.arrow.down") }
+                        .frame(height: 44).padding(.horizontal, 13).liquidCard(RoundedRectangle(cornerRadius: 17))
+                }.buttonStyle(.plain).disabled(loading || link.isEmpty)
+                if !statusText.isEmpty { Text(statusText).font(.caption).foregroundStyle(statusText.hasPrefix("Готово") ? .mint : .red) }
+                Spacer()
+            }.padding(20)
+        }
+        .presentationDetents([.medium, .large]).presentationDragIndicator(.visible).presentationBackground(.clear)
+    }
+    private func importPack() async {
+        loading = true; defer { loading = false }
+        do { let pack = try await session.api.importStickerPack(url: link.trimmingCharacters(in: .whitespacesAndNewlines)); statusText = "Готово: \(pack.title)" }
+        catch { statusText = error.localizedDescription }
     }
 }
 
@@ -4181,7 +4380,9 @@ struct FriendsGlassView: View {
                             }
                         }
                         if !session.friendRequests.outgoing.isEmpty && requestFilter == .outgoing {
-                            FriendRequestSection(title: "Отправленные", requests: session.friendRequests.outgoing, incoming: false) { _, _ in }
+                            FriendRequestSection(title: "Отправленные", requests: session.friendRequests.outgoing, incoming: false) { request, _ in
+                                await session.cancel(request)
+                            }
                         }
                         if requestFilter == nil {
                             ForEach(expanded && !query.isEmpty ? results : friends) { person in
@@ -4504,7 +4705,15 @@ private struct FriendRequestSection: View {
                     if incoming {
                         Button { Task { await action(request, true) } } label: { Image(systemName: "checkmark").frame(width: 32, height: 32) }.buttonStyle(.plain).liquidCard(Circle())
                         Button { Task { await action(request, false) } } label: { Image(systemName: "xmark").frame(width: 32, height: 32) }.buttonStyle(.plain).liquidCard(Circle())
-                    } else { Text("Отправлено").font(.caption.weight(.medium)).foregroundStyle(.secondary) }
+                    } else {
+                        Button { Task { await action(request, false) } } label: {
+                            Label("Отменить", systemImage: "xmark")
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 10).frame(height: 32)
+                        }
+                        .buttonStyle(.plain)
+                        .liquidCard(Capsule())
+                    }
                 }.padding(10).liquidCard(RoundedRectangle(cornerRadius: 19))
             }
         }

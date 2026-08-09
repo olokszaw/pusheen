@@ -1,3 +1,5 @@
+from datetime import timedelta
+from django.utils import timezone
 from rest_framework import serializers
 
 from .media_sources import detect_media_source, validate_media_url
@@ -108,7 +110,10 @@ class RoomMemberSerializer(serializers.ModelSerializer):
         return member.room.owner_id == member.user_id
 
     def get_is_online(self, member):
-        return member.active_connections > 0
+        return bool(
+            member.last_heartbeat_at
+            and member.last_heartbeat_at >= timezone.now() - timedelta(seconds=24)
+        )
 
     def get_is_muted(self, member):
         # A mute survives membership recreation, therefore this separate
@@ -122,13 +127,26 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     nickname = serializers.SerializerMethodField()
     avatar_data_url = serializers.SerializerMethodField()
     reactions = serializers.SerializerMethodField()
+    reply_to = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatMessage
         fields = (
             "id", "author_id", "author", "nickname", "avatar_data_url",
-            "text", "image_data_url", "reactions", "created_at",
+            "text", "image_data_url", "reactions", "reply_to", "created_at",
         )
+
+    def get_reply_to(self, message):
+        original = message.reply_to
+        if not original:
+            return None
+        return {
+            "id": original.id,
+            "author_id": original.user_id,
+            "nickname": public_profile(original.user)["nickname"],
+            "text": original.text,
+            "has_image": bool(original.image_data_url),
+        }
 
     def get_nickname(self, message):
         return public_profile(message.user)["nickname"]

@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import RoomDetailView, RoomListCreateView, account_login, activity, demo_login, friend_requests, friends, invite_room_friends, join_room, moderate_member, profile, public_user_profile, register, respond_room_invitation, room_invitations, room_members, room_messages, room_stream, room_uploaded_media, room_upload_video, username_available
+from .views import RoomDetailView, RoomListCreateView, account_login, activity, demo_login, friend_requests, friends, invite_room_friends, join_room, moderate_member, profile, public_user_profile, register, respond_room_invitation, room_invitations, room_members, room_messages, room_stream, room_uploaded_media, room_upload_video, username_available, telegram_sticker_packs, telegram_sticker_file
 
 urlpatterns = [
     path("auth/demo-login/", demo_login),
@@ -11,6 +11,9 @@ urlpatterns = [
     path("activity/", activity),
     path("friends/", friends),
     path("friends/requests/", friend_requests),
+    path("sticker-packs/", telegram_sticker_packs),
+    path("stickers/<int:sticker_id>/file/", telegram_sticker_file),
+    path("stickers/<int:sticker_id>/preview/", lambda request, sticker_id: telegram_sticker_file(request, sticker_id, preview=True)),
     path("room-invitations/", room_invitations),
     path("room-invitations/<int:invitation_id>/", respond_room_invitation),
     path("rooms/", RoomListCreateView.as_view()),
