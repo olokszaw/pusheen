@@ -8,6 +8,7 @@ from channels.layers import get_channel_layer
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.conf import settings
 from django.http import HttpResponse, StreamingHttpResponse
@@ -319,7 +320,13 @@ def public_user_profile(request, user_id):
         pk=user_id,
     )
     is_self = target.pk == request.user.pk
-    is_friend = FriendLink.objects.filter(user=request.user, friend=target).exists()
+    # New friendships create two directional rows.  Earlier builds could
+    # leave only one row behind, though, so treat either direction as the same
+    # confirmed relationship when deciding whether aggregated insights may be
+    # shown.  This keeps existing friends from seeing an empty profile.
+    is_friend = FriendLink.objects.filter(
+        Q(user=request.user, friend=target) | Q(user=target, friend=request.user)
+    ).exists()
     analytics_visible = is_self or is_friend
     payload = {
         **public_profile(target),

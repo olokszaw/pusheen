@@ -2283,6 +2283,7 @@ private struct PublicProfileScreen: View {
     let close: () -> Void
     @State private var profile: PublicUserProfile?
     @State private var loading = true
+    @State private var loadError: String?
     @State private var friendshipBusy = false
 
     private var shownName: String { profile?.nickname ?? user.nickname }
@@ -2326,6 +2327,15 @@ private struct PublicProfileScreen: View {
                             .padding(.vertical, 32).liquidCard(RoundedRectangle(cornerRadius: 25))
                     } else if loading {
                         ProgressView().padding(.vertical, 42)
+                    } else if let loadError {
+                        VStack(spacing: 12) {
+                            ContentUnavailableView("Не удалось загрузить профиль", systemImage: "wifi.exclamationmark", description: Text(loadError))
+                            Button("Повторить") { Task { await load() } }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 16).padding(.vertical, 9)
+                                .liquidCard(Capsule())
+                        }
+                        .padding(.vertical, 32).liquidCard(RoundedRectangle(cornerRadius: 25))
                     }
                 }
                 .padding(20)
@@ -2343,7 +2353,13 @@ private struct PublicProfileScreen: View {
     }
     private func load() async {
         loading = true
-        profile = try? await session.api.publicProfile(userID: user.id)
+        loadError = nil
+        do {
+            profile = try await session.api.publicProfile(userID: user.id)
+        } catch {
+            profile = nil
+            loadError = error.localizedDescription
+        }
         loading = false
     }
     private func toggleFriend(_ loaded: PublicUserProfile) async {

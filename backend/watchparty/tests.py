@@ -301,6 +301,18 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.data["stats"]["watched_seconds"], 7200)
         self.assertEqual(response.data["stats"]["genres"][0]["name"], "Drama")
 
+    def test_legacy_one_way_friend_link_can_see_aggregate_profile_analytics(self):
+        UserProfile.objects.create(user=self.guest, nickname="Guest profile")
+        ViewingActivity.objects.create(user=self.guest, watched_seconds=7200, genre_counts={"Drama": 7200})
+        # Databases created by an older app version may contain only this row.
+        FriendLink.objects.create(user=self.guest, friend=self.owner)
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_friend"])
+        self.assertTrue(response.data["analytics_visible"])
+        self.assertEqual(response.data["stats"]["genres"][0]["name"], "Drama")
+
     def test_message_history_contains_photo_profile_and_reactions(self):
         profile = UserProfile.objects.create(user=self.owner, nickname="Создатель")
         profile.avatar_data_url = "data:image/png;base64,AA=="
