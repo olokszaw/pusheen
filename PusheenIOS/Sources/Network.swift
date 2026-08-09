@@ -188,9 +188,9 @@ final class APIClient {
     var token: String?
     private let decoder = JSONDecoder()
 
-    private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true) async throws -> Data {
+    private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true, timeout: TimeInterval = 8) async throws -> Data {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }
-        var request = URLRequest(url: url); request.httpMethod = method; request.timeoutInterval = 8
+        var request = URLRequest(url: url); request.httpMethod = method; request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if authenticated, let token { request.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
@@ -293,7 +293,7 @@ final class APIClient {
     func respondToFriendRequest(id: Int, accept: Bool) async throws { _ = try await request("/api/friends/requests/", method: "POST", body: ["request_id": id, "action": accept ? "accept" : "decline"]) }
     func cancelFriendRequest(id: Int) async throws { _ = try await request("/api/friends/requests/", method: "POST", body: ["request_id": id, "action": "cancel"]) }
     func stickerPacks() async throws -> [TelegramStickerPack] { let data = try await request("/api/sticker-packs/"); return try decoder.decode([TelegramStickerPack].self, from: data) }
-    func importStickerPack(url: String) async throws -> TelegramStickerPack { let data = try await request("/api/sticker-packs/", method: "POST", body: ["url": url]); return try decoder.decode(TelegramStickerPack.self, from: data) }
+    func importStickerPack(url: String) async throws -> TelegramStickerPack { let data = try await request("/api/sticker-packs/", method: "POST", body: ["url": url], timeout: 180); return try decoder.decode(TelegramStickerPack.self, from: data) }
     func stickerData(id: Int, preview: Bool = true) async throws -> Data { try await request("/api/stickers/\(id)/\(preview ? "preview" : "file")/") }
     func updateProfile(nickname: String? = nil, username: String? = nil, avatar: String? = nil) async throws -> Profile { var body: [String: Any] = [:]; if let nickname { body["nickname"] = nickname }; if let username { body["username"] = username }; if let avatar { body["avatar_data_url"] = avatar }; let data = try await request("/api/profile/", method: "PATCH", body: body); return try decoder.decode(Profile.self, from: data) }
 }

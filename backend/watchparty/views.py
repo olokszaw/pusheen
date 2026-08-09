@@ -2,10 +2,15 @@ import mimetypes
 import os
 import re
 import json
+import ssl
+import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from datetime import timedelta
+
+import certifi
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -54,15 +59,36 @@ from .serializers import (
 )
 
 
+_TELEGRAM_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+
+
+def _telegram_open(request, timeout):
+    last_error = None
+    for attempt in range(3):
+        try:
+            return urlopen(request, timeout=timeout, context=_TELEGRAM_SSL_CONTEXT)
+        except HTTPError as error:
+            try:
+                payload = json.loads(error.read().decode("utf-8", errors="replace"))
+                description = payload.get("description")
+            except (ValueError, AttributeError):
+                description = None
+            raise ValueError(f"Telegram API: {description or 'запрос отклонён'}") from error
+        except (URLError, TimeoutError, OSError) as error:
+            last_error = error
+            if attempt < 2:
+                time.sleep(0.35 * (attempt + 1))
+    reason = getattr(last_error, "reason", None)
+    detail = str(reason or "ошибка соединения")[:180]
+    raise ValueError(f"Telegram API недоступен с сервера: {detail}") from last_error
+
+
 def _telegram_api(method, token, **params):
     url = f"https://api.telegram.org/bot{token}/{method}"
     if params:
         url += "?" + urlencode(params)
-    try:
-        with urlopen(Request(url, headers={"User-Agent": "Pusheen/1.0"}), timeout=15) as response:
-            payload = json.load(response)
-    except (HTTPError, URLError, TimeoutError, ValueError) as error:
-        raise ValueError("Telegram API недоступен") from error
+    with _telegram_open(Request(url, headers={"User-Agent": "Pusheen/1.0"}), timeout=15) as response:
+        payload = json.load(response)
     if not payload.get("ok"):
         raise ValueError(payload.get("description") or "Telegram отклонил набор")
     return payload["result"]
@@ -74,14 +100,21 @@ def _download_telegram_file(token, file_id):
     if not path:
         raise ValueError("Telegram не вернул файл стикера")
     url = f"https://api.telegram.org/file/bot{token}/{path}"
-    try:
-        with urlopen(Request(url, headers={"User-Agent": "Pusheen/1.0"}), timeout=20) as response:
-            data = response.read(3_000_001)
-    except (HTTPError, URLError, TimeoutError) as error:
-        raise ValueError("Не удалось загрузить файл стикера") from error
+    with _telegram_open(Request(url, headers={"User-Agent": "Pusheen/1.0"}), timeout=20) as response:
+        data = response.read(3_000_001)
     if len(data) > 3_000_000:
         raise ValueError("Файл стикера слишком большой")
     return data, os.path.splitext(path)[1] or ".webp"
+
+
+def _fetch_telegram_sticker(token, indexed_item):
+    index, item = indexed_item
+    data, extension = _download_telegram_file(token, item["file_id"])
+    preview_data = preview_extension = None
+    thumbnail = item.get("thumbnail")
+    if thumbnail and thumbnail.get("file_id"):
+        preview_data, preview_extension = _download_telegram_file(token, thumbnail["file_id"])
+    return index, item, data, extension, preview_data, preview_extension
 
 
 def sticker_payload(sticker):
@@ -532,6 +565,10 @@ def telegram_sticker_packs(request):
     short_name = match.group(1)
     try:
         source = _telegram_api("getStickerSet", token, name=short_name)
+        source_stickers = list(enumerate(source.get("stickers", [])[:120]))
+        worker_count = min(6, max(1, len(source_stickers)))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            downloaded = list(executor.map(lambda item: _fetch_telegram_sticker(token, item), source_stickers))
         with transaction.atomic():
             pack, _ = TelegramStickerPack.objects.get_or_create(
                 user=request.user, short_name=short_name,
@@ -540,18 +577,15 @@ def telegram_sticker_packs(request):
             pack.title = source.get("title") or short_name
             pack.save(update_fields=["title"])
             pack.stickers.all().delete()
-            for index, item in enumerate(source.get("stickers", [])[:120]):
-                data, extension = _download_telegram_file(token, item["file_id"])
+            for index, item, data, extension, preview_data, preview_extension in downloaded:
                 format_name = "video" if item.get("is_video") else "animated" if item.get("is_animated") else "static"
                 sticker = TelegramSticker(
                     pack=pack, telegram_file_id=item["file_id"], emoji=item.get("emoji", ""),
                     format=format_name, order=index,
                 )
                 sticker.file.save(f"{item.get('file_unique_id', index)}{extension}", ContentFile(data), save=False)
-                thumbnail = item.get("thumbnail")
-                if thumbnail and thumbnail.get("file_id"):
-                    preview_data, preview_ext = _download_telegram_file(token, thumbnail["file_id"])
-                    sticker.preview.save(f"{item.get('file_unique_id', index)}-preview{preview_ext}", ContentFile(preview_data), save=False)
+                if preview_data is not None:
+                    sticker.preview.save(f"{item.get('file_unique_id', index)}-preview{preview_extension}", ContentFile(preview_data), save=False)
                 sticker.save()
     except ValueError as error:
         return Response({"detail": str(error)}, status=502)
