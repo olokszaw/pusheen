@@ -3077,19 +3077,19 @@ struct PusheenTabs: View {
                         showSettings = true
                     } label: {
                         Image(systemName: "gearshape.fill")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 42, height: 42)
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 38, height: 38)
                             .contentShape(Circle())
                             .liquidCard(Circle())
                     }
                     .buttonStyle(.plain)
                     // Centre the action over the Profile third of the native
                     // tab bar and keep it visually attached to that tab.
-                    .padding(.trailing, max(12, proxy.size.width / 6 - 21))
-                    .padding(.bottom, 58)
+                    .padding(.trailing, max(12, proxy.size.width / 6 - 19))
+                    .padding(.bottom, 46)
                     .transition(
-                        .scale(scale: 0.72, anchor: .bottom)
-                            .combined(with: .move(edge: .bottom))
+                        .scale(scale: 0.62, anchor: .bottom)
+                            .combined(with: .offset(y: 14))
                             .combined(with: .opacity)
                     )
                     .zIndex(50)
@@ -3305,7 +3305,13 @@ private struct TelegramStickerSettingsSheet: View {
             VStack(alignment: .leading, spacing: 15) {
                 HStack { Text("Настройки").font(.title2.bold()); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 Label("Импортировать стикеры из Telegram", systemImage: "paperplane.fill").font(.headline)
-                TextField("https://t.me/addstickers/...", text: $link)
+                TextField(
+                    "",
+                    text: $link,
+                    prompt: Text("https://t.me/addstickers/...")
+                        .foregroundStyle(.secondary.opacity(0.62))
+                )
+                    .foregroundStyle(.primary)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .padding(12).liquidCard(RoundedRectangle(cornerRadius: 16))
                 Button { Task { await importPack() } } label: {
