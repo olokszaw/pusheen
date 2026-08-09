@@ -1370,6 +1370,7 @@ struct NativeChatPane: View {
     @State private var contextMessage: ChatMessage?
     @State private var replyingTo: ChatReplyPreview?
     @State private var requestedMessageID: Int?
+    @State private var highlightedMessageID: Int?
     @State private var showStickerPicker = false
     private let quickReactions = [
         "👍", "❤️", "😂", "🔥", "😮", "👏", "😭", "🎬", "🍿", "✨",
@@ -1387,7 +1388,7 @@ struct NativeChatPane: View {
                                 NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, previewProfile: previewProfile, openProfile: openProfile, reply: beginReply, jumpToMessage: { requestedMessageID = $0 }, showContext: { selected in
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.84)
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { contextMessage = selected }
-                                })
+                                }, isHighlighted: highlightedMessageID == message.id)
                                     .equatable()
                                     .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
                                     .id(message.id)
@@ -1437,6 +1438,12 @@ struct NativeChatPane: View {
                     .onChange(of: requestedMessageID) { _, messageID in
                         guard let messageID else { return }
                         withAnimation(.easeOut(duration: 0.24)) { proxy.scrollTo(messageID, anchor: .center) }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.68)
+                        withAnimation(.easeOut(duration: 0.18)) { highlightedMessageID = messageID }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                            guard highlightedMessageID == messageID else { return }
+                            withAnimation(.easeOut(duration: 0.35)) { highlightedMessageID = nil }
+                        }
                         requestedMessageID = nil
                     }
                     .onAppear {
@@ -2127,10 +2134,12 @@ struct NativeMessageBubble: View, Equatable {
     let jumpToMessage: (Int) -> Void
     let showContext: (ChatMessage) -> Void
     var reportsAnchor = true
+    var isHighlighted = false
+    @GestureState private var replyDragOffset: CGFloat = 0
 
     static func == (lhs: NativeMessageBubble, rhs: NativeMessageBubble) -> Bool {
         // `react` is an action, not display data. Redraw only when this row's content changes.
-        lhs.message == rhs.message && lhs.isMine == rhs.isMine && lhs.quickReactions == rhs.quickReactions && lhs.reportsAnchor == rhs.reportsAnchor
+        lhs.message == rhs.message && lhs.isMine == rhs.isMine && lhs.quickReactions == rhs.quickReactions && lhs.reportsAnchor == rhs.reportsAnchor && lhs.isHighlighted == rhs.isHighlighted
     }
     private var containsEmoji: Bool {
         message.text.unicodeScalars.contains { scalar in
@@ -2239,15 +2248,33 @@ struct NativeMessageBubble: View, Equatable {
         .padding(.horizontal, isStickerMessage ? 5 : 9)
         .padding(.vertical, isStickerMessage ? 3 : 7)
         .frame(width: bubbleWidth, alignment: .leading)
-        .background(isStickerMessage ? Color.clear : (isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055)), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(isStickerMessage ? 0 : 0.08)))
+        .background(isHighlighted ? Color.cyan.opacity(0.17) : (isStickerMessage ? Color.clear : (isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055))), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(isHighlighted ? Color.cyan.opacity(0.72) : Color.white.opacity(isStickerMessage ? 0 : 0.08), lineWidth: isHighlighted ? 1.2 : 1))
+        .overlay(alignment: .leading) {
+            Image(systemName: "arrowshape.turn.up.left.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.cyan)
+                .opacity(min(1, replyDragOffset / 42))
+                .scaleEffect(0.72 + min(1, replyDragOffset / 52) * 0.28)
+                .offset(x: -28)
+        }
+        .shadow(color: isHighlighted ? Color.cyan.opacity(0.24) : Color.clear, radius: 10)
+        .offset(x: replyDragOffset)
+        .animation(.interactiveSpring(response: 0.26, dampingFraction: 0.82), value: replyDragOffset)
+        .animation(.easeInOut(duration: 0.2), value: isHighlighted)
         .onLongPressGesture(minimumDuration: 0.44, maximumDistance: 8) { showContext(message) }
         .simultaneousGesture(
-            DragGesture(minimumDistance: 16).onEnded { value in
-                guard value.translation.width > 52,
-                      abs(value.translation.width) > abs(value.translation.height) * 1.35 else { return }
-                reply(message)
-            }
+            DragGesture(minimumDistance: 12)
+                .updating($replyDragOffset) { value, state, _ in
+                    guard value.translation.width > 0,
+                          abs(value.translation.width) > abs(value.translation.height) * 1.15 else { return }
+                    state = min(58, value.translation.width * 0.72)
+                }
+                .onEnded { value in
+                    guard value.translation.width > 52,
+                          abs(value.translation.width) > abs(value.translation.height) * 1.35 else { return }
+                    reply(message)
+                }
         )
     }
 
@@ -2326,9 +2353,8 @@ private struct ReactionPickerBar: View {
                     Button {
                         select(emoji)
                     } label: {
-                        FluentReactionGlyph(emoji: emoji, size: 23)
-                            .frame(width: 23, height: 23)
-                            .clipped()
+                        FluentEmojiGlyph(emoji, size: 24)
+                            .frame(width: 24, height: 24)
                             .frame(width: 34, height: 34)
                             .background(.white.opacity(0.055), in: Circle())
                     }
@@ -2572,11 +2598,6 @@ private struct MessageAnchoredContextOverlay: View {
     let reply: () -> Void
     let close: () -> Void
 
-    private var controlsX: CGFloat {
-        let preferred = isMine ? frame.maxX - 92 : frame.minX + 92
-        return min(containerSize.width - 100, max(100, preferred))
-    }
-
     private var reactionsY: CGFloat {
         frame.minY > 68 ? frame.minY - 32 : min(containerSize.height - 32, frame.maxY + 32)
     }
@@ -2615,7 +2636,7 @@ private struct MessageAnchoredContextOverlay: View {
                 Button(action: reply) {
                     Label("Ответить", systemImage: "arrowshape.turn.up.left")
                         .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 13).frame(height: 44)
+                        .frame(maxWidth: .infinity).frame(height: 44)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.15), lineWidth: 0.8))
                 }
@@ -2623,14 +2644,15 @@ private struct MessageAnchoredContextOverlay: View {
                     Button(action: copy) {
                         Label("Скопировать", systemImage: "doc.on.doc")
                             .font(.subheadline.weight(.medium))
-                            .padding(.horizontal, 13).frame(height: 44)
+                            .frame(maxWidth: .infinity).frame(height: 44)
                             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.15), lineWidth: 0.8))
                     }
                 }
             }
+            .frame(width: min(306, containerSize.width - 28))
             .buttonStyle(.plain)
-            .position(x: controlsX, y: copyY)
+            .position(x: containerSize.width / 2, y: copyY)
         }
         .transition(.opacity)
     }
@@ -3093,6 +3115,11 @@ struct PusheenTabs: View {
                                 }
                             }
                     )
+                    // When a room is pushed from the Rooms tab this invisible
+                    // profile long-press target must not sit over the chat send
+                    // button. Native TabView handles the first Profile tap;
+                    // the extra hit area is needed only while Profile is active.
+                    .allowsHitTesting(selection == .profile || showProfileQuickAction)
             }
             .overlay(alignment: .bottomTrailing) {
                 if showProfileQuickAction {
