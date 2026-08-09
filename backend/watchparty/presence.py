@@ -16,7 +16,11 @@ def touch_presence(user, minimum_interval=5):
     if not user or not user.is_authenticated:
         return False
 
-    cache_key = f"presence-touch:{user.pk}"
+    joined_at = getattr(user, "date_joined", None)
+    generation = int(joined_at.timestamp() * 1_000_000) if joined_at else 0
+    # Include the account generation: test databases and restored installations
+    # may reuse an integer PK after deleting a user, while cache entries survive.
+    cache_key = f"presence-touch:{user.pk}:{generation}"
     if minimum_interval > 0 and not cache.add(cache_key, True, timeout=minimum_interval):
         return True
 
