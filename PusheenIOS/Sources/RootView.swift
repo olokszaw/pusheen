@@ -1483,10 +1483,17 @@ struct NativeChatPane: View {
                         Text(reply.text.isEmpty ? "Изображение" : reply.text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
-                    Button { withAnimation(.easeOut(duration: 0.16)) { replyingTo = nil } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                    ChatAccessoryControl(action: cancelReply) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, height: 40)
+                            .contentShape(Circle())
+                    }
+                    .accessibilityLabel("Отменить ответ")
                 }
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .liquidCard(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .passiveLiquidCard(RoundedRectangle(cornerRadius: 15, style: .continuous))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             HStack(alignment: .bottom, spacing: 10) {
@@ -1635,6 +1642,12 @@ struct NativeChatPane: View {
         send(text, "", replyingTo)
         replyingTo = nil
         draft = ""
+    }
+
+    private func cancelReply() {
+        guard replyingTo != nil else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.62)
+        withAnimation(.easeOut(duration: 0.16)) { replyingTo = nil }
     }
 
     private func presentPhotoLibrary() {
