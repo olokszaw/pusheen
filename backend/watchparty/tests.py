@@ -313,6 +313,17 @@ class RoomApiTests(APITestCase):
         self.assertTrue(response.data["analytics_visible"])
         self.assertEqual(response.data["stats"]["genres"][0]["name"], "Drama")
 
+    def test_public_profile_tolerates_legacy_malformed_activity_json(self):
+        UserProfile.objects.create(user=self.guest, nickname="Guest profile")
+        ViewingActivity.objects.create(user=self.guest, genre_counts=["old"], daily_seconds=["old"])
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["analytics_visible"])
+        self.assertEqual(response.data["stats"]["genres"], [])
+        self.assertEqual(response.data["stats"]["daily_seconds"], {})
+
     def test_message_history_contains_photo_profile_and_reactions(self):
         profile = UserProfile.objects.create(user=self.owner, nickname="Создатель")
         profile.avatar_data_url = "data:image/png;base64,AA=="

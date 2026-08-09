@@ -49,6 +49,21 @@ from .video_stream import resolve_media_stream
 USERNAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{2,29}$")
 
 
+def safe_seconds(value):
+    """Coerce legacy JSON values without allowing a bad profile to break API."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def safe_activity_map(value):
+    """Return a Swift-decodable day/genre map from potentially old JSON."""
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): safe_seconds(seconds) for key, seconds in value.items()}
+
+
 def valid_username(value):
     return bool(USERNAME_PATTERN.fullmatch(value))
 
@@ -59,21 +74,16 @@ def auth_payload(user):
 
 
 def month_increase_percent(daily_seconds, current_day=None):
-    """Return the server-authoritative month-over-month increase.
-
-    The source data remains the daily activity ledger. The derived percentage
-    is refreshed and persisted with that ledger, rather than trusting each
-    client to calculate a potentially different result.
-    """
+    """Return the server-authoritative month-over-month increase."""
     today = current_day or timezone.localdate()
     current_start = today.replace(day=1)
     previous_end = current_start - timedelta(days=1)
     previous_start = previous_end.replace(day=1)
-    daily = daily_seconds or {}
+    daily = safe_activity_map(daily_seconds)
 
     def total_between(start, end):
         return sum(
-            max(0, int(seconds or 0))
+            safe_seconds(seconds)
             for day, seconds in daily.items()
             if start.isoformat() <= str(day) <= end.isoformat()
         )
@@ -88,23 +98,23 @@ def month_increase_percent(daily_seconds, current_day=None):
 def current_activity_streak(daily_seconds, current_day=None):
     """Count the active-day streak using the server calendar, not the device."""
     cursor = current_day or timezone.localdate()
-    daily = daily_seconds or {}
+    daily = safe_activity_map(daily_seconds)
     # A streak remains current until the end of the next calendar day, so a
     # user is not reset to zero just because they have not opened the app yet.
-    if max(0, int(daily.get(cursor.isoformat(), 0) or 0)) <= 0:
+    if safe_seconds(daily.get(cursor.isoformat(), 0)) <= 0:
         cursor -= timedelta(days=1)
     count = 0
-    while max(0, int(daily.get(cursor.isoformat(), 0) or 0)) > 0:
+    while safe_seconds(daily.get(cursor.isoformat(), 0)) > 0:
         count += 1
         cursor -= timedelta(days=1)
     return count
 
 
 def activity_payload(activity):
-    genres = activity.genre_counts or {}
-    total = sum(int(value or 0) for value in genres.values())
+    genres = safe_activity_map(activity.genre_counts)
+    total = sum(genres.values())
     genre_rows = [
-        {"name": name, "seconds": int(seconds), "percent": round((int(seconds) / total * 100) if total else 0)}
+        {"name": name, "seconds": seconds, "percent": round((seconds / total * 100) if total else 0)}
         for name, seconds in sorted(genres.items(), key=lambda item: item[1], reverse=True)[:5]
     ]
     companion = (
@@ -121,7 +131,7 @@ def activity_payload(activity):
         "watched_seconds": activity.watched_seconds,
         "longest_movie_seconds": activity.longest_movie_seconds,
         "genres": genre_rows,
-        "daily_seconds": activity.daily_seconds or {},
+        "daily_seconds": safe_activity_map(activity.daily_seconds),
         "month_increase_percent": activity.month_increase_percent,
         "current_streak_days": current_activity_streak(activity.daily_seconds),
         "top_companion": top_companion,
