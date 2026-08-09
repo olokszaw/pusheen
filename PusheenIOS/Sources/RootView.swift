@@ -3070,22 +3070,28 @@ struct PusheenTabs: View {
                             }
                     )
             }
-            .overlay(alignment: .bottom) {
+            .overlay(alignment: .bottomTrailing) {
                 if showProfileQuickAction {
                     Button {
                         withAnimation(.easeOut(duration: 0.16)) { showProfileQuickAction = false }
                         showSettings = true
                     } label: {
-                        Label("Настройки", systemImage: "gearshape.fill")
-                            .font(.body.weight(.semibold))
-                            .padding(.horizontal, 24)
-                            .frame(height: 54)
-                            .contentShape(Capsule())
-                            .liquidCard(Capsule())
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 42, height: 42)
+                            .contentShape(Circle())
+                            .liquidCard(Circle())
                     }
                     .buttonStyle(.plain)
-                    .padding(.bottom, 82)
-                    .transition(.move(edge: .bottom).combined(with: .scale(scale: 0.9)).combined(with: .opacity))
+                    // Centre the action over the Profile third of the native
+                    // tab bar and keep it visually attached to that tab.
+                    .padding(.trailing, max(12, proxy.size.width / 6 - 21))
+                    .padding(.bottom, 58)
+                    .transition(
+                        .scale(scale: 0.72, anchor: .bottom)
+                            .combined(with: .move(edge: .bottom))
+                            .combined(with: .opacity)
+                    )
                     .zIndex(50)
                 }
             }
