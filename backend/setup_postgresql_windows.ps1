@@ -31,12 +31,11 @@ try {
     & $psql -X -v ON_ERROR_STOP=1 -h $DbHost -p $Port -U $DatabaseUser -d postgres -c 'SELECT 1;' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not connect to PostgreSQL. Check the installer password and that the PostgreSQL service is running.' }
 
-    $existsOutput = @(& $psql -X -h $DbHost -p $Port -U $DatabaseUser -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DatabaseName';")
-    if ($LASTEXITCODE -ne 0) { throw 'Could not check whether the PostgreSQL database exists.' }
-    # psql returns no rows for a new database.  Convert the array explicitly so
-    # a valid empty response never becomes a null .Trim() call in PowerShell.
-    $exists = [string]::Join("`n", [string[]]$existsOutput).Trim()
-    if ($exists -ne '1') {
+    # The connection to the maintenance database above has already confirmed
+    # that the service and credentials work. Probe the target by connecting to
+    # it instead of parsing psql's optional/empty textual output.
+    & $psql -X -h $DbHost -p $Port -U $DatabaseUser -d $DatabaseName -c 'SELECT 1;' 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
         & $psql -X -v ON_ERROR_STOP=1 -h $DbHost -p $Port -U $DatabaseUser -d postgres -c "CREATE DATABASE `"$DatabaseName`";" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not create the PostgreSQL database.' }
     }
