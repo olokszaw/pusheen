@@ -1831,7 +1831,7 @@ private struct ChatAccessoryControl<Label: View>: View {
             )
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction(action)
+            .accessibilityAction { action() }
     }
 }
 
