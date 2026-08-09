@@ -2666,7 +2666,19 @@ private struct PublicProfileScreen: View {
                         if !shownUsername.isEmpty {
                             Text("@\(shownUsername)").foregroundStyle(.secondary)
                                 .contentShape(Rectangle())
-                                .onLongPressGesture(minimumDuration: 0.42, maximumDistance: 8) { showContext(.username) }
+                                .anchorPreference(key: ProfileUsernameAnchorKey.self, value: .bounds) { $0 }
+                                .gesture(
+                                    LongPressGesture(minimumDuration: 0.42, maximumDistance: 8)
+                                        .exclusively(before: TapGesture())
+                                        .onEnded { result in
+                                            switch result {
+                                            case .first(true): showContext(.username)
+                                            case .second(_): copyUsername()
+                                            default: break
+                                            }
+                                        }
+                                )
+                                .accessibilityHint("Нажмите, чтобы скопировать username")
                         }
                         Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible))
                             .font(.caption).foregroundStyle(profile?.isOnline == true ? Color.cyan.opacity(0.86) : Color.secondary).padding(.top, 2)
@@ -2705,10 +2717,21 @@ private struct PublicProfileScreen: View {
             }
             .contextPreviewBackdrop(active: context != nil)
 
-            if let context {
+            if let context, context != .username {
                 profileContextOverlay(context)
                     .transition(.opacity.combined(with: .scale(scale: 0.94)))
                     .zIndex(10)
+            }
+        }
+        .overlayPreferenceValue(ProfileUsernameAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if context == .username, let anchor {
+                    UsernameAnchoredHighlight(
+                        username: shownUsername,
+                        frame: proxy[anchor],
+                        close: { withAnimation { context = nil } }
+                    )
+                }
             }
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.84), value: context)
@@ -2739,11 +2762,7 @@ private struct PublicProfileScreen: View {
                             .foregroundStyle(Color(red: 0.95, green: 0.48, blue: 0.50)).liquidCard(Capsule()).disabled(friendshipBusy)
                     }.buttonStyle(.plain)
                 case .username:
-                    Text(shownName).font(.headline)
-                    Text("@\(shownUsername)").foregroundStyle(.secondary)
-                    Button { UIPasteboard.general.string = shownUsername; UINotificationFeedbackGenerator().notificationOccurred(.success); withAnimation { context = nil } } label: {
-                        Label("Скопировать username", systemImage: "doc.on.doc").frame(maxWidth: .infinity).padding(.vertical, 11).liquidCard(Capsule())
-                    }.buttonStyle(.plain)
+                    EmptyView()
                 case .views, .appTime, .longestMovie:
                     let stats = profile?.stats
                     let icon = item == .views ? "play.rectangle.fill" : item == .appTime ? "clock.fill" : "film.fill"
@@ -2762,6 +2781,10 @@ private struct PublicProfileScreen: View {
     private func showContext(_ value: ProfileContext) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.82)
         withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { context = value }
+    }
+    private func copyUsername() {
+        UIPasteboard.general.string = shownUsername
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.66)
     }
     private func load() async {
         loading = true
@@ -2791,6 +2814,34 @@ private struct PublicProfileScreen: View {
             withAnimation { context = nil }
         } catch { UINotificationFeedbackGenerator().notificationOccurred(.error) }
         friendshipBusy = false
+    }
+}
+
+private struct ProfileUsernameAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+private struct UsernameAnchoredHighlight: View {
+    let username: String
+    let frame: CGRect
+    let close: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.30).ignoresSafeArea().contentShape(Rectangle()).onTapGesture(perform: close)
+            Text("@\(username)")
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.17), lineWidth: 0.8))
+                .shadow(color: .black.opacity(0.36), radius: 14, y: 8)
+                .scaleEffect(1.08)
+                .position(x: frame.midX, y: frame.midY)
+        }
+        .transition(.opacity)
     }
 }
 
