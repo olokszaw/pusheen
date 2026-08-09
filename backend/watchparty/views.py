@@ -109,7 +109,7 @@ def _download_telegram_file(token, file_id):
 
 
 def _normalize_telegram_sticker_data(item, data, extension):
-    if item.get("is_animated"):
+    if item.get("is_animated") and extension.lower() == ".tgs":
         # Telegram TGS files are gzip-compressed Lottie JSON. Store normalized
         # JSON so every iOS client can render the animation directly without
         # depending on platform-specific gzip support.
@@ -130,6 +130,11 @@ def _fetch_telegram_sticker(token, indexed_item):
     thumbnail = item.get("thumbnail")
     if thumbnail and thumbnail.get("file_id"):
         preview_data, preview_extension = _download_telegram_file(token, thumbnail["file_id"])
+        # Animated Telegram thumbnails can themselves be compressed .tgs.
+        # Normalize them as well, so the iOS picker receives usable Lottie JSON.
+        preview_data, preview_extension = _normalize_telegram_sticker_data(
+            item, preview_data, preview_extension
+        )
     return index, item, data, extension, preview_data, preview_extension
 
 
@@ -610,7 +615,7 @@ def telegram_sticker_file(request, sticker_id, preview=False):
     # Packs imported by an older backend may still contain compressed .tgs.
     # Normalize those lazily as well, so an existing pack starts animating
     # without forcing the user to import it again.
-    if not preview and sticker.format == TelegramSticker.ANIMATED and stored.name.lower().endswith(".tgs"):
+    if sticker.format == TelegramSticker.ANIMATED and stored.name.lower().endswith(".tgs"):
         try:
             payload = gzip.decompress(stored.read())
             json.loads(payload.decode("utf-8"))

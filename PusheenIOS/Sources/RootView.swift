@@ -1692,22 +1692,12 @@ struct NativeChatPane: View {
     }
 
     private func sendSticker(_ sticker: TelegramSticker) {
-        Task {
-            guard let data = try? await session.api.stickerData(id: sticker.id, preview: false) else { return }
-            let mime: String
-            switch sticker.format {
-            case "animated": mime = "application/json"
-            case "video": mime = "video/webm"
-            default: mime = "image/webp"
-            }
-            let dataURL = "data:\(mime);base64," + data.base64EncodedString()
-            await MainActor.run {
-                sticksToBottom = true
-                forceScrollOnNextMessage = true
-                send("", dataURL, replyingTo)
-                replyingTo = nil
-            }
-        }
+        // A full Lottie/WebM payload can exceed the chat JSON limit. Store a
+        // tiny stable reference; every room participant fetches the same file.
+        sticksToBottom = true
+        forceScrollOnNextMessage = true
+        send("", "sticker://\(sticker.id)/\(sticker.format)", replyingTo)
+        replyingTo = nil
     }
 
     private func preparePhoto(_ item: PhotosPickerItem?) async {
@@ -1967,16 +1957,29 @@ private final class StickerThumbnailCache {
 }
 
 private struct TelegramStickerMedia: View {
+    @EnvironmentObject private var session: SessionStore
     let dataURL: String
     @State private var isVisible = false
+    @State private var remoteDataURL = ""
+
+    private var reference: TelegramStickerReference? {
+        TelegramStickerReference(dataURL: dataURL)
+    }
+
+    private var resolvedDataURL: String {
+        reference == nil ? dataURL : remoteDataURL
+    }
+
     var body: some View {
         Group {
-            if dataURL.lowercased().hasPrefix("data:application/json;") {
-                LottieStickerView(dataURL: dataURL, isPlaying: isVisible)
-            } else if dataURL.lowercased().hasPrefix("data:video/") {
-                WebVideoStickerView(dataURL: dataURL, isPlaying: isVisible)
+            if resolvedDataURL.isEmpty {
+                ProgressView().controlSize(.small)
+            } else if resolvedDataURL.lowercased().hasPrefix("data:application/json;") {
+                LottieStickerView(dataURL: resolvedDataURL, isPlaying: isVisible)
+            } else if resolvedDataURL.lowercased().hasPrefix("data:video/") {
+                WebVideoStickerView(dataURL: resolvedDataURL, isPlaying: isVisible)
             } else {
-                DataURLImage(dataURL: dataURL, contentMode: .fit)
+                DataURLImage(dataURL: resolvedDataURL, contentMode: .fit)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1984,6 +1987,33 @@ private struct TelegramStickerMedia: View {
         .accessibilityHidden(true)
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false }
+        .task(id: dataURL) {
+            guard let reference else {
+                remoteDataURL = ""
+                return
+            }
+            guard let data = try? await session.api.stickerData(id: reference.id, preview: false) else { return }
+            let mime: String
+            switch reference.format {
+            case "animated": mime = "application/json"
+            case "video": mime = "video/webm"
+            default: mime = "image/webp"
+            }
+            remoteDataURL = "data:\(mime);base64," + data.base64EncodedString()
+        }
+    }
+}
+
+private struct TelegramStickerReference {
+    let id: Int
+    let format: String
+
+    init?(dataURL: String) {
+        guard dataURL.lowercased().hasPrefix("sticker://") else { return nil }
+        let parts = dataURL.dropFirst("sticker://".count).split(separator: "/", maxSplits: 1)
+        guard let rawID = parts.first, let id = Int(rawID) else { return nil }
+        self.id = id
+        self.format = parts.count > 1 ? String(parts[1]).lowercased() : "static"
     }
 }
 
@@ -2521,7 +2551,8 @@ struct NativeMessageBubble: View, Equatable {
     private var isStickerMessage: Bool {
         guard message.text.isEmpty else { return false }
         let value = message.imageDataURL.lowercased()
-        return value.hasPrefix("data:image/webp;")
+        return value.hasPrefix("sticker://")
+            || value.hasPrefix("data:image/webp;")
             || value.hasPrefix("data:application/json;")
             || value.hasPrefix("data:video/webm;")
     }
