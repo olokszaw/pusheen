@@ -2209,6 +2209,48 @@ struct NativeMessageBubble: View, Equatable {
             }
         }
     }
+
+    private var bubbleFill: Color {
+        if isHighlighted { return Color.cyan.opacity(0.17) }
+        if isStickerMessage { return Color.clear }
+        return isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055)
+    }
+
+    private var bubbleStroke: Color {
+        isHighlighted ? Color.cyan.opacity(0.72) : Color.white.opacity(isStickerMessage ? 0 : 0.08)
+    }
+
+    private var replyIndicatorOpacity: Double {
+        Double(min(1, replyDragOffset / 42))
+    }
+
+    private var replyIndicatorScale: CGFloat {
+        0.72 + min(1, replyDragOffset / 52) * 0.28
+    }
+
+    private var replyIndicator: some View {
+        Image(systemName: "arrowshape.turn.up.left.fill")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.cyan)
+            .opacity(replyIndicatorOpacity)
+            .scaleEffect(replyIndicatorScale)
+            .offset(x: -28)
+    }
+
+    private var replySwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .updating($replyDragOffset) { value, state, _ in
+                guard value.translation.width > 0,
+                      abs(value.translation.width) > abs(value.translation.height) * 1.15 else { return }
+                state = min(58, value.translation.width * 0.72)
+            }
+            .onEnded { value in
+                guard value.translation.width > 52,
+                      abs(value.translation.width) > abs(value.translation.height) * 1.35 else { return }
+                reply(message)
+            }
+    }
+
     @ViewBuilder private var bubble: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let original = message.replyTo {
@@ -2248,34 +2290,15 @@ struct NativeMessageBubble: View, Equatable {
         .padding(.horizontal, isStickerMessage ? 5 : 9)
         .padding(.vertical, isStickerMessage ? 3 : 7)
         .frame(width: bubbleWidth, alignment: .leading)
-        .background(isHighlighted ? Color.cyan.opacity(0.17) : (isStickerMessage ? Color.clear : (isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055))), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(isHighlighted ? Color.cyan.opacity(0.72) : Color.white.opacity(isStickerMessage ? 0 : 0.08), lineWidth: isHighlighted ? 1.2 : 1))
-        .overlay(alignment: .leading) {
-            Image(systemName: "arrowshape.turn.up.left.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.cyan)
-                .opacity(min(1, replyDragOffset / 42))
-                .scaleEffect(0.72 + min(1, replyDragOffset / 52) * 0.28)
-                .offset(x: -28)
-        }
+        .background(bubbleFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(bubbleStroke, lineWidth: isHighlighted ? 1.2 : 1))
+        .overlay(alignment: .leading) { replyIndicator }
         .shadow(color: isHighlighted ? Color.cyan.opacity(0.24) : Color.clear, radius: 10)
         .offset(x: replyDragOffset)
         .animation(.interactiveSpring(response: 0.26, dampingFraction: 0.82), value: replyDragOffset)
         .animation(.easeInOut(duration: 0.2), value: isHighlighted)
         .onLongPressGesture(minimumDuration: 0.44, maximumDistance: 8) { showContext(message) }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 12)
-                .updating($replyDragOffset) { value, state, _ in
-                    guard value.translation.width > 0,
-                          abs(value.translation.width) > abs(value.translation.height) * 1.15 else { return }
-                    state = min(58, value.translation.width * 0.72)
-                }
-                .onEnded { value in
-                    guard value.translation.width > 52,
-                          abs(value.translation.width) > abs(value.translation.height) * 1.35 else { return }
-                    reply(message)
-                }
-        )
+        .simultaneousGesture(replySwipeGesture)
     }
 
     @ViewBuilder private var reactionChips: some View {
