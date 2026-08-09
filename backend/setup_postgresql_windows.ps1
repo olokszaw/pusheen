@@ -6,7 +6,7 @@ param(
     [ValidatePattern('^[A-Za-z][A-Za-z0-9_]{0,62}$')]
     [string]$DatabaseName = 'pulse',
     [string]$DatabaseUser = 'postgres',
-    [string]$Host = '127.0.0.1',
+    [string]$DbHost = '127.0.0.1',
     [ValidateRange(1, 65535)]
     [int]$Port = 5432
 )
@@ -28,13 +28,13 @@ if (-not $psql) {
 
 $env:PGPASSWORD = $Password
 try {
-    & $psql -X -v ON_ERROR_STOP=1 -h $Host -p $Port -U $DatabaseUser -d postgres -c 'SELECT 1;' | Out-Null
+    & $psql -X -v ON_ERROR_STOP=1 -h $DbHost -p $Port -U $DatabaseUser -d postgres -c 'SELECT 1;' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not connect to PostgreSQL. Check the installer password and that the PostgreSQL service is running.' }
 
-    $exists = (& $psql -X -h $Host -p $Port -U $DatabaseUser -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DatabaseName';").Trim()
+    $exists = (& $psql -X -h $DbHost -p $Port -U $DatabaseUser -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DatabaseName';").Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Could not check whether the PostgreSQL database exists.' }
     if ($exists -ne '1') {
-        & $psql -X -v ON_ERROR_STOP=1 -h $Host -p $Port -U $DatabaseUser -d postgres -c "CREATE DATABASE `"$DatabaseName`";" | Out-Null
+        & $psql -X -v ON_ERROR_STOP=1 -h $DbHost -p $Port -U $DatabaseUser -d postgres -c "CREATE DATABASE `"$DatabaseName`";" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not create the PostgreSQL database.' }
     }
 } finally {
@@ -43,7 +43,7 @@ try {
 
 $encodedUser = [Uri]::EscapeDataString($DatabaseUser)
 $encodedPassword = [Uri]::EscapeDataString($Password)
-$databaseUrl = "postgresql://${encodedUser}:${encodedPassword}@${Host}:${Port}/${DatabaseName}"
+$databaseUrl = "postgresql://${encodedUser}:${encodedPassword}@${DbHost}:${Port}/${DatabaseName}"
 $envPath = Join-Path $PSScriptRoot '.env'
 $lines = if (Test-Path -LiteralPath $envPath) { @(Get-Content -LiteralPath $envPath) } else { @() }
 $updated = $false
