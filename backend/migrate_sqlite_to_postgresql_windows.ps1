@@ -16,7 +16,7 @@ if (-not $DatabaseUrl -and (Test-Path -LiteralPath $envPath)) {
     if ($databaseLine) { $DatabaseUrl = $databaseLine.Substring('DATABASE_URL='.Length).Trim() }
 }
 if (-not $DatabaseUrl -or $DatabaseUrl -notmatch '^postgres(?:ql)?://') {
-    throw 'PostgreSQL DATABASE_URL is missing. Run start_postgresql_docker_windows.ps1 first.'
+    throw 'PostgreSQL DATABASE_URL is missing. Run setup_postgresql_windows.ps1 (native Windows) or configure DATABASE_URL manually.'
 }
 
 $venvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
