@@ -23,6 +23,34 @@ backend restarts and new PowerShell windows.
 `TELEGRAM_BOT_TOKEN` нужен только серверу для официальных Bot API методов
 `getStickerSet`/`getFile`. Не добавляйте его в Swift-код, Info.plist или IPA.
 
+## PostgreSQL на Windows
+
+SQLite оставлен только для локального одиночного запуска. Для нескольких
+пользователей используйте PostgreSQL: он допускает параллельные записи и не
+создаёт `database is locked` при presence, сообщениях и комнатах.
+
+Самый короткий вариант через Docker Desktop:
+
+```powershell
+cd C:\PulseBackend
+.\start_postgresql_docker_windows.ps1 -Password 'СЛОЖНЫЙ_ПАРОЛЬ'
+# Остановите старое окно backend, затем:
+.\migrate_sqlite_to_postgresql_windows.ps1
+.\run_backend_windows.ps1
+```
+
+Сценарий переноса сохраняет пользователей, токены, друзей, комнаты, сообщения,
+активность и стикеры. Перед переносом он создаёт резервную копию `db.sqlite3` и
+JSON-экспорт в `_database_backups`. Старую SQLite-базу он не удаляет.
+
+Если PostgreSQL уже установлен без Docker, добавьте в `.env` строку:
+
+```env
+DATABASE_URL=postgresql://pulse:password@127.0.0.1:5432/pulse
+```
+
+и запустите `migrate_sqlite_to_postgresql_windows.ps1`.
+
 For the public Cloudflare quick tunnel, leave the backend running and open a
 second PowerShell window:
 

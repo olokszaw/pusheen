@@ -45,12 +45,12 @@ from .models import (
     RoomMember,
     RoomMute,
     UserProfile,
-    UserPresence,
     ViewingActivity,
     TelegramSticker,
     TelegramStickerPack,
 )
 from .permissions import IsRoomOwner
+from .presence import touch_presence
 from .serializers import (
     ChatMessageSerializer,
     JoinSerializer,
@@ -160,12 +160,6 @@ def safe_activity_map(value):
     if not isinstance(value, dict):
         return {}
     return {str(key): safe_seconds(seconds) for key, seconds in value.items()}
-
-
-def touch_presence(user):
-    if not user or not user.is_authenticated:
-        return
-    UserPresence.objects.update_or_create(user=user, defaults={"last_seen": timezone.now()})
 
 
 def presence_payload(user):

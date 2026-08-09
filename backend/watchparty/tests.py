@@ -3,6 +3,7 @@ import gzip
 import json
 
 from django.contrib.auth import get_user_model
+from django.db import OperationalError
 from django.test import TransactionTestCase
 from django.utils import timezone
 from asgiref.sync import async_to_sync
@@ -15,6 +16,7 @@ from rest_framework.test import APITestCase
 from config.asgi import application
 from .models import ChatMessage, FriendLink, FriendRequest, MessageReaction, PlaybackState, Room, RoomBan, RoomInvitation, RoomMember, RoomMute, UserPresence, UserProfile, ViewingActivity
 from .views import _normalize_telegram_sticker_data
+from .presence import touch_presence
 
 
 class RoomApiTests(APITestCase):
@@ -36,6 +38,13 @@ class RoomApiTests(APITestCase):
         )
         self.assertEqual(extension, ".json")
         self.assertEqual(json.loads(payload), source)
+
+    def test_locked_presence_write_never_breaks_api_request(self):
+        with patch("watchparty.presence.cache.add", return_value=True), patch(
+            "watchparty.presence.UserPresence.objects.filter"
+        ) as filtered:
+            filtered.return_value.update.side_effect = OperationalError("database is locked")
+            self.assertFalse(touch_presence(self.owner))
 
     def test_message_post_is_persisted_and_visible_to_another_member(self):
         room = Room.objects.create(owner=self.owner, title="Durable chat")

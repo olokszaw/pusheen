@@ -6,3 +6,5 @@ redis>=5.0,<6
 django-cors-headers>=4.4,<4.7
 yt-dlp>=2025.1.15
 certifi>=2024.8.30
+dj-database-url>=2.2,<3
+psycopg[binary]>=3.2,<4

@@ -5,7 +5,8 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.db import transaction
 from django.utils import timezone as django_timezone
-from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute, UserPresence
+from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute
+from .presence import touch_presence
 
 
 class RoomConsumer(AsyncJsonWebsocketConsumer):
@@ -289,10 +290,9 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             member.active_connections += 1
             member.last_heartbeat_at = django_timezone.now()
             member.save(update_fields=["active_connections", "last_heartbeat_at"])
-            UserPresence.objects.update_or_create(user=member.user, defaults={"last_seen": django_timezone.now()})
             profile = getattr(member.user, "watch_profile", None)
             identity = getattr(member.user, "client_identity", None)
-            return {
+            payload = {
                 "user_id": member.user_id,
                 "username": member.user.username,
                 "nickname": profile.nickname if profile else member.user.username,
@@ -301,6 +301,8 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 "is_online": True,
                 "changed": was_offline,
             }
+        touch_presence(member.user, minimum_interval=0)
+        return payload
 
     @database_sync_to_async
     def mark_disconnected(self):
@@ -318,10 +320,9 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 else django_timezone.now() - timedelta(seconds=25)
             )
             member.save(update_fields=["active_connections", "last_heartbeat_at"])
-            UserPresence.objects.update_or_create(user=member.user, defaults={"last_seen": django_timezone.now()})
             profile = getattr(member.user, "watch_profile", None)
             identity = getattr(member.user, "client_identity", None)
-            return {
+            payload = {
                 "user_id": member.user_id,
                 "username": member.user.username,
                 "nickname": profile.nickname if profile else member.user.username,
@@ -330,6 +331,8 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 "is_online": member.active_connections > 0,
                 "changed": member.active_connections == 0,
             }
+        touch_presence(member.user, minimum_interval=0)
+        return payload
 
     @database_sync_to_async
     def mark_heartbeat(self):
@@ -342,7 +345,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         was_stale = not member.last_heartbeat_at or member.last_heartbeat_at < django_timezone.now() - timedelta(seconds=24)
         member.last_heartbeat_at = django_timezone.now()
         member.save(update_fields=["last_heartbeat_at"])
-        UserPresence.objects.update_or_create(user=member.user, defaults={"last_seen": django_timezone.now()})
+        touch_presence(member.user)
         profile = getattr(member.user, "watch_profile", None)
         identity = getattr(member.user, "client_identity", None)
         return {

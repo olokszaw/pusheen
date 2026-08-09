@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
@@ -34,7 +35,17 @@ TEMPLATES = [
         },
     },
 ]
-DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+DATABASES = {
+    "default": dj_database_url.config(
+        default=f"sqlite:///{(BASE_DIR / 'db.sqlite3').as_posix()}",
+        conn_max_age=60,
+        conn_health_checks=True,
+    )
+}
+if DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3":
+    # Keep local development usable and greatly reduce transient lock errors.
+    # Production should set DATABASE_URL to PostgreSQL.
+    DATABASES["default"].setdefault("OPTIONS", {})["timeout"] = 20
 LANGUAGE_CODE = "ru"
 TIME_ZONE = "Europe/Moscow"
 USE_I18N = True
