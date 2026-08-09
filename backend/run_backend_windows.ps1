@@ -3,14 +3,17 @@ Set-Location $PSScriptRoot
 
 # Load the environment file created by install_windows.ps1. Without this,
 # process-only values disappear when the backend is started in a new window.
-$envFile = Join-Path $PSScriptRoot '.env'
-if (Test-Path -LiteralPath $envFile) {
-    foreach ($line in Get-Content -LiteralPath $envFile) {
-        $trimmed = $line.Trim()
-        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
-        $parts = $trimmed.Split('=', 2)
-        if ($parts.Count -eq 2) {
-            [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1], 'Process')
+$environmentFiles = @('.env', '.env.local')
+foreach ($environmentFile in $environmentFiles) {
+    $envFile = Join-Path $PSScriptRoot $environmentFile
+    if (Test-Path -LiteralPath $envFile) {
+        foreach ($line in Get-Content -LiteralPath $envFile) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+            $parts = $trimmed.Split('=', 2)
+            if ($parts.Count -eq 2) {
+                [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1], 'Process')
+            }
         }
     }
 }
