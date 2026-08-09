@@ -7,10 +7,18 @@ cd C:\Users\luiin\OneDrive\Desktop\rave\backend
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-$env:TELEGRAM_BOT_TOKEN='123456:telegram-bot-token'
 python manage.py migrate
 .\run_backend_windows.ps1
 ```
+
+Add the BotFather token once to `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=123456789:your-bot-token
+```
+
+`run_backend_windows.ps1` loads `.env` on every start, so the token survives
+backend restarts and new PowerShell windows.
 
 `TELEGRAM_BOT_TOKEN` нужен только серверу для официальных Bot API методов
 `getStickerSet`/`getFile`. Не добавляйте его в Swift-код, Info.plist или IPA.

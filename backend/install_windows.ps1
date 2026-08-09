@@ -31,6 +31,7 @@ if (-not (Test-Path ".env")) {
         "DJANGO_DEBUG=0"
         "DJANGO_ALLOWED_HOSTS=*"
         "USE_REDIS=0"
+        "TELEGRAM_BOT_TOKEN="
     )
     [System.IO.File]::WriteAllLines(
         (Join-Path $PSScriptRoot ".env"),

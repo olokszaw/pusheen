@@ -1,6 +1,20 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
+# Load the environment file created by install_windows.ps1. Without this,
+# process-only values disappear when the backend is started in a new window.
+$envFile = Join-Path $PSScriptRoot '.env'
+if (Test-Path -LiteralPath $envFile) {
+    foreach ($line in Get-Content -LiteralPath $envFile) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+        $parts = $trimmed.Split('=', 2)
+        if ($parts.Count -eq 2) {
+            [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1], 'Process')
+        }
+    }
+}
+
 # Run this in one PowerShell window on the server.
 $venvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
