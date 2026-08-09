@@ -1488,31 +1488,24 @@ struct NativeChatPane: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             HStack(alignment: .bottom, spacing: 10) {
-                Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.72)
-                    showPhotoLibrary = true
-                } label: {
+                ChatAccessoryControl(action: presentPhotoLibrary) {
                     Image(systemName: "paperclip")
                         .font(.system(size: 21, weight: .semibold))
                         .frame(width: 46, height: 46)
-                        .liquidCard(Circle())
+                        .passiveLiquidCard(Circle())
                 }
-                .buttonStyle(ImmediateGalleryButtonStyle())
                 .photosPicker(isPresented: $showPhotoLibrary, selection: $selectedPhoto, matching: .images)
                 .disabled(isMuted)
                 .opacity(isMuted ? 0.42 : 1)
                 .onChange(of: selectedPhoto) { _, item in Task { await preparePhoto(item) } }
 
-                Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.72)
-                    showStickerPicker = true
-                } label: {
+                ChatAccessoryControl(action: presentStickerPicker) {
                     Image(systemName: "face.smiling.inverse")
                         .font(.system(size: 20, weight: .semibold))
                         .frame(width: 42, height: 46)
-                        .liquidCard(Circle())
+                        .passiveLiquidCard(Circle())
                 }
-                .buttonStyle(ImmediateGalleryButtonStyle()).disabled(isMuted).opacity(isMuted ? 0.42 : 1)
+                .disabled(isMuted).opacity(isMuted ? 0.42 : 1)
 
                 HStack(alignment: .bottom, spacing: 7) {
                     PersistentChatTextField(
@@ -1638,6 +1631,31 @@ struct NativeChatPane: View {
         replyingTo = nil
         draft = ""
     }
+
+    private func presentPhotoLibrary() {
+        guard !isMuted, !showPhotoLibrary, pendingPhoto == nil else { return }
+        prepareForAccessoryPresentation()
+        DispatchQueue.main.async { showPhotoLibrary = true }
+    }
+
+    private func presentStickerPicker() {
+        guard !isMuted, !showStickerPicker else { return }
+        prepareForAccessoryPresentation()
+        DispatchQueue.main.async { showStickerPicker = true }
+    }
+
+    private func prepareForAccessoryPresentation() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.72)
+        focused = false
+        inputFocused = false
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+    }
+
     private func preparePhoto(_ item: PhotosPickerItem?) async {
         guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
         guard let dataURL = await Task.detached(priority: .userInitiated, operation: {
@@ -1781,6 +1799,39 @@ private struct ImmediateGalleryButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .opacity(configuration.isPressed ? 0.82 : 1)
             .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+}
+
+/// Chat accessory buttons sit next to a UIKit text view and underneath the
+/// room's drag gestures. A regular SwiftUI Button can lose its first tap while
+/// the text view resigns first responder or interactive glass claims the press.
+/// Owning the zero-distance gesture gives immediate visual feedback and a
+/// deterministic single action, while passive glass preserves the same look.
+private struct ChatAccessoryControl<Label: View>: View {
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+    @GestureState private var isPressed = false
+
+    var body: some View {
+        label()
+            .scaleEffect(isPressed ? 0.965 : 1)
+            .opacity(isPressed ? 0.78 : 1)
+            .contentShape(Rectangle())
+            .animation(.easeOut(duration: 0.07), value: isPressed)
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .updating($isPressed) { value, state, _ in
+                        state = abs(value.translation.width) < 18 && abs(value.translation.height) < 18
+                    }
+                    .onEnded { value in
+                        guard abs(value.translation.width) < 18,
+                              abs(value.translation.height) < 18 else { return }
+                        action()
+                    }
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(action)
     }
 }
 
