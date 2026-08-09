@@ -10,7 +10,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from config.asgi import application
-from .models import ChatMessage, FriendLink, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute, UserProfile, ViewingActivity
+from .models import ChatMessage, FriendLink, MessageReaction, PlaybackState, Room, RoomBan, RoomInvitation, RoomMember, RoomMute, UserPresence, UserProfile, ViewingActivity
 
 
 class RoomApiTests(APITestCase):
@@ -312,6 +312,48 @@ class RoomApiTests(APITestCase):
         self.assertTrue(response.data["is_friend"])
         self.assertTrue(response.data["analytics_visible"])
         self.assertEqual(response.data["stats"]["genres"][0]["name"], "Drama")
+
+    def test_presence_is_real_and_privacy_aware(self):
+        UserProfile.objects.create(user=self.guest, nickname="Guest profile")
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        self.authenticate(self.guest_token)
+        heartbeat = self.client.get("/api/friends/requests/")
+        self.assertEqual(heartbeat.status_code, 200)
+        self.authenticate(self.owner_token)
+        visible = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        self.assertTrue(visible.data["activity_visible"])
+        self.assertTrue(visible.data["is_online"])
+        presence = UserPresence.objects.get(user=self.guest)
+        presence.show_activity = False
+        presence.save(update_fields=["show_activity"])
+        hidden = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        self.assertFalse(hidden.data["activity_visible"])
+        self.assertFalse(hidden.data["is_online"])
+        self.assertIsNone(hidden.data["last_seen"])
+
+    def test_room_invitation_full_flow_and_duplicate_protection(self):
+        room = Room.objects.create(owner=self.owner, title="Invite room", thumbnail_url="https://example.com/cover.jpg")
+        RoomMember.objects.create(room=room, user=self.owner)
+        PlaybackState.objects.create(room=room)
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        FriendLink.objects.create(user=self.guest, friend=self.owner)
+        self.authenticate(self.owner_token)
+        first = self.client.post(f"/api/rooms/{room.id}/invites/", {"user_ids": [self.guest.id]}, format="json")
+        second = self.client.post(f"/api/rooms/{room.id}/invites/", {"user_ids": [self.guest.id]}, format="json")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(first.data["results"][0]["state"], "sent")
+        self.assertEqual(second.data["results"][0]["state"], "pending")
+        self.assertEqual(RoomInvitation.objects.filter(room=room, recipient=self.guest).count(), 1)
+        invitation_id = first.data["results"][0]["invitation_id"]
+        self.authenticate(self.guest_token)
+        incoming = self.client.get("/api/room-invitations/")
+        self.assertEqual(incoming.status_code, 200)
+        self.assertEqual(incoming.data[0]["room"]["title"], "Invite room")
+        accepted = self.client.post(f"/api/room-invitations/{invitation_id}/", {"action": "accept"}, format="json")
+        self.assertEqual(accepted.status_code, 200, accepted.data)
+        self.assertEqual(accepted.data["room"]["id"], room.id)
+        self.assertTrue(RoomMember.objects.filter(room=room, user=self.guest).exists())
+        self.assertEqual(self.client.get("/api/room-invitations/").data, [])
 
     def test_public_profile_tolerates_legacy_malformed_activity_json(self):
         UserProfile.objects.create(user=self.guest, nickname="Guest profile")

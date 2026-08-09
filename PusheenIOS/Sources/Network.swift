@@ -20,6 +20,9 @@ final class SessionStore: ObservableObject {
     @Published private(set) var authenticationState: AuthenticationState = .restoring
     @Published var friendRequests = FriendRequestsResponse(incoming: [], outgoing: [])
     @Published var friendRequestNotice: FriendRequestProfile?
+    @Published var roomInvitations: [RoomInvitation] = []
+    @Published var roomInvitationNotice: RoomInvitation?
+    @Published var acceptedInvitedRoom: Room?
     @Published var viewingStats: ViewingStats?
     @Published private(set) var isOffline = false
     let api = APIClient()
@@ -66,7 +69,7 @@ final class SessionStore: ObservableObject {
     func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
     func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
     func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; saveCachedProfile(); api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startFriendRequestPolling(); startActivityHeartbeat(); Task { if let stats = try? await self.api.viewingStats() { self.viewingStats = stats; self.saveCachedViewingStats() } } }
-    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey) }
+    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; roomInvitations = []; roomInvitationNotice = nil; acceptedInvitedRoom = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey) }
 
     private static func loadCachedProfile() -> Profile? {
         guard let data = UserDefaults.standard.data(forKey: "pusheen.cached-profile") else { return nil }
@@ -115,6 +118,28 @@ final class SessionStore: ObservableObject {
         await refreshFriendRequests()
     }
 
+    func refreshRoomInvitations() async {
+        guard authenticationState == .signedIn, let invitations = try? await api.roomInvitations() else { return }
+        roomInvitations = invitations
+        if let shown = roomInvitationNotice, !invitations.contains(where: { $0.id == shown.id }) {
+            roomInvitationNotice = nil
+        }
+        if roomInvitationNotice == nil { roomInvitationNotice = invitations.first }
+    }
+
+    func respond(to invitation: RoomInvitation, accept: Bool) async {
+        do {
+            let response = try await api.respondToRoomInvitation(id: invitation.id, accept: accept)
+            roomInvitations.removeAll { $0.id == invitation.id }
+            if roomInvitationNotice?.id == invitation.id { roomInvitationNotice = nil }
+            if accept, let room = response.room { acceptedInvitedRoom = room }
+            await refreshRoomInvitations()
+        } catch {
+            roomInvitations.removeAll { $0.id == invitation.id }
+            roomInvitationNotice = nil
+        }
+    }
+
     func refreshViewingStats() async { if let stats = try? await api.viewingStats() { viewingStats = stats; saveCachedViewingStats() } }
 
     private func startFriendRequestPolling() {
@@ -122,6 +147,7 @@ final class SessionStore: ObservableObject {
         friendRequestPollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshFriendRequests()
+                await self?.refreshRoomInvitations()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -240,6 +266,9 @@ final class APIClient {
         }
     }
     func friendRequests() async throws -> FriendRequestsResponse { let data = try await request("/api/friends/requests/"); return try decoder.decode(FriendRequestsResponse.self, from: data) }
+    func roomInvitations() async throws -> [RoomInvitation] { let data = try await request("/api/room-invitations/"); return try decoder.decode([RoomInvitation].self, from: data) }
+    func inviteFriends(roomID: Int, userIDs: [Int]) async throws { _ = try await request("/api/rooms/\(roomID)/invites/", method: "POST", body: ["user_ids": userIDs]) }
+    func respondToRoomInvitation(id: Int, accept: Bool) async throws -> RoomInvitationResponse { let data = try await request("/api/room-invitations/\(id)/", method: "POST", body: ["action": accept ? "accept" : "decline"]); return try decoder.decode(RoomInvitationResponse.self, from: data) }
     func viewingStats() async throws -> ViewingStats { let data = try await request("/api/activity/"); return try decoder.decode(ViewingStats.self, from: data) }
     func reportActivity(appSeconds: Int = 0, watchedSeconds: Int = 0, durationSeconds: Int = 0, genres: [String] = [], roomID: Int? = nil) async throws -> ViewingStats {
         var body: [String: Any] = ["app_seconds": appSeconds, "watched_seconds": watchedSeconds, "duration_seconds": durationSeconds, "genres": genres]

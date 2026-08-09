@@ -8,19 +8,23 @@ from .models import (
     MessageReaction,
     PlaybackState,
     Room,
+    RoomInvitation,
     RoomMember,
     RoomMute,
     UserProfile,
+    UserPresence,
     ViewingActivity,
 )
 
 
 admin.site.register(Room)
+admin.site.register(RoomInvitation)
 admin.site.register(RoomMember)
 admin.site.register(RoomMute)
 admin.site.register(PlaybackState)
 admin.site.register(ClientIdentity)
 admin.site.register(UserProfile)
+admin.site.register(UserPresence)
 admin.site.register(FriendLink)
 admin.site.register(FriendRequest)
 admin.site.register(ChatMessage)

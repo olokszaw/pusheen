@@ -159,6 +159,54 @@ class FriendRequest(models.Model):
         ]
 
 
+class UserPresence(models.Model):
+    """Privacy-aware app presence updated by the authenticated heartbeat."""
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="watch_presence",
+    )
+    last_seen = models.DateTimeField(auto_now=True)
+    show_activity = models.BooleanField(default=True)
+
+
+class RoomInvitation(models.Model):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    STATUS_CHOICES = (
+        (PENDING, "Pending"),
+        (ACCEPTED, "Accepted"),
+        (DECLINED, "Declined"),
+    )
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="invitations")
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="sent_room_invitations",
+    )
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="received_room_invitations",
+    )
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("room", "recipient"),
+                name="unique_room_invitation_recipient",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(sender=models.F("recipient")),
+                name="room_invitation_cannot_target_self",
+            ),
+        ]
+
+
 class ViewingActivity(models.Model):
     """Aggregated private viewing statistics for one profile."""
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="viewing_activity")

@@ -8,14 +8,14 @@ on:
       api_base_url:
         description: Backend URL reachable from iPhone
         required: true
-        default: https://located-prime-ranks-neural.trycloudflare.com
+        default: https://bradford-advice-convinced-manager.trycloudflare.com
 
 jobs:
   build-ios:
     runs-on: macos-latest
     timeout-minutes: 45
     env:
-      API_BASE_URL: ${{ inputs.api_base_url || 'https://located-prime-ranks-neural.trycloudflare.com' }}
+      API_BASE_URL: ${{ inputs.api_base_url || 'https://bradford-advice-convinced-manager.trycloudflare.com' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,6 +36,8 @@ jobs:
             watchparty.tests.RoomApiTests.test_watched_heartbeat_does_not_double_calendar_activity \
             watchparty.tests.RoomApiTests.test_message_post_is_persisted_and_visible_to_another_member \
             watchparty.tests.RoomApiTests.test_retrying_client_message_id_does_not_duplicate_chat \
+            watchparty.tests.RoomApiTests.test_presence_is_real_and_privacy_aware \
+            watchparty.tests.RoomApiTests.test_room_invitation_full_flow_and_duplicate_protection \
             watchparty.tests.RoomSocketTests.test_guest_recovers_history_and_live_chat_after_reconnect \
             --verbosity 2
 

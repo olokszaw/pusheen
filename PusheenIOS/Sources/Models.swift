@@ -139,8 +139,9 @@ struct ViewingStats: Codable, Hashable {
 
 struct FriendProfile: Codable, Identifiable, Hashable {
     let userId: Int; let username: String; let nickname: String; let avatarDataURL: String; let isFriend: Bool
+    let isOnline: Bool?; let lastSeen: String?; let activityVisible: Bool?
     var id: Int { userId }
-    enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isFriend = "is_friend" }
+    enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isFriend = "is_friend"; case isOnline = "is_online"; case lastSeen = "last_seen"; case activityVisible = "activity_visible" }
 }
 
 struct PublicUserProfile: Codable, Identifiable, Hashable {
@@ -151,6 +152,9 @@ struct PublicUserProfile: Codable, Identifiable, Hashable {
     let isFriend: Bool
     let analyticsVisible: Bool
     let stats: ViewingStats?
+    let isOnline: Bool?
+    let lastSeen: String?
+    let activityVisible: Bool?
     var id: Int { userId }
     enum CodingKeys: String, CodingKey {
         case username, nickname, stats
@@ -158,8 +162,52 @@ struct PublicUserProfile: Codable, Identifiable, Hashable {
         case avatarDataURL = "avatar_data_url"
         case isFriend = "is_friend"
         case analyticsVisible = "analytics_visible"
+        case isOnline = "is_online"
+        case lastSeen = "last_seen"
+        case activityVisible = "activity_visible"
     }
 }
+
+struct RoomInvitationSender: Codable, Hashable {
+    let userId: Int
+    let username: String
+    let nickname: String
+    let avatarDataURL: String
+    let isOnline: Bool?
+    let lastSeen: String?
+    let activityVisible: Bool?
+    enum CodingKeys: String, CodingKey {
+        case username, nickname
+        case userId = "user_id"
+        case avatarDataURL = "avatar_data_url"
+        case isOnline = "is_online"
+        case lastSeen = "last_seen"
+        case activityVisible = "activity_visible"
+    }
+}
+
+struct RoomInvitationRoom: Codable, Hashable {
+    let id: Int
+    let title: String
+    let thumbnailURL: String
+    let inviteCode: String
+    enum CodingKeys: String, CodingKey {
+        case id, title
+        case thumbnailURL = "thumbnail_url"
+        case inviteCode = "invite_code"
+    }
+}
+
+struct RoomInvitation: Codable, Identifiable, Hashable {
+    let id: Int
+    let status: String
+    let createdAt: String
+    let sender: RoomInvitationSender
+    let room: RoomInvitationRoom
+    enum CodingKeys: String, CodingKey { case id, status, sender, room; case createdAt = "created_at" }
+}
+
+struct RoomInvitationResponse: Codable { let status: String; let room: Room? }
 
 struct FriendRequestProfile: Codable, Identifiable, Hashable {
     let id: Int

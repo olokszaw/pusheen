@@ -30,9 +30,11 @@ from .models import (
     PlaybackState,
     Room,
     RoomBan,
+    RoomInvitation,
     RoomMember,
     RoomMute,
     UserProfile,
+    UserPresence,
     ViewingActivity,
 )
 from .permissions import IsRoomOwner
@@ -62,6 +64,28 @@ def safe_activity_map(value):
     if not isinstance(value, dict):
         return {}
     return {str(key): safe_seconds(seconds) for key, seconds in value.items()}
+
+
+def touch_presence(user):
+    if not user or not user.is_authenticated:
+        return
+    UserPresence.objects.update_or_create(user=user, defaults={"last_seen": timezone.now()})
+
+
+def presence_payload(user):
+    presence = getattr(user, "watch_presence", None)
+    if not presence or not presence.show_activity:
+        return {"activity_visible": False, "is_online": False, "last_seen": None}
+    online = presence.last_seen >= timezone.now() - timedelta(seconds=12)
+    return {
+        "activity_visible": True,
+        "is_online": online,
+        "last_seen": presence.last_seen.isoformat(),
+    }
+
+
+def social_profile(user):
+    return {**public_profile(user), **presence_payload(user)}
 
 
 def valid_username(value):
@@ -325,8 +349,9 @@ def public_user_profile(request, user_id):
     shown in rooms and friend search. Viewing analytics never expose raw room
     history and are available only to the owner or a confirmed friend.
     """
+    touch_presence(request.user)
     target = get_object_or_404(
-        get_user_model().objects.select_related("watch_profile", "client_identity"),
+        get_user_model().objects.select_related("watch_profile", "client_identity", "watch_presence"),
         pk=user_id,
     )
     is_self = target.pk == request.user.pk
@@ -339,7 +364,7 @@ def public_user_profile(request, user_id):
     ).exists()
     analytics_visible = is_self or is_friend
     payload = {
-        **public_profile(target),
+        **social_profile(target),
         "is_friend": is_friend,
         "analytics_visible": analytics_visible,
         "stats": None,
@@ -355,12 +380,13 @@ def public_user_profile(request, user_id):
 
 
 def request_profile(friend_request, user):
-    return {"id": friend_request.id, **public_profile(user)}
+    return {"id": friend_request.id, **social_profile(user)}
 
 
 @api_view(["GET", "POST", "DELETE"])
 def friends(request):
     """Search confirmed friends. POST sends a request; DELETE removes a friend."""
+    touch_presence(request.user)
     users = get_user_model()
     if request.method == "GET":
         query = request.query_params.get("username", "").strip()
@@ -368,18 +394,18 @@ def friends(request):
             candidates = (
                 users.objects.filter(username__istartswith=query)
                 .exclude(pk=request.user.pk)
-                .select_related("watch_profile")[:20]
+                .select_related("watch_profile", "client_identity", "watch_presence")[:20]
             )
             existing = set(
                 FriendLink.objects.filter(user=request.user).values_list("friend_id", flat=True)
             )
             return Response([
-                {**public_profile(candidate), "is_friend": candidate.id in existing}
+                {**social_profile(candidate), "is_friend": candidate.id in existing}
                 for candidate in candidates
             ])
         friend_ids = FriendLink.objects.filter(user=request.user).values_list("friend_id", flat=True)
-        result = users.objects.filter(pk__in=friend_ids).select_related("watch_profile")
-        return Response([{**public_profile(user), "is_friend": True} for user in result])
+        result = users.objects.filter(pk__in=friend_ids).select_related("watch_profile", "client_identity", "watch_presence")
+        return Response([{**social_profile(user), "is_friend": True} for user in result])
 
     # DELETE bodies are not consistently forwarded by reverse proxies and
     # temporary tunnels. Accept the username in either place.
@@ -412,6 +438,7 @@ def friends(request):
 
 @api_view(["GET", "POST"])
 def friend_requests(request):
+    touch_presence(request.user)
     if request.method == "GET":
         incoming = FriendRequest.objects.filter(recipient=request.user).select_related("sender", "sender__watch_profile")
         outgoing = FriendRequest.objects.filter(sender=request.user).select_related("recipient", "recipient__watch_profile")
@@ -433,6 +460,116 @@ def friend_requests(request):
         invite.delete()
         return Response({"status": "declined"})
     return Response({"detail": "Unknown action"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def room_invitation_payload(invitation):
+    sender = social_profile(invitation.sender)
+    room = invitation.room
+    return {
+        "id": invitation.id,
+        "status": invitation.status,
+        "created_at": invitation.created_at.isoformat(),
+        "sender": sender,
+        "room": {
+            "id": room.id,
+            "title": room.title,
+            "thumbnail_url": room.thumbnail_url,
+            "invite_code": room.invite_code,
+        },
+    }
+
+
+@api_view(["GET"])
+def room_invitations(request):
+    touch_presence(request.user)
+    invitations = (
+        RoomInvitation.objects.filter(recipient=request.user, status=RoomInvitation.PENDING)
+        .exclude(room__members__user=request.user)
+        .select_related(
+            "room", "sender", "sender__watch_profile", "sender__client_identity", "sender__watch_presence"
+        )
+        .order_by("-created_at")
+    )
+    return Response([room_invitation_payload(item) for item in invitations])
+
+
+@api_view(["POST"])
+def invite_room_friends(request, room_id):
+    touch_presence(request.user)
+    room = get_object_or_404(Room, pk=room_id)
+    if not RoomMember.objects.filter(room=room, user=request.user).exists():
+        return Response({"detail": "Вы не состоите в этой комнате"}, status=403)
+    raw_ids = request.data.get("user_ids")
+    if raw_ids is None:
+        raw_ids = [request.data.get("user_id")]
+    if not isinstance(raw_ids, list):
+        return Response({"detail": "Некорректный список друзей"}, status=400)
+    recipient_ids = []
+    for raw_id in raw_ids[:20]:
+        try:
+            user_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if user_id != request.user.id and user_id not in recipient_ids:
+            recipient_ids.append(user_id)
+    users = get_user_model().objects.filter(pk__in=recipient_ids).select_related(
+        "watch_profile", "client_identity", "watch_presence"
+    )
+    results = []
+    for recipient in users:
+        confirmed_friend = FriendLink.objects.filter(
+            Q(user=request.user, friend=recipient) | Q(user=recipient, friend=request.user)
+        ).exists()
+        if not confirmed_friend:
+            results.append({"user_id": recipient.id, "state": "not_friend"})
+            continue
+        if RoomMember.objects.filter(room=room, user=recipient).exists():
+            results.append({"user_id": recipient.id, "state": "already_member"})
+            continue
+        if RoomBan.objects.filter(room=room, user=recipient).exists():
+            results.append({"user_id": recipient.id, "state": "unavailable"})
+            continue
+        invitation, created = RoomInvitation.objects.get_or_create(
+            room=room,
+            recipient=recipient,
+            defaults={"sender": request.user},
+        )
+        results.append({
+            "user_id": recipient.id,
+            "invitation_id": invitation.id,
+            "state": "sent" if created else invitation.status,
+        })
+    return Response({"results": results}, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+def respond_room_invitation(request, invitation_id):
+    touch_presence(request.user)
+    invitation = get_object_or_404(
+        RoomInvitation.objects.select_related("room", "room__owner", "room__playback"),
+        pk=invitation_id,
+        recipient=request.user,
+        status=RoomInvitation.PENDING,
+    )
+    action = request.data.get("action")
+    if action == "decline":
+        invitation.status = RoomInvitation.DECLINED
+        invitation.save(update_fields=["status", "updated_at"])
+        return Response({"status": "declined"})
+    if action != "accept":
+        return Response({"detail": "Неизвестное действие"}, status=400)
+    room = invitation.room
+    if RoomBan.objects.filter(room=room, user=request.user).exists():
+        return Response({"detail": "Приглашение больше недействительно"}, status=410)
+    with transaction.atomic():
+        if not RoomMember.objects.filter(room=room, user=request.user).exists():
+            if room.members.count() >= room.max_members:
+                return Response({"detail": "В комнате больше нет свободных мест"}, status=409)
+            RoomMember.objects.create(room=room, user=request.user)
+        invitation.status = RoomInvitation.ACCEPTED
+        invitation.save(update_fields=["status", "updated_at"])
+    serializer = RoomSerializer(room, context={"request": request})
+    return Response({"status": "accepted", "room": serializer.data})
 
 
 class RoomListCreateView(generics.ListCreateAPIView):
