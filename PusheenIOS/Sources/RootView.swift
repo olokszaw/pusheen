@@ -1363,10 +1363,10 @@ struct NativeChatPane: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             ForEach(messages) { message in
-                                NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, previewProfile: previewProfile, openProfile: openProfile) { selected in
+                                NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, previewProfile: previewProfile, openProfile: openProfile, showContext: { selected in
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.84)
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { contextMessage = selected }
-                                }
+                                })
                                     .equatable()
                                     .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
                                     .id(message.id)
@@ -1521,28 +1521,30 @@ struct NativeChatPane: View {
                 pendingPhoto = nil
             }
         }
-        if let selected = contextMessage {
-            ContextPreviewGlass(close: { withAnimation { contextMessage = nil } }) {
-                MessageContextPreview(
-                    message: selected,
-                    isMine: selected.authorId == currentUserID,
-                    emojis: quickReactions,
-                    react: { emoji in
-                        react(selected.id, emoji)
-                        withAnimation { contextMessage = nil }
-                    },
-                    copy: {
-                        UIPasteboard.general.string = selected.text
-                        UINotificationFeedbackGenerator().notificationOccurred(.success)
-                        withAnimation { contextMessage = nil }
-                    },
-                    profile: selected.authorId == currentUserID ? nil : {
-                        openProfile(selected)
-                        withAnimation { contextMessage = nil }
-                    }
-                )
-            }
         }
+        .overlayPreferenceValue(MessageBubbleAnchorKey.self) { anchors in
+            GeometryReader { proxy in
+                if let selected = contextMessage, let anchor = anchors[selected.id] {
+                    let frame = proxy[anchor]
+                    MessageAnchoredContextOverlay(
+                        message: selected,
+                        isMine: selected.authorId == currentUserID,
+                        frame: frame,
+                        containerSize: proxy.size,
+                        emojis: quickReactions,
+                        react: { emoji in
+                            react(selected.id, emoji)
+                            withAnimation { contextMessage = nil }
+                        },
+                        copy: {
+                            UIPasteboard.general.string = selected.text
+                            UINotificationFeedbackGenerator().notificationOccurred(.success)
+                            withAnimation { contextMessage = nil }
+                        },
+                        close: { withAnimation { contextMessage = nil } }
+                    )
+                }
+            }
         }
     }
     private func submit() {
@@ -2005,10 +2007,11 @@ struct NativeMessageBubble: View, Equatable {
     let previewProfile: (ChatMessage) -> Void
     let openProfile: (ChatMessage) -> Void
     let showContext: (ChatMessage) -> Void
+    var reportsAnchor = true
 
     static func == (lhs: NativeMessageBubble, rhs: NativeMessageBubble) -> Bool {
         // `react` is an action, not display data. Redraw only when this row's content changes.
-        lhs.message == rhs.message && lhs.isMine == rhs.isMine && lhs.quickReactions == rhs.quickReactions
+        lhs.message == rhs.message && lhs.isMine == rhs.isMine && lhs.quickReactions == rhs.quickReactions && lhs.reportsAnchor == rhs.reportsAnchor
     }
     private var containsEmoji: Bool {
         message.text.unicodeScalars.contains { scalar in
@@ -2120,7 +2123,7 @@ struct NativeMessageBubble: View, Equatable {
         }
     }
 
-    var body: some View {
+    @ViewBuilder private var messageRow: some View {
         if message.isSystem {
             Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
         } else {
@@ -2142,6 +2145,21 @@ struct NativeMessageBubble: View, Equatable {
             }
         }
     }
+
+    @ViewBuilder var body: some View {
+        if reportsAnchor {
+            messageRow.anchorPreference(key: MessageBubbleAnchorKey.self, value: .bounds) { [message.id: $0] }
+        } else {
+            messageRow
+        }
+    }
+}
+
+private struct MessageBubbleAnchorKey: PreferenceKey {
+    static var defaultValue: [Int: Anchor<CGRect>] = [:]
+    static func reduce(value: inout [Int: Anchor<CGRect>], nextValue: () -> [Int: Anchor<CGRect>]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
 }
 
 private struct ReactionPickerBar: View {
@@ -2155,7 +2173,7 @@ private struct ReactionPickerBar: View {
                     Button {
                         select(emoji)
                     } label: {
-                        FluentEmojiGlyph(emoji, size: 29)
+                        FluentReactionGlyph(emoji: emoji, size: 29)
                             .frame(width: 38, height: 38)
                             .background(.white.opacity(0.055), in: Circle())
                     }
@@ -2388,38 +2406,66 @@ struct AvatarView: View {
     }
 }
 
-private struct MessageContextPreview: View {
+private struct MessageAnchoredContextOverlay: View {
     let message: ChatMessage
     let isMine: Bool
+    let frame: CGRect
+    let containerSize: CGSize
     let emojis: [String]
     let react: (String) -> Void
     let copy: () -> Void
-    let profile: (() -> Void)?
+    let close: () -> Void
+
+    private var controlsX: CGFloat {
+        let preferred = isMine ? frame.maxX - 92 : frame.minX + 92
+        return min(containerSize.width - 100, max(100, preferred))
+    }
+
+    private var reactionsY: CGFloat {
+        frame.minY > 68 ? frame.minY - 32 : min(containerSize.height - 32, frame.maxY + 32)
+    }
+
+    private var copyY: CGFloat {
+        let below = frame.maxY + 30
+        if below < containerSize.height - 28 { return below }
+        return max(28, frame.minY - 30)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(spacing: 10) {
-                AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(message.nickname).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    if !message.text.isEmpty { Text(message.text).font(.body).lineLimit(4) }
-                    if !message.imageDataURL.isEmpty { Label("Фотография", systemImage: "photo").font(.caption) }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(11)
-            .background(isMine ? Color.indigo.opacity(0.18) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        ZStack {
+            Color.black.opacity(0.34).ignoresSafeArea().contentShape(Rectangle()).onTapGesture(perform: close)
+
             ReactionPickerBar(emojis: emojis, select: react)
-                .frame(maxWidth: .infinity)
-            HStack(spacing: 9) {
-                if !message.text.isEmpty {
-                    Button(action: copy) { Label("Копировать", systemImage: "doc.on.doc").frame(maxWidth: .infinity).padding(.vertical, 10).liquidCard(Capsule()) }
+                .position(x: containerSize.width / 2, y: reactionsY)
+
+            NativeMessageBubble(
+                message: message,
+                isMine: isMine,
+                react: { _, emoji in react(emoji) },
+                quickReactions: emojis,
+                previewProfile: { _ in },
+                openProfile: { _ in },
+                showContext: { _ in },
+                reportsAnchor: false
+            )
+            .frame(width: frame.width, height: frame.height)
+            .scaleEffect(1.035)
+            .shadow(color: .black.opacity(0.42), radius: 18, y: 10)
+            .position(x: frame.midX, y: frame.midY)
+
+            if !message.text.isEmpty {
+                Button(action: copy) {
+                    Label("Скопировать", systemImage: "doc.on.doc")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 16).frame(height: 44)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.15), lineWidth: 0.8))
                 }
-                if let profile {
-                    Button(action: profile) { Label("Профиль", systemImage: "person.crop.circle").frame(maxWidth: .infinity).padding(.vertical, 10).liquidCard(Capsule()) }
-                }
-            }.buttonStyle(.plain).font(.caption.weight(.semibold))
+                .buttonStyle(.plain)
+                .position(x: controlsX, y: copyY)
+            }
         }
+        .transition(.opacity)
     }
 }
 
@@ -3728,6 +3774,44 @@ struct FluentEmojiGlyph: UIViewRepresentable {
         }
     }
     static func dismantleUIView(_ imageView: EmojiImageView, coordinator: Coordinator) { coordinator.task?.cancel() }
+    final class Coordinator { var task: URLSessionDataTask?; var lastEmoji = "" }
+}
+
+/// Reaction pickers use a static Fluent frame. Rendering dozens of animated
+/// APNG views while a horizontal ScrollView is moving causes avoidable frame
+/// drops on iPhone; the selected reaction remains fully Fluent everywhere.
+private struct FluentReactionGlyph: UIViewRepresentable {
+    let emoji: String
+    let size: CGFloat
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> UIImageView {
+        let view = UIImageView()
+        view.contentMode = .scaleAspectFit
+        view.backgroundColor = .clear
+        return view
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIImageView, context: Context) -> CGSize {
+        CGSize(width: size, height: size)
+    }
+    func updateUIView(_ view: UIImageView, context: Context) {
+        guard context.coordinator.lastEmoji != emoji else { return }
+        context.coordinator.lastEmoji = emoji
+        context.coordinator.task?.cancel()
+        view.image = nil
+        if let image = FluentEmojiCache.shared.image(for: emoji) {
+            view.image = image.images?.first ?? image
+            return
+        }
+        context.coordinator.task = FluentEmojiCache.shared.load(emoji: emoji) { image in
+            guard let image else { return }
+            let staticFrame = image.images?.first ?? image
+            DispatchQueue.main.async {
+                guard context.coordinator.lastEmoji == emoji else { return }
+                view.image = staticFrame
+            }
+        }
+    }
+    static func dismantleUIView(_ uiView: UIImageView, coordinator: Coordinator) { coordinator.task?.cancel() }
     final class Coordinator { var task: URLSessionDataTask?; var lastEmoji = "" }
 }
 
