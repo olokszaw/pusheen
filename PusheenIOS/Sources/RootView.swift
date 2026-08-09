@@ -1850,9 +1850,13 @@ private struct TelegramStickerKeyboard: View {
                                 select(sticker)
                             } label: {
                                 TelegramStickerThumbnail(sticker: sticker)
-                                    .frame(height: 54)
-                                    .padding(3)
+                                    .frame(width: 54, height: 54)
+                                    .clipped()
                             }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 60)
+                            .contentShape(Rectangle())
+                            .clipped()
                             .buttonStyle(ImmediateGalleryButtonStyle())
                         }
                     }
@@ -1884,6 +1888,8 @@ private struct TelegramStickerThumbnail: View {
                 ProgressView().controlSize(.small)
             }
         }
+        .frame(width: 54, height: 54)
+        .clipped()
         .task(id: sticker.id) {
             if sticker.format == "animated",
                let data = try? await session.api.stickerData(id: sticker.id, preview: false) {
@@ -1907,6 +1913,8 @@ private struct TelegramStickerMedia: View {
                 DataURLImage(dataURL: dataURL, contentMode: .fit)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .accessibilityHidden(true)
     }
 }
@@ -1917,6 +1925,8 @@ private struct LottieStickerView: UIViewRepresentable {
     func makeUIView(context: Context) -> LottieAnimationView {
         let view = LottieAnimationView()
         view.contentMode = .scaleAspectFit
+        view.clipsToBounds = true
+        view.layer.masksToBounds = true
         view.loopMode = .loop
         view.backgroundBehavior = .pauseAndRestore
         view.isUserInteractionEnabled = false
@@ -3631,15 +3641,20 @@ private struct TelegramStickerSettingsSheet: View {
             VStack(alignment: .leading, spacing: 15) {
                 HStack { Text("Настройки").font(.title2.bold()); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
                 Label("Импортировать стикеры из Telegram", systemImage: "paperplane.fill").font(.headline)
-                TextField(
-                    "",
-                    text: $link,
-                    prompt: Text("https://t.me/addstickers/...")
-                        .foregroundStyle(Color(white: 0.56).opacity(0.72))
-                )
-                    .foregroundStyle(.primary)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .padding(12).liquidCard(RoundedRectangle(cornerRadius: 16))
+                ZStack(alignment: .leading) {
+                    if link.isEmpty {
+                        Text("https://t.me/addstickers/...")
+                            .foregroundStyle(Color(uiColor: .placeholderText))
+                            .allowsHitTesting(false)
+                    }
+                    TextField("", text: $link)
+                        .foregroundStyle(.primary)
+                        .tint(Color(white: 0.62))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+                .padding(12)
+                .liquidCard(RoundedRectangle(cornerRadius: 16))
                 Button { Task { await importPack() } } label: {
                     HStack { if loading { ProgressView().controlSize(.small) }; Text("Импортировать"); Spacer(); Image(systemName: "square.and.arrow.down") }
                         .frame(height: 44).padding(.horizontal, 13).liquidCard(RoundedRectangle(cornerRadius: 17))
