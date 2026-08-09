@@ -5,12 +5,18 @@ settings:
   base:
     SWIFT_VERSION: 5.0
     IPHONEOS_DEPLOYMENT_TARGET: 18.0
+packages:
+  Lottie:
+    url: https://github.com/airbnb/lottie-ios.git
+    exactVersion: 4.5.2
 targets:
   Pusheen:
     type: application
     platform: iOS
     sources:
       - path: Sources
+    dependencies:
+      - package: Lottie
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: online.izanagi.pusheen

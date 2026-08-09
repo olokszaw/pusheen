@@ -6,6 +6,8 @@ import PhotosUI
 import ImageIO
 import CoreTransferable
 import UniformTypeIdentifiers
+import WebKit
+import Lottie
 
 private struct ImportedRoomMovie: Transferable {
     let url: URL
@@ -1518,7 +1520,12 @@ struct NativeChatPane: View {
                     )
                         .frame(height: inputHeight)
                         .animation(.easeOut(duration: 0.14), value: inputHeight)
-                        .onChange(of: inputFocused) { _, value in focused = value }
+                        .onChange(of: inputFocused) { _, value in
+                            focused = value
+                            if value, showStickerPicker {
+                                withAnimation(.easeOut(duration: 0.18)) { showStickerPicker = false }
+                            }
+                        }
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 31, weight: .medium))
                         .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
@@ -1533,6 +1540,17 @@ struct NativeChatPane: View {
                 .padding(.trailing, 8)
                 .padding(.vertical, 6)
                 .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
+            }
+            if showStickerPicker {
+                TelegramStickerKeyboard { sticker in
+                    sendSticker(sticker)
+                } close: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) {
+                        showStickerPicker = false
+                    }
+                }
+                .frame(height: 286)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             }
             // Keep the composer in the unified chat surface.  The old negative
@@ -1579,19 +1597,6 @@ struct NativeChatPane: View {
                 pendingPhoto = nil
             }
         }
-        .sheet(isPresented: $showStickerPicker) {
-            TelegramStickerPickerSheet { sticker in
-                Task {
-                    guard let data = try? await session.api.stickerData(id: sticker.id, preview: sticker.format != "static") else { return }
-                    let mime = sticker.format == "static" ? "image/webp" : "image/webp"
-                    let dataURL = "data:\(mime);base64," + data.base64EncodedString()
-                    await MainActor.run {
-                        sticksToBottom = true; forceScrollOnNextMessage = true
-                        send("", dataURL, replyingTo); replyingTo = nil; showStickerPicker = false
-                    }
-                }
-            }
-        }
         }
         .overlayPreferenceValue(MessageBubbleAnchorKey.self) { anchors in
             GeometryReader { proxy in
@@ -1634,14 +1639,21 @@ struct NativeChatPane: View {
 
     private func presentPhotoLibrary() {
         guard !isMuted, !showPhotoLibrary, pendingPhoto == nil else { return }
+        withAnimation(.easeOut(duration: 0.16)) { showStickerPicker = false }
         prepareForAccessoryPresentation()
         DispatchQueue.main.async { showPhotoLibrary = true }
     }
 
     private func presentStickerPicker() {
-        guard !isMuted, !showStickerPicker else { return }
+        guard !isMuted else { return }
+        if showStickerPicker {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) { showStickerPicker = false }
+            return
+        }
         prepareForAccessoryPresentation()
-        DispatchQueue.main.async { showStickerPicker = true }
+        DispatchQueue.main.async {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) { showStickerPicker = true }
+        }
     }
 
     private func prepareForAccessoryPresentation() {
@@ -1654,6 +1666,25 @@ struct NativeChatPane: View {
             from: nil,
             for: nil
         )
+    }
+
+    private func sendSticker(_ sticker: TelegramSticker) {
+        Task {
+            guard let data = try? await session.api.stickerData(id: sticker.id, preview: false) else { return }
+            let mime: String
+            switch sticker.format {
+            case "animated": mime = "application/json"
+            case "video": mime = "video/webm"
+            default: mime = "image/webp"
+            }
+            let dataURL = "data:\(mime);base64," + data.base64EncodedString()
+            await MainActor.run {
+                sticksToBottom = true
+                forceScrollOnNextMessage = true
+                send("", dataURL, replyingTo)
+                replyingTo = nil
+            }
+        }
     }
 
     private func preparePhoto(_ item: PhotosPickerItem?) async {
@@ -1759,38 +1790,191 @@ struct NativeChatPane: View {
     }
 }
 
-private struct TelegramStickerPickerSheet: View {
+private struct TelegramStickerKeyboard: View {
     @EnvironmentObject private var session: SessionStore
-    @Environment(\.dismiss) private var dismiss
     let select: (TelegramSticker) -> Void
+    let close: () -> Void
     @State private var packs: [TelegramStickerPack] = []
     @State private var selectedPack = 0
     var body: some View {
-        ZStack {
-            AcrylicBackground()
-            VStack(spacing: 10) {
-                if packs.isEmpty { ContentUnavailableView("Нет наборов", systemImage: "face.smiling", description: Text("Импортируй набор в настройках профиля")) }
-                else {
-                    ScrollView(.horizontal) { HStack { ForEach(Array(packs.enumerated()), id: \.element.id) { index, pack in Button(pack.title) { selectedPack = index }.font(.caption.weight(.semibold)).padding(.horizontal, 12).frame(height: 34).liquidCard(Capsule()).buttonStyle(.plain).foregroundStyle(index == selectedPack ? .cyan : .primary) } }.padding(.horizontal, 16) }.scrollIndicators(.hidden)
-                    ScrollView { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 5), spacing: 7) { ForEach(packs[selectedPack].stickers) { sticker in Button { UISelectionFeedbackGenerator().selectionChanged(); select(sticker); dismiss() } label: { TelegramStickerThumbnail(sticker: sticker).frame(height: 54).padding(3) }.buttonStyle(ImmediateGalleryButtonStyle()) } }.padding(.horizontal, 14).padding(.bottom, 12) }
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                if !packs.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 7) {
+                            ForEach(Array(packs.enumerated()), id: \.element.id) { index, pack in
+                                Button(pack.title) { selectedPack = index }
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 11)
+                                    .frame(height: 31)
+                                    .passiveLiquidCard(Capsule())
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(index == selectedPack ? .cyan : .primary)
+                            }
+                        }
+                        .padding(.leading, 10)
+                    }
+                    .scrollIndicators(.hidden)
+                }
+                Button(action: close) {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 38, height: 31)
+                        .passiveLiquidCard(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 10)
+            }
+            if packs.isEmpty {
+                ContentUnavailableView("Нет наборов", systemImage: "face.smiling", description: Text("Импортируй набор в настройках профиля"))
+                    .frame(maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 5), spacing: 7) {
+                        ForEach(packs[selectedPack].stickers) { sticker in
+                            Button {
+                                UISelectionFeedbackGenerator().selectionChanged()
+                                select(sticker)
+                            } label: {
+                                TelegramStickerThumbnail(sticker: sticker)
+                                    .frame(height: 54)
+                                    .padding(3)
+                            }
+                            .buttonStyle(ImmediateGalleryButtonStyle())
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
                 }
             }
-            .padding(.top, 12)
         }
+        .padding(.top, 8)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.11), lineWidth: 0.8))
         .task { packs = (try? await session.api.stickerPacks()) ?? []; selectedPack = min(selectedPack, max(0, packs.count - 1)) }
-        .presentationDetents([.height(330)])
-        .presentationBackground(.ultraThinMaterial)
-        .presentationCornerRadius(30)
-        .presentationDragIndicator(.visible)
-        .presentationContentInteraction(.scrolls)
     }
 }
 
 private struct TelegramStickerThumbnail: View {
     @EnvironmentObject private var session: SessionStore
     let sticker: TelegramSticker
+    @State private var mediaDataURL = ""
     @State private var image: UIImage?
-    var body: some View { Group { if let image { Image(uiImage: image).resizable().scaledToFit() } else { ProgressView().controlSize(.small) } }.task(id: sticker.id) { if let data = try? await session.api.stickerData(id: sticker.id, preview: true) { image = UIImage(data: data) } } }
+    var body: some View {
+        Group {
+            if !mediaDataURL.isEmpty {
+                TelegramStickerMedia(dataURL: mediaDataURL)
+            } else if let image {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .task(id: sticker.id) {
+            if sticker.format == "animated",
+               let data = try? await session.api.stickerData(id: sticker.id, preview: false) {
+                mediaDataURL = "data:application/json;base64," + data.base64EncodedString()
+            } else if let data = try? await session.api.stickerData(id: sticker.id, preview: true) {
+                image = UIImage(data: data)
+            }
+        }
+    }
+}
+
+private struct TelegramStickerMedia: View {
+    let dataURL: String
+    var body: some View {
+        Group {
+            if dataURL.lowercased().hasPrefix("data:application/json;") {
+                LottieStickerView(dataURL: dataURL)
+            } else if dataURL.lowercased().hasPrefix("data:video/") {
+                WebVideoStickerView(dataURL: dataURL)
+            } else {
+                DataURLImage(dataURL: dataURL, contentMode: .fit)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct LottieStickerView: UIViewRepresentable {
+    let dataURL: String
+
+    func makeUIView(context: Context) -> LottieAnimationView {
+        let view = LottieAnimationView()
+        view.contentMode = .scaleAspectFit
+        view.loopMode = .loop
+        view.backgroundBehavior = .pauseAndRestore
+        view.isUserInteractionEnabled = false
+        load(into: view, coordinator: context.coordinator)
+        return view
+    }
+
+    func updateUIView(_ view: LottieAnimationView, context: Context) {
+        guard context.coordinator.loadedDataURL != dataURL else {
+            if !view.isAnimationPlaying { view.play() }
+            return
+        }
+        load(into: view, coordinator: context.coordinator)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    private func load(into view: LottieAnimationView, coordinator: Coordinator) {
+        guard let data = Self.data(from: dataURL),
+              let animation = try? LottieAnimation.from(data: data) else { return }
+        coordinator.loadedDataURL = dataURL
+        view.animation = animation
+        view.currentProgress = 0
+        view.play()
+    }
+
+    private static func data(from dataURL: String) -> Data? {
+        guard let comma = dataURL.firstIndex(of: ",") else { return nil }
+        return Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...]))
+    }
+
+    final class Coordinator {
+        var loadedDataURL = ""
+    }
+}
+
+private struct WebVideoStickerView: UIViewRepresentable {
+    let dataURL: String
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.isOpaque = false
+        view.backgroundColor = .clear
+        view.scrollView.backgroundColor = .clear
+        view.scrollView.isScrollEnabled = false
+        view.isUserInteractionEnabled = false
+        load(into: view, coordinator: context.coordinator)
+        return view
+    }
+
+    func updateUIView(_ view: WKWebView, context: Context) {
+        guard context.coordinator.loadedDataURL != dataURL else { return }
+        load(into: view, coordinator: context.coordinator)
+    }
+
+    private func load(into view: WKWebView, coordinator: Coordinator) {
+        coordinator.loadedDataURL = dataURL
+        let html = """
+        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}video{width:100%;height:100%;object-fit:contain}</style></head><body><video src="\(dataURL)" autoplay loop muted playsinline></video></body></html>
+        """
+        view.loadHTMLString(html, baseURL: nil)
+    }
+
+    final class Coordinator {
+        var loadedDataURL = ""
+    }
 }
 
 private struct ImmediateGalleryButtonStyle: ButtonStyle {
@@ -2201,7 +2385,11 @@ struct NativeMessageBubble: View, Equatable {
         ChatTimestampFormatter.string(from: message.createdAt)
     }
     private var isStickerMessage: Bool {
-        message.text.isEmpty && message.imageDataURL.lowercased().hasPrefix("data:image/webp;")
+        guard message.text.isEmpty else { return false }
+        let value = message.imageDataURL.lowercased()
+        return value.hasPrefix("data:image/webp;")
+            || value.hasPrefix("data:application/json;")
+            || value.hasPrefix("data:video/webm;")
     }
     private var interactiveAvatar: some View {
         AvatarView(dataURL: message.avatarDataURL, name: message.nickname, size: 38, showsBorder: false)
@@ -2321,7 +2509,7 @@ struct NativeMessageBubble: View, Equatable {
             }
             messageContent
             if isStickerMessage {
-                DataURLImage(dataURL: message.imageDataURL, contentMode: .fit)
+                TelegramStickerMedia(dataURL: message.imageDataURL)
                     .frame(width: 132, height: 132)
             } else if !message.imageDataURL.isEmpty {
                 DataURLImage(dataURL: message.imageDataURL)
@@ -3434,7 +3622,7 @@ private struct TelegramStickerSettingsSheet: View {
                     "",
                     text: $link,
                     prompt: Text("https://t.me/addstickers/...")
-                        .foregroundStyle(.secondary.opacity(0.62))
+                        .foregroundStyle(Color(white: 0.56).opacity(0.72))
                 )
                     .foregroundStyle(.primary)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()

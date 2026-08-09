@@ -1,4 +1,5 @@
 import mimetypes
+import gzip
 import os
 import re
 import json
@@ -107,9 +108,24 @@ def _download_telegram_file(token, file_id):
     return data, os.path.splitext(path)[1] or ".webp"
 
 
+def _normalize_telegram_sticker_data(item, data, extension):
+    if item.get("is_animated"):
+        # Telegram TGS files are gzip-compressed Lottie JSON. Store normalized
+        # JSON so every iOS client can render the animation directly without
+        # depending on platform-specific gzip support.
+        try:
+            data = gzip.decompress(data)
+            json.loads(data.decode("utf-8"))
+            extension = ".json"
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            raise ValueError("Telegram вернул повреждённый анимированный стикер") from error
+    return data, extension
+
+
 def _fetch_telegram_sticker(token, indexed_item):
     index, item = indexed_item
     data, extension = _download_telegram_file(token, item["file_id"])
+    data, extension = _normalize_telegram_sticker_data(item, data, extension)
     preview_data = preview_extension = None
     thumbnail = item.get("thumbnail")
     if thumbnail and thumbnail.get("file_id"):
@@ -597,7 +613,18 @@ def telegram_sticker_packs(request):
 def telegram_sticker_file(request, sticker_id, preview=False):
     sticker = get_object_or_404(TelegramSticker, pk=sticker_id)
     stored = sticker.preview if preview and sticker.preview else sticker.file
-    response = FileResponse(stored.open("rb"), content_type=mimetypes.guess_type(stored.name)[0] or "application/octet-stream")
+    # Packs imported by an older backend may still contain compressed .tgs.
+    # Normalize those lazily as well, so an existing pack starts animating
+    # without forcing the user to import it again.
+    if not preview and sticker.format == TelegramSticker.ANIMATED and stored.name.lower().endswith(".tgs"):
+        try:
+            payload = gzip.decompress(stored.read())
+            json.loads(payload.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            return Response({"detail": "Повреждённый анимированный стикер"}, status=422)
+        response = HttpResponse(payload, content_type="application/json")
+    else:
+        response = FileResponse(stored.open("rb"), content_type=mimetypes.guess_type(stored.name)[0] or "application/octet-stream")
     response["Cache-Control"] = "private, max-age=86400"
     return response
 

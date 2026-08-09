@@ -1,4 +1,6 @@
 from datetime import date, datetime, timedelta, timezone as datetime_timezone
+import gzip
+import json
 
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase
@@ -12,6 +14,7 @@ from rest_framework.test import APITestCase
 
 from config.asgi import application
 from .models import ChatMessage, FriendLink, FriendRequest, MessageReaction, PlaybackState, Room, RoomBan, RoomInvitation, RoomMember, RoomMute, UserPresence, UserProfile, ViewingActivity
+from .views import _normalize_telegram_sticker_data
 
 
 class RoomApiTests(APITestCase):
@@ -24,6 +27,15 @@ class RoomApiTests(APITestCase):
 
     def authenticate(self, token):
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+
+    def test_animated_telegram_sticker_is_normalized_to_lottie_json(self):
+        source = {"v": "5.7.4", "fr": 30, "ip": 0, "op": 60, "layers": []}
+        compressed = gzip.compress(json.dumps(source).encode("utf-8"))
+        payload, extension = _normalize_telegram_sticker_data(
+            {"is_animated": True}, compressed, ".tgs"
+        )
+        self.assertEqual(extension, ".json")
+        self.assertEqual(json.loads(payload), source)
 
     def test_message_post_is_persisted_and_visible_to_another_member(self):
         room = Room.objects.create(owner=self.owner, title="Durable chat")
