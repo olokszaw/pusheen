@@ -1607,8 +1607,18 @@ struct NativeChatPane: View {
         }
         .overlayPreferenceValue(MessageBubbleAnchorKey.self) { anchors in
             GeometryReader { proxy in
-                if let selected = contextMessage, let anchor = anchors[selected.id] {
-                    let frame = proxy[anchor]
+                if let selected = contextMessage {
+                    // LazyVStack may recycle the selected row between the long-press
+                    // and the preference pass. Previously that left the backdrop
+                    // blurred forever because the overlay was conditional on an
+                    // anchor that no longer existed. Keep the context UI dismissible
+                    // and use a safe in-chat fallback frame for that rare pass.
+                    let frame = anchors[selected.id].map { proxy[$0] } ?? CGRect(
+                        x: 12,
+                        y: max(72, min(proxy.size.height - 170, proxy.size.height * 0.48)),
+                        width: max(1, proxy.size.width - 24),
+                        height: 76
+                    )
                     MessageAnchoredContextOverlay(
                         message: selected,
                         isMine: selected.authorId == currentUserID,
@@ -1877,6 +1887,7 @@ private struct TelegramStickerThumbnail: View {
     @EnvironmentObject private var session: SessionStore
     let sticker: TelegramSticker
     @State private var image: UIImage?
+    @State private var failed = false
     var body: some View {
         Group {
             if let image {
@@ -1884,10 +1895,12 @@ private struct TelegramStickerThumbnail: View {
             } else {
                 ZStack {
                     Color.white.opacity(0.035)
-                    if sticker.emoji.isEmpty {
-                        ProgressView().controlSize(.small)
+                    if failed {
+                        Image(systemName: "sparkles.rectangle.stack")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.secondary)
                     } else {
-                        Text(sticker.emoji).font(.system(size: 24))
+                        ProgressView().controlSize(.small)
                     }
                 }
             }
@@ -1902,11 +1915,37 @@ private struct TelegramStickerThumbnail: View {
             // Telegram provides a lightweight, correctly framed WebP preview.
             // Playing every full Lottie JSON in a scrolling grid saturates the
             // main thread/GPU and is the source of the picker stutter.
-            if let data = try? await session.api.stickerData(id: sticker.id, preview: true) {
-                let decoded = UIImage(data: data)
-                image = decoded
-                if let decoded { StickerThumbnailCache.shared.insert(decoded, for: sticker.id) }
+            guard let data = try? await session.api.stickerData(id: sticker.id, preview: true) else {
+                failed = true
+                return
             }
+            // New imports have WebP previews. Older imported animated packs may
+            // return their original Lottie JSON here; UIImage cannot decode it,
+            // which used to expose the Telegram emoji as an ugly placeholder.
+            // Render one real, non-playing frame and cache it instead.
+            let decoded = UIImage(data: data) ?? Self.renderLottiePreview(from: data)
+            image = decoded
+            failed = decoded == nil
+            if let decoded { StickerThumbnailCache.shared.insert(decoded, for: sticker.id) }
+        }
+    }
+
+    @MainActor
+    private static func renderLottiePreview(from data: Data) -> UIImage? {
+        guard let animation = try? LottieAnimation.from(data: data) else { return nil }
+        let size = CGSize(width: 162, height: 162)
+        let animationView = LottieAnimationView(animation: animation)
+        animationView.frame = CGRect(origin: .zero, size: size)
+        animationView.contentMode = .scaleAspectFit
+        animationView.backgroundColor = .clear
+        animationView.currentProgress = 0.12
+        animationView.layoutIfNeeded()
+        animationView.forceDisplayUpdate()
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = false
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            animationView.layer.render(in: context.cgContext)
         }
     }
 }
