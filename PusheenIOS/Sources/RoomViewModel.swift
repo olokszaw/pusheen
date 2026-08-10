@@ -189,12 +189,14 @@ final class RoomViewModel: ObservableObject {
         // The WebSocket is the low-latency path: every participant receives a
         // persisted message as soon as the server handles it. The FIFO HTTP
         // outbox remains the reliable fallback for a tunnel/socket interruption.
-        _ = socket.chat(text: text, image: image, clientMessageID: pendingID, replyToID: replyTo?.id)
+        let sentRealtime = socket.chat(text: text, image: image, clientMessageID: pendingID, replyToID: replyTo?.id)
         Task { [weak self] in
             guard let self else { return }
             // Give the realtime path a short head start. If the acknowledgement
             // never arrives, the same client id makes the HTTP retry idempotent.
-            try? await Task.sleep(for: .milliseconds(900))
+            // If the handshake is not actually ready, fall back immediately;
+            // waiting here was the visible delay during rapid sends.
+            try? await Task.sleep(for: .milliseconds(sentRealtime ? 650 : 40))
             guard !Task.isCancelled,
                   self.pendingMessages.contains(where: { $0.id == pendingID }) else { return }
             await self.flushPendingMessages()

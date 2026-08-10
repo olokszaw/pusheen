@@ -30,10 +30,11 @@ final class RoomSocket: ObservableObject {
     func send(_ payload: [String: Any]) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: data, encoding: .utf8),
+              connected,
               let task else { return false }
         task.send(.string(text)) { [weak self] error in
             guard error != nil else { return }
-            Task { @MainActor in self?.connectionFailed() }
+            Task { @MainActor in self?.connectionFailed(for: task) }
         }
         return true
     }
@@ -68,7 +69,9 @@ final class RoomSocket: ObservableObject {
         let socket = URLSession.shared.webSocketTask(with: endpoint)
         task = socket
         socket.resume()
-        connected = true
+        // `resume()` only starts the handshake. Do not advertise a usable
+        // socket until the server has accepted it and sent its first event.
+        connected = false
         reconnectDelay = 1
         heartbeatCount = 0
         receivedFirstEvent = false
@@ -105,6 +108,7 @@ final class RoomSocket: ObservableObject {
                         guard self.task === socket else { return }
                         if !self.receivedFirstEvent {
                             self.receivedFirstEvent = true
+                            self.connected = true
                             self.onReady?()
                         }
                         self.onEvent?(event)
@@ -115,14 +119,17 @@ final class RoomSocket: ObservableObject {
                     self.receive(from: socket)
                 }
             case .failure:
-                Task { @MainActor in self.connectionFailed() }
+                Task { @MainActor in self.connectionFailed(for: socket) }
             }
         }
     }
 
-    private func connectionFailed() {
+    private func connectionFailed(for failedTask: URLSessionWebSocketTask? = nil) {
         guard !wasClosedByView else { return }
+        if let failedTask, task !== failedTask { return }
         connected = false
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
         heartbeatTask?.cancel(); heartbeatTask = nil
         scheduleReconnect()
     }
