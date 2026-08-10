@@ -227,6 +227,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             "avatar_data_url": profile.avatar_data_url if profile and profile.avatar_data_url else getattr(identity, "avatar_data_url", ""),
             "text": text,
             "image_data_url": image_data_url,
+            "client_message_id": client_message_id,
             "reactions": [],
             "reply_to": ({
                 "id": reply_to.id,

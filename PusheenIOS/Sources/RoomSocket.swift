@@ -26,24 +26,29 @@ final class RoomSocket: ObservableObject {
         open()
     }
 
-    func send(_ payload: [String: Any]) {
+    @discardableResult
+    func send(_ payload: [String: Any]) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: data, encoding: .utf8),
-              let task else { return }
+              let task else { return false }
         task.send(.string(text)) { [weak self] error in
             guard error != nil else { return }
             Task { @MainActor in self?.connectionFailed() }
         }
+        return true
     }
 
     func playback(action: String, isPlaying: Bool, position: Double, videoURL: String? = nil) { var value: [String: Any] = ["type": "playback_command", "action": action, "is_playing": isPlaying, "position_seconds": position]; if let videoURL { value["vk_video_url"] = videoURL }; send(value) }
-    func chat(text: String, image: String = "", clientMessageID: String) {
-        send([
+    @discardableResult
+    func chat(text: String, image: String = "", clientMessageID: String, replyToID: Int? = nil) -> Bool {
+        var payload: [String: Any] = [
             "type": "chat_message",
             "text": text,
             "image_data_url": image,
             "client_message_id": clientMessageID,
-        ])
+        ]
+        if let replyToID { payload["reply_to_id"] = replyToID }
+        return send(payload)
     }
     func reaction(messageID: Int, emoji: String) { send(["type": "message_reaction", "message_id": messageID, "emoji": emoji]) }
 

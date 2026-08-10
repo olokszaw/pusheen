@@ -61,6 +61,17 @@ final class RoomViewModel: ObservableObject {
             // Keep retrying history even if the video endpoint is unavailable.
             // When internet returns, messages appear without reopening the room.
             startMessageSync()
+            // Chat must not wait for media resolving or AVPlayer buffering.
+            // Previously this socket was opened only after /stream/ finished,
+            // so participants on a slow video source saw every message via the
+            // three-second HTTP polling fallback instead of in real time.
+            socket.onEvent = { [weak self] event in self?.apply(event) }
+            socket.onReady = { [weak self] in
+                Task { @MainActor [weak self] in
+                    await self?.recoverMessagesImmediately()
+                }
+            }
+            socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
             let stream = try await api.stream(roomID: room.id)
             streamGenres = stream.genres
             guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
@@ -94,13 +105,6 @@ final class RoomViewModel: ObservableObject {
                 let value = self.player?.currentItem?.duration.seconds ?? 0
                 if value.isFinite && value > 0 && abs(self.duration - value) >= 0.1 { self.duration = value }
             }
-            socket.onEvent = { [weak self] event in self?.apply(event) }
-            socket.onReady = { [weak self] in
-                Task { @MainActor [weak self] in
-                    await self?.recoverMessagesImmediately()
-                }
-            }
-            socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
             startActivityReporting()
         } catch let caughtError { error = caughtError.localizedDescription }
     }
@@ -182,20 +186,18 @@ final class RoomViewModel: ObservableObject {
         }
         let pendingID = UUID().uuidString
         pendingMessages.append(PendingChatMessage(id: pendingID, localMessageID: localID, text: text, image: image, replyTo: replyTo))
-        // A single FIFO HTTP outbox is the source of truth for send order.
-        // The server broadcasts each persisted row to all WebSocket listeners.
+        // The WebSocket is the low-latency path: every participant receives a
+        // persisted message as soon as the server handles it. The FIFO HTTP
+        // outbox remains the reliable fallback for a tunnel/socket interruption.
+        _ = socket.chat(text: text, image: image, clientMessageID: pendingID, replyToID: replyTo?.id)
         Task { [weak self] in
             guard let self else { return }
+            // Give the realtime path a short head start. If the acknowledgement
+            // never arrives, the same client id makes the HTTP retry idempotent.
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled,
+                  self.pendingMessages.contains(where: { $0.id == pendingID }) else { return }
             await self.flushPendingMessages()
-            /*
-            do {
-                let persisted = try await self.api.sendMessage(roomID: self.room.id, text: text, image: image, clientMessageID: pendingID)
-                self.mergeServerMessages([persisted])
-                self.pendingMessages.removeAll { $0.id == pendingID }
-            } catch {
-                self.error = "Не удалось отправить сообщение. Проверь подключение."
-            }
-            */
         }
     }
     func react(messageID: Int, emoji: String) { socket.reaction(messageID: messageID, emoji: emoji) }
@@ -241,7 +243,14 @@ final class RoomViewModel: ObservableObject {
         case "chat_message":
             if let data = try? JSONSerialization.data(withJSONObject: event),
                let message = try? JSONDecoder().decode(ChatMessage.self, from: data) {
-                mergeServerMessages([message])
+                let clientMessageID = event["client_message_id"] as? String
+                if let clientMessageID,
+                   let pending = pendingMessages.first(where: { $0.id == clientMessageID }) {
+                    pendingMessages.removeAll { $0.id == clientMessageID }
+                    confirmPersistedMessage(message, for: pending)
+                } else {
+                    mergeServerMessages([message])
+                }
             }
         case "message_reaction":
             guard let messageID = event["message_id"] as? Int, let emoji = event["emoji"] as? String else { return }
