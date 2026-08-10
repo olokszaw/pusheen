@@ -72,6 +72,30 @@ class RoomApiTests(APITestCase):
         self.assertEqual(first.data["id"], retry.data["id"])
         self.assertEqual(ChatMessage.objects.filter(room=room).count(), 1)
 
+    def test_batch_fallback_persists_a_spam_burst_in_client_order(self):
+        room = Room.objects.create(owner=self.owner, title="Burst chat")
+        RoomMember.objects.create(room=room, user=self.owner)
+        self.authenticate(self.owner_token)
+        burst = [
+            {"text": f"fast-{index}", "client_message_id": f"burst-{index}"}
+            for index in range(12)
+        ]
+        response = self.client.post(
+            f"/api/rooms/{room.id}/messages/batch/", {"messages": burst}, format="json"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual([item["text"] for item in response.data], [item["text"] for item in burst])
+        self.assertEqual(
+            list(ChatMessage.objects.filter(room=room).order_by("id").values_list("text", flat=True)),
+            [item["text"] for item in burst],
+        )
+        # Retrying the entire network burst remains idempotent.
+        retry = self.client.post(
+            f"/api/rooms/{room.id}/messages/batch/", {"messages": burst}, format="json"
+        )
+        self.assertEqual(retry.status_code, 201, retry.data)
+        self.assertEqual(ChatMessage.objects.filter(room=room).count(), len(burst))
+
     def test_reply_is_persisted_and_visible_to_every_member(self):
         room = Room.objects.create(owner=self.owner, title="Reply chat")
         RoomMember.objects.create(room=room, user=self.owner)

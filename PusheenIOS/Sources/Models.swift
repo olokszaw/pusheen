@@ -69,8 +69,8 @@ struct ChatReplyPreview: Codable, Hashable, Identifiable {
 }
 
 struct ChatMessage: Codable, Identifiable, Hashable {
-    let id: Int; let authorId: Int; let nickname: String; let text: String; let imageDataURL: String; let avatarDataURL: String; var reactions: [ChatReaction]; var replyTo: ChatReplyPreview? = nil; var createdAt: String? = nil; var isSystem: Bool = false
-    enum CodingKeys: String, CodingKey { case id, nickname, text, reactions; case authorId = "author_id"; case imageDataURL = "image_data_url"; case avatarDataURL = "avatar_data_url"; case replyTo = "reply_to"; case createdAt = "created_at" }
+    let id: Int; let authorId: Int; let nickname: String; let text: String; let imageDataURL: String; let avatarDataURL: String; var reactions: [ChatReaction]; var replyTo: ChatReplyPreview? = nil; var createdAt: String? = nil; var clientMessageID: String? = nil; var isSystem: Bool = false
+    enum CodingKeys: String, CodingKey { case id, nickname, text, reactions; case authorId = "author_id"; case imageDataURL = "image_data_url"; case avatarDataURL = "avatar_data_url"; case replyTo = "reply_to"; case createdAt = "created_at"; case clientMessageID = "client_message_id" }
 }
 
 struct RoomMember: Codable, Identifiable, Hashable {

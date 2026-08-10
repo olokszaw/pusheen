@@ -227,6 +227,10 @@ final class APIClient {
         let data = try await request("/api/rooms/\(roomID)/messages/", method: "POST", body: body)
         return try decoder.decode(ChatMessage.self, from: data)
     }
+    func sendMessagesBatch(roomID: Int, messages: [[String: Any]]) async throws -> [ChatMessage] {
+        let data = try await request("/api/rooms/\(roomID)/messages/batch/", method: "POST", body: ["messages": messages])
+        return try decoder.decode([ChatMessage].self, from: data)
+    }
     func members(roomID: Int) async throws -> [RoomMember] { let data = try await request("/api/rooms/\(roomID)/members/"); return try decoder.decode([RoomMember].self, from: data) }
     func moderateMember(roomID: Int, userID: Int, action: String) async throws { _ = try await request("/api/rooms/\(roomID)/members/\(userID)/moderate/", method: "POST", body: ["action": action]) }
     func stream(roomID: Int) async throws -> VideoStream { let data = try await request("/api/rooms/\(roomID)/stream/"); return try decoder.decode(VideoStream.self, from: data) }

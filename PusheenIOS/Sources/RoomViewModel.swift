@@ -368,21 +368,32 @@ final class RoomViewModel: ObservableObject {
         guard !isFlushingMessages else { return }
         isFlushingMessages = true
         defer { isFlushingMessages = false }
-        while let pending = pendingMessages.first {
-            do {
-                let persisted = try await api.sendMessage(
-                    roomID: room.id,
-                    text: pending.text,
-                    image: pending.image,
-                    clientMessageID: pending.id,
-                    replyToID: pending.replyTo?.id
-                )
-                pendingMessages.removeAll { $0.id == pending.id }
-                confirmPersistedMessage(persisted, for: pending)
-            } catch {
-                // The outbox is kept until the periodic recovery loop succeeds.
-                return
+        // A disconnected socket often collects a burst while the network is
+        // returning. Persist it as one ordered transaction instead of turning
+        // every tap into a serial  HTTP request and a visible delayed queue.
+        let batch = Array(pendingMessages.prefix(40))
+        guard !batch.isEmpty else { return }
+        let body = batch.map { pending -> [String: Any] in
+            var value: [String: Any] = [
+                "text": pending.text,
+                "image_data_url": pending.image,
+                "client_message_id": pending.id,
+            ]
+            if let replyID = pending.replyTo?.id { value["reply_to_id"] = replyID }
+            return value
+        }
+        do {
+            let persisted = try await api.sendMessagesBatch(roomID: room.id, messages: body)
+            let pendingByID = Dictionary(uniqueKeysWithValues: batch.map { ($0.id, $0) })
+            for message in persisted {
+                guard let clientID = message.clientMessageID,
+                      let pending = pendingByID[clientID] else { continue }
+                pendingMessages.removeAll { $0.id == clientID }
+                confirmPersistedMessage(message, for: pending)
             }
+        } catch {
+            // Keep the complete outbox intact. The socket recovery and next
+            // heartbeat will retry it without losing or reordering a message.
         }
     }
     private func confirmPersistedMessage(_ persisted: ChatMessage, for pending: PendingChatMessage) {

@@ -128,12 +128,13 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     avatar_data_url = serializers.SerializerMethodField()
     reactions = serializers.SerializerMethodField()
     reply_to = serializers.SerializerMethodField()
+    client_message_id = serializers.CharField(read_only=True)
 
     class Meta:
         model = ChatMessage
         fields = (
             "id", "author_id", "author", "nickname", "avatar_data_url",
-            "text", "image_data_url", "reactions", "reply_to", "created_at",
+            "text", "image_data_url", "reactions", "reply_to", "client_message_id", "created_at",
         )
 
     def get_reply_to(self, message):

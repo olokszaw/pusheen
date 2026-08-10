@@ -1110,3 +1110,60 @@ def room_messages(request, room_id):
     )
     messages.reverse()
     return Response(ChatMessageSerializer(messages, many=True, context={"request": request}).data)
+
+
+@api_view(["POST"])
+def room_messages_batch(request, room_id):
+    """Persist a short offline/reconnect burst in one ordered transaction.
+
+    The socket remains the real-time path. This endpoint exists only as its
+    reliable fallback, so ten quick taps never become ten serial HTTP waits.
+    """
+    room = get_object_or_404(Room, id=room_id)
+    if not RoomMember.objects.filter(room=room, user=request.user).exists():
+        return Response({"detail": "Вы не участник комнаты"}, status=403)
+    if RoomMute.objects.filter(room=room, user=request.user).exists():
+        return Response({"detail": "You are muted in this room"}, status=403)
+    items = request.data.get("messages")
+    if not isinstance(items, list) or not items:
+        return Response({"detail": "Messages are required"}, status=400)
+    if len(items) > 40:
+        return Response({"detail": "Too many messages"}, status=400)
+
+    persisted = []
+    created_payloads = []
+    with transaction.atomic():
+        for item in items:
+            if not isinstance(item, dict):
+                return Response({"detail": "Invalid message"}, status=400)
+            text = str(item.get("text") or "").strip()[:500]
+            image_data_url = str(item.get("image_data_url") or "").strip()
+            if len(image_data_url) > 2_800_000:
+                return Response({"detail": "Image is too large"}, status=413)
+            if not text and not image_data_url:
+                return Response({"detail": "Message is empty"}, status=400)
+            client_message_id = str(item.get("client_message_id") or "").strip()[:64]
+            if not client_message_id:
+                return Response({"detail": "client_message_id is required"}, status=400)
+            reply_to = None
+            if item.get("reply_to_id"):
+                reply_to = ChatMessage.objects.filter(id=item["reply_to_id"], room=room).first()
+                if not reply_to:
+                    return Response({"detail": "Reply message not found"}, status=404)
+            message, created = ChatMessage.objects.get_or_create(
+                room=room, user=request.user, client_message_id=client_message_id,
+                defaults={"text": text, "image_data_url": image_data_url, "reply_to": reply_to},
+            )
+            payload = ChatMessageSerializer(message, context={"request": request}).data
+            persisted.append(payload)
+            if created:
+                created_payloads.append(dict(payload))
+
+    # Fan out only after the transaction commits, preserving burst order for
+    # every connected participant.
+    channel_layer = get_channel_layer()
+    for payload in created_payloads:
+        async_to_sync(channel_layer.group_send)(
+            f"watch_room_{room.id}", {"type": "room.chat", "payload": payload}
+        )
+    return Response(persisted, status=status.HTTP_201_CREATED)
