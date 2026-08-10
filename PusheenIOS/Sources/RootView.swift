@@ -1073,9 +1073,9 @@ struct MembersSheet: View {
                 }; Spacer()
             }
             .padding(20)
-            .blur(radius: selected == nil ? 0 : 13)
-            .scaleEffect(selected == nil ? 1 : 0.985)
-            .allowsHitTesting(selected == nil)
+            .blur(radius: selected == nil && !showInviteFriends ? 0 : 13)
+            .scaleEffect(selected == nil && !showInviteFriends ? 1 : 0.985)
+            .allowsHitTesting(selected == nil && !showInviteFriends)
 
             if let member = selected {
                 Color.black.opacity(0.34)
@@ -1094,16 +1094,36 @@ struct MembersSheet: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.92)))
                 .zIndex(2)
             }
+
+            if showInviteFriends {
+                Color.black.opacity(0.34)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { closeInviteFriends() }
+                    .transition(.opacity)
+
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    InviteFriendsPanel(room: room, currentMembers: members, close: closeInviteFriends)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 10)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(3)
+            }
         }
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .animation(.spring(response: 0.32, dampingFraction: 0.84), value: selected?.id)
         .onChange(of: fullProfile?.id) { _, value in if value != nil { selectedDetent = .large } }
-        .sheet(isPresented: $showInviteFriends) { InviteFriendsPanel(room: room, currentMembers: members) }
         .presentationDetents([.medium, .large], selection: $selectedDetent).presentationBackground(.clear)
     }
 
     private func closeModerationMenu() {
         withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) { selected = nil }
+    }
+
+    private func closeInviteFriends() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { showInviteFriends = false }
     }
 }
 
@@ -1182,9 +1202,9 @@ private struct MemberModerationOverlay: View {
 
 private struct InviteFriendsPanel: View {
     @EnvironmentObject private var session: SessionStore
-    @Environment(\.dismiss) private var dismiss
     let room: Room
     let currentMembers: [RoomMember]
+    let close: () -> Void
     @State private var friends: [FriendProfile] = []
     @State private var selectedIDs = Set<Int>()
     @State private var sentIDs = Set<Int>()
@@ -1204,7 +1224,7 @@ private struct InviteFriendsPanel: View {
                 HStack {
                     Text("Пригласить друзей").font(.title3.bold())
                     Spacer()
-                    Button(action: { dismiss() }) { Image(systemName: "xmark").frame(width: 34, height: 34).liquidCard(Circle()) }.buttonStyle(.plain)
+                    Button(action: close) { Image(systemName: "xmark").frame(width: 34, height: 34).liquidCard(Circle()) }.buttonStyle(.plain)
                 }
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -1257,8 +1277,11 @@ private struct InviteFriendsPanel: View {
             }
             .padding(18)
         }
-        .presentationDetents([.medium, .large])
-        .presentationBackground(.clear)
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: 510)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).stroke(.white.opacity(0.16), lineWidth: 0.8))
+        .shadow(color: .black.opacity(0.38), radius: 28, y: 14)
         .task { friends = (try? await session.api.friends()) ?? [] }
     }
 
