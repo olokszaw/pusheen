@@ -648,6 +648,36 @@ class RoomSocketTests(TransactionTestCase):
     def test_guest_recovers_history_and_live_chat_after_reconnect(self):
         async_to_sync(self._assert_chat_recovery)()
 
+    def test_guest_receives_every_identical_message_from_rapid_socket_burst(self):
+        async_to_sync(self._assert_identical_chat_burst)()
+
+    async def _assert_identical_chat_burst(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        guest_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+        await self._next_event(guest_socket, "playback_state")
+
+        expected_client_ids = [f"socket-burst-{index}" for index in range(12)]
+        for client_id in expected_client_ids:
+            await owner_socket.send_json_to(
+                {"type": "chat_message", "text": "a", "client_message_id": client_id}
+            )
+
+        received = [await self._next_event(guest_socket, "chat_message") for _ in expected_client_ids]
+        self.assertEqual([item["text"] for item in received], ["a"] * 12)
+        self.assertEqual([item["client_message_id"] for item in received], expected_client_ids)
+        self.assertEqual(len({item["id"] for item in received}), 12)
+        self.assertEqual(await self._room_message_texts(), ["a"] * 12)
+
+        await owner_socket.disconnect()
+        await guest_socket.disconnect()
+
     async def _assert_chat_recovery(self):
         owner_socket = WebsocketCommunicator(
             application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
