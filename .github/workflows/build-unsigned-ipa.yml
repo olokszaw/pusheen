@@ -8,14 +8,14 @@ on:
       api_base_url:
         description: Backend URL reachable from iPhone
         required: true
-        default: https://bradford-advice-convinced-manager.trycloudflare.com
+        default: https://try-believe-portable-prostate.trycloudflare.com
 
 jobs:
   build-ios:
     runs-on: macos-latest
     timeout-minutes: 45
     env:
-      API_BASE_URL: ${{ inputs.api_base_url || 'https://bradford-advice-convinced-manager.trycloudflare.com' }}
+      API_BASE_URL: ${{ inputs.api_base_url || 'https://try-believe-portable-prostate.trycloudflare.com' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
