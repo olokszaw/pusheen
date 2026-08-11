@@ -196,7 +196,7 @@ final class RoomViewModel: ObservableObject {
             // never arrives, the same client id makes the HTTP retry idempotent.
             // If the handshake is not actually ready, fall back immediately;
             // waiting here was the visible delay during rapid sends.
-            try? await Task.sleep(for: .milliseconds(sentRealtime ? 650 : 40))
+            try? await Task.sleep(for: .milliseconds(sentRealtime ? 180 : 40))
             guard !Task.isCancelled,
                   self.pendingMessages.contains(where: { $0.id == pendingID }) else { return }
             await self.flushPendingMessages()
@@ -373,29 +373,35 @@ final class RoomViewModel: ObservableObject {
         // A disconnected socket often collects a burst while the network is
         // returning. Persist it as one ordered transaction instead of turning
         // every tap into a serial  HTTP request and a visible delayed queue.
-        let batch = Array(pendingMessages.prefix(40))
-        guard !batch.isEmpty else { return }
-        let body = batch.map { pending -> [String: Any] in
-            var value: [String: Any] = [
-                "text": pending.text,
-                "image_data_url": pending.image,
-                "client_message_id": pending.id,
-            ]
-            if let replyID = pending.replyTo?.id { value["reply_to_id"] = replyID }
-            return value
-        }
-        do {
-            let persisted = try await api.sendMessagesBatch(roomID: room.id, messages: body)
-            let pendingByID = Dictionary(uniqueKeysWithValues: batch.map { ($0.id, $0) })
-            for message in persisted {
-                guard let clientID = message.clientMessageID,
-                      let pending = pendingByID[clientID] else { continue }
-                pendingMessages.removeAll { $0.id == clientID }
-                confirmPersistedMessage(message, for: pending)
+        while !pendingMessages.isEmpty {
+            let batch = Array(pendingMessages.prefix(40))
+            let body = batch.map { pending -> [String: Any] in
+                var value: [String: Any] = [
+                    "text": pending.text,
+                    "image_data_url": pending.image,
+                    "client_message_id": pending.id,
+                ]
+                if let replyID = pending.replyTo?.id { value["reply_to_id"] = replyID }
+                return value
             }
-        } catch {
-            // Keep the complete outbox intact. The socket recovery and next
-            // heartbeat will retry it without losing or reordering a message.
+            do {
+                let persisted = try await api.sendMessagesBatch(roomID: room.id, messages: body)
+                let pendingByID = Dictionary(uniqueKeysWithValues: batch.map { ($0.id, $0) })
+                var confirmedIDs = Set<String>()
+                for message in persisted {
+                    guard let clientID = message.clientMessageID,
+                          let pending = pendingByID[clientID] else { continue }
+                    confirmedIDs.insert(clientID)
+                    pendingMessages.removeAll { $0.id == clientID }
+                    confirmPersistedMessage(message, for: pending)
+                }
+                // A malformed/old server response must not spin forever.
+                guard !confirmedIDs.isEmpty else { return }
+            } catch {
+                // Keep the complete outbox intact. The socket recovery and next
+                // heartbeat will retry it without losing or reordering a message.
+                return
+            }
         }
     }
     private func confirmPersistedMessage(_ persisted: ChatMessage, for pending: PendingChatMessage) {
