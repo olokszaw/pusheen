@@ -653,6 +653,7 @@ struct LegacyRoomCard: View {
 struct RoomView: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     let room: Room
     let api: APIClient
     let token: String
@@ -751,24 +752,20 @@ struct RoomView: View {
         // real safe-area inset, so it can never slide under system chrome.
         .ignoresSafeArea(edges: .bottom)
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
-            guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-            keyboardHeight = max(0, min(360, UIScreen.main.bounds.maxY - frame.minY))
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                keyboardHeight = 0
-            }
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
-                chatFocused = false
-            }
-        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { updateKeyboardFrame($0) }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { updateKeyboardFrame($0) }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in resetKeyboardLayout() }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in resetKeyboardLayout() }
         .onChange(of: chatFocused) { _, focused in
             if focused && controlsVisible {
                 withAnimation(.easeOut(duration: 0.18)) { controlsVisible = false }
             }
+            if !focused && keyboardHeight > 0 { keyboardHeight = 0 }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // iOS can dismiss the software keyboard while the app is inactive
+            // without delivering the complete will-hide notification sequence.
+            if phase != .active { resetKeyboardLayout() }
         }
         .onChange(of: model.wasRemovedFromRoom) { _, removed in
             if removed { leaveRoom() }
@@ -881,6 +878,30 @@ struct RoomView: View {
         chatFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         DispatchQueue.main.async { showMembers = true }
+    }
+    private func updateKeyboardFrame(_ notification: Notification) {
+        guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+        let bounds = UIScreen.main.bounds
+        let overlap = bounds.intersection(frame)
+        let nextHeight: CGFloat = frame.minY >= bounds.maxY - 1 || overlap.isNull || overlap.height <= 1
+            ? 0
+            : min(420, overlap.height)
+        guard nextHeight > 0 else {
+            resetKeyboardLayout()
+            return
+        }
+        // Ignore keyboards presented by a profile/settings sheet above the
+        // room. Only the chat's own first responder may resize this surface.
+        guard chatFocused else { return }
+        keyboardHeight = nextHeight
+    }
+    private func resetKeyboardLayout() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { keyboardHeight = 0 }
+        if chatFocused {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { chatFocused = false }
+        }
     }
 }
 
@@ -1422,6 +1443,7 @@ struct NativeChatPane: View {
                         .padding(.bottom, 2)
                         .scrollTargetLayout()
                     }
+                    .scrollDismissesKeyboard(.interactively)
                     .contentShape(Rectangle())
                     .onTapGesture { focused = false; inputFocused = false }
                     .onScrollGeometryChange(for: Bool.self, of: { geometry in
@@ -1456,6 +1478,10 @@ struct NativeChatPane: View {
                         // The chat becomes taller as the keyboard closes. Keep
                         // the newest bubbles attached to the composer instead of
                         // leaving them at the top of the expanded scroll view.
+                        if oldHeight > 0, newHeight == 0 {
+                            inputFocused = false
+                            focused = false
+                        }
                         guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
                         DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
                     }
