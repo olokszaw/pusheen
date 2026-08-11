@@ -1,10 +1,13 @@
 from datetime import date, datetime, timedelta, timezone as datetime_timezone
 import gzip
 import json
+import os
+import tempfile
 
 from django.contrib.auth import get_user_model
 from django.db import OperationalError
-from django.test import TransactionTestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
@@ -608,6 +611,50 @@ class RoomApiTests(APITestCase):
         roles = {item["username"]: item["is_owner"] for item in members_response.data}
         self.assertTrue(roles["owner"])
         self.assertFalse(roles["guest"])
+
+        # Retrying after a delayed response must not create a duplicate
+        # membership or change the room identity.
+        repeated = self.client.post(
+            "/api/rooms/join/", {"invite_code": original_code}, format="json"
+        )
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(repeated.data["id"], room.id)
+        self.assertEqual(RoomMember.objects.filter(room=room, user=self.guest).count(), 1)
+
+    def test_gallery_room_upload_stream_and_delete_are_one_consistent_flow(self):
+        self.authenticate(self.owner_token)
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            created = self.client.post(
+                "/api/rooms/", {"title": "", "media_url": "", "is_private": False}, format="json"
+            )
+            self.assertEqual(created.status_code, 201, created.data)
+            room_id = created.data["id"]
+            self.assertEqual(RoomMember.objects.filter(room_id=room_id, user=self.owner).count(), 1)
+            self.assertTrue(PlaybackState.objects.filter(room_id=room_id).exists())
+
+            uploaded = self.client.post(
+                f"/api/rooms/{room_id}/upload/",
+                {
+                    "title": "Local movie",
+                    "video": SimpleUploadedFile("movie.mp4", b"0123456789", content_type="video/mp4"),
+                },
+                format="multipart",
+            )
+            self.assertEqual(uploaded.status_code, 201, uploaded.data)
+            room = Room.objects.get(pk=room_id)
+            stored_path = room.uploaded_video.path
+            self.assertTrue(os.path.exists(stored_path))
+
+            stream = self.client.get(f"/api/rooms/{room_id}/stream/")
+            self.assertEqual(stream.status_code, 200, stream.data)
+            self.assertEqual(stream.data["source_type"], "upload")
+            ranged = self.client.get(f"/api/rooms/{room_id}/media/", HTTP_RANGE="bytes=2-5")
+            self.assertEqual(ranged.status_code, 206)
+            self.assertEqual(b"".join(ranged.streaming_content), b"2345")
+
+            deleted = self.client.delete(f"/api/rooms/{room_id}/")
+            self.assertEqual(deleted.status_code, 204)
+            self.assertFalse(os.path.exists(stored_path))
 
     def test_guest_cannot_edit_room(self):
         room = Room.objects.create(owner=self.owner, title="Комната владельца")

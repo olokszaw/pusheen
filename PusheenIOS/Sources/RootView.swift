@@ -239,6 +239,7 @@ struct HomeView: View {
     @State private var path = NavigationPath()
     @State private var showCreate = false
     @State private var showJoin = false
+    @State private var pendingRoomToOpen: Room?
     @State private var previewedRoom: Room?
     @State private var selectedRoomIDs = Set<Int>()
     @State private var isSelectingRooms = false
@@ -339,8 +340,18 @@ struct HomeView: View {
             }
             .animation(.spring(response: 0.34, dampingFraction: 0.84), value: previewedRoom?.id)
             .navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }
-            .sheet(isPresented: $showCreate) { CreateRoomSheet { room in rooms.insert(room, at: 0); saveRoomsCache(); path.append(room) } }
-            .sheet(isPresented: $showJoin) { JoinRoomSheet { room in rooms.insert(room, at: 0); saveRoomsCache(); path.append(room) } }
+            .sheet(isPresented: $showCreate, onDismiss: openPendingRoom) {
+                CreateRoomSheet { room in
+                    stageRoomForOpening(room)
+                    showCreate = false
+                }
+            }
+            .sheet(isPresented: $showJoin, onDismiss: openPendingRoom) {
+                JoinRoomSheet { room in
+                    stageRoomForOpening(room)
+                    showJoin = false
+                }
+            }
             .confirmationDialog("Удалить выбранные комнаты?", isPresented: $showBulkDeleteConfirmation, titleVisibility: .visible) {
                 Button("Удалить \(selectedRoomIDs.count)", role: .destructive) { Task { await deleteSelectedRooms() } }
             } message: { Text("Видео, загруженные в эти комнаты, тоже удалятся с сервера.") }
@@ -369,6 +380,22 @@ struct HomeView: View {
     private func saveRoomsCache() {
         guard let data = try? JSONEncoder().encode(rooms) else { return }
         UserDefaults.standard.set(data, forKey: Self.roomsCacheKey)
+    }
+    private func stageRoomForOpening(_ room: Room) {
+        // A list refresh can finish at the same moment as creation/joining.
+        // Upsert instead of inserting a duplicate card, then wait until the
+        // modal is fully gone before mutating NavigationStack's path.
+        rooms.removeAll { $0.id == room.id }
+        rooms.insert(room, at: 0)
+        saveRoomsCache()
+        pendingRoomToOpen = room
+    }
+    private func openPendingRoom() {
+        guard let room = pendingRoomToOpen else { return }
+        pendingRoomToOpen = nil
+        DispatchQueue.main.async {
+            path.append(room)
+        }
     }
     private var selectionToolbar: some View {
         HStack(spacing: 10) {
@@ -609,7 +636,6 @@ struct MovieSearchSheet: View {
 
 struct CreateRoomSheet: View {
     @EnvironmentObject private var session: SessionStore
-    @Environment(\.dismiss) private var dismiss
     let created: (Room) -> Void
     @State private var url = ""
     @State private var selectedMovie: PhotosPickerItem?
@@ -624,6 +650,12 @@ struct CreateRoomSheet: View {
         Text("Новая комната").font(.title2.bold())
         Text("Вставь ссылку VK Видео, сайта или выбери файл из галереи.").font(.subheadline).foregroundStyle(.secondary)
         TextField("Ссылка на видео", text: $url, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
+            .onChange(of: url) { _, value in
+                if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, movieURL != nil {
+                    selectedMovie = nil
+                    cleanupSelectedMovie()
+                }
+            }
         Button {
             showsMoviePicker = true
         } label: {
@@ -645,6 +677,7 @@ struct CreateRoomSheet: View {
                 defer { if accessed { source.stopAccessingSecurityScopedResource() } }
                 let copy = URL.temporaryDirectory.appendingPathComponent("pusheen-file-\(UUID().uuidString)").appendingPathExtension(source.pathExtension.isEmpty ? "mp4" : source.pathExtension)
                 try FileManager.default.copyItem(at: source, to: copy)
+                cleanupSelectedMovie()
                 movieURL = copy; movieError = ""; url = ""
             } catch { movieError = "Не удалось получить видео из файлов" }
         }
@@ -652,11 +685,24 @@ struct CreateRoomSheet: View {
         if !movieError.isEmpty { Text(movieError).font(.caption).foregroundStyle(.red) }
         if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
         Button { Task { await create() } } label: { Label(loading ? "Загрузка…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading)
-    }.padding(22) }.presentationDetents([.medium, .large]).presentationBackground(.clear) }
+    }.padding(22) }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(.clear)
+        .interactiveDismissDisabled(loading)
+        .onDisappear { cleanupSelectedMovie() }
+    }
     private func loadMovie(_ item: PhotosPickerItem?) async {
-        movieError = ""; movieURL = nil
+        movieError = ""
         guard let item else { return }
-        do { movieURL = try await item.loadTransferable(type: ImportedRoomMovie.self)?.url }
+        do {
+            if let imported = try await item.loadTransferable(type: ImportedRoomMovie.self)?.url {
+                cleanupSelectedMovie()
+                movieURL = imported
+                url = ""
+            } else {
+                movieError = "Не удалось получить видео из галереи"
+            }
+        }
         catch { movieError = "Не удалось получить видео из галереи" }
     }
     private func create() async {
@@ -667,11 +713,16 @@ struct CreateRoomSheet: View {
             let room: Room
             if let movieURL { room = try await session.api.uploadRoomVideo(roomID: pendingRoom!.id, fileURL: movieURL) }
             else { room = pendingRoom! }
-            created(room); dismiss()
+            created(room)
         } catch {
             if let pendingRoom { try? await session.api.deleteRoom(id: pendingRoom.id) }
             self.error = error.localizedDescription
         }
+    }
+    private func cleanupSelectedMovie() {
+        guard let movieURL, movieURL.path.contains("pusheen-") else { return }
+        try? FileManager.default.removeItem(at: movieURL)
+        self.movieURL = nil
     }
 }
 
@@ -5094,12 +5145,19 @@ struct EmojiFlowLayout: Layout {
 
 struct JoinRoomSheet: View {
     @EnvironmentObject private var session: SessionStore
-    @Environment(\.dismiss) private var dismiss
     let joined: (Room) -> Void
     @State private var code = ""
     @State private var error = ""
-    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 16) { Text("Войти в комнату").font(.title3.bold()); GlassField(icon: "number", title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button("Присоединиться") { Task { await join() } }.buttonStyle(.plain).padding(.horizontal, 24).padding(.vertical, 12).liquidCard(Capsule()) }.padding(22).liquidCard(RoundedRectangle(cornerRadius: 28)).padding(18) }.presentationDetents([.height(250)]).presentationBackground(.clear) }
-    private func join() async { do { let room = try await session.api.joinRoom(code: code.trimmingCharacters(in: .whitespacesAndNewlines)); joined(room); dismiss() } catch { self.error = error.localizedDescription } }
+    @State private var loading = false
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 16) { Text("Войти в комнату").font(.title3.bold()); GlassField(icon: "number", title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button(loading ? "Подключение…" : "Присоединиться") { Task { await join() } }.buttonStyle(.plain).padding(.horizontal, 24).padding(.vertical, 12).liquidCard(Capsule()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading) }.padding(22).liquidCard(RoundedRectangle(cornerRadius: 28)).padding(18) }.presentationDetents([.height(250)]).presentationBackground(.clear).interactiveDismissDisabled(loading) }
+    private func join() async {
+        guard !loading else { return }
+        loading = true; error = ""; defer { loading = false }
+        do {
+            let room = try await session.api.joinRoom(code: code.trimmingCharacters(in: .whitespacesAndNewlines))
+            joined(room)
+        } catch { self.error = error.localizedDescription }
+    }
 }
 
 struct LegacyProfileEditSheet: View {

@@ -71,7 +71,13 @@ final class SessionStore: ObservableObject {
     func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
     func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
     func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; saveCachedProfile(); api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startForegroundTasks(); Task { if let stats = try? await self.api.viewingStats() { self.viewingStats = stats; self.saveCachedViewingStats() } } }
-    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; presenceHeartbeatTask?.cancel(); presenceHeartbeatTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; roomInvitations = []; roomInvitationNotice = nil; roomInvitationStatusNotice = nil; acceptedInvitedRoom = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey) }
+    func logout() {
+        let authorizationToken = token
+        if let authorizationToken {
+            Task { [api] in try? await api.setPresence(active: false, authorizationToken: authorizationToken) }
+        }
+        friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; presenceHeartbeatTask?.cancel(); presenceHeartbeatTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; roomInvitations = []; roomInvitationNotice = nil; roomInvitationStatusNotice = nil; acceptedInvitedRoom = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey)
+    }
 
     func setAppActive(_ active: Bool) {
         guard appIsActive != active else {
@@ -224,11 +230,11 @@ final class APIClient {
     var token: String?
     private let decoder = JSONDecoder()
 
-    private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true, timeout: TimeInterval = 8) async throws -> Data {
+    private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true, timeout: TimeInterval = 8, authorizationToken: String? = nil) async throws -> Data {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }
         var request = URLRequest(url: url); request.httpMethod = method; request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if authenticated, let token { request.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
+        if authenticated, let credential = authorizationToken ?? token { request.setValue("Token \(credential)", forHTTPHeaderField: "Authorization") }
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -246,7 +252,7 @@ final class APIClient {
     func login(username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/login/", method: "POST", body: ["username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
     func register(nickname: String, username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/register/", method: "POST", body: ["nickname": nickname, "username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
     func profile() async throws -> Profile { let data = try await request("/api/profile/"); return try decoder.decode(Profile.self, from: data) }
-    func setPresence(active: Bool) async throws { _ = try await request("/api/presence/", method: "POST", body: ["active": active], timeout: 5) }
+    func setPresence(active: Bool, authorizationToken: String? = nil) async throws { _ = try await request("/api/presence/", method: "POST", body: ["active": active], timeout: 5, authorizationToken: authorizationToken) }
     func publicProfile(userID: Int) async throws -> PublicUserProfile { let data = try await request("/api/users/\(userID)/profile/"); return try decoder.decode(PublicUserProfile.self, from: data) }
     func rooms() async throws -> [Room] { let data = try await request("/api/rooms/"); return try decoder.decode([Room].self, from: data) }
     func searchMovies(_ query: String) async throws -> [MovieCatalogItem] {
