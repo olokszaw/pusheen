@@ -324,47 +324,18 @@ final class RoomViewModel: ObservableObject {
     }
     private func mergeServerMessages(_ serverMessages: [ChatMessage]) {
         for message in serverMessages where !messages.contains(where: { $0.id == message.id }) {
-            // Our HTTP response confirms the exact local row. Ignore the
-            // accompanying socket broadcast while that row is still pending,
-            // otherwise identical spam can confirm the wrong bubble.
-            if let currentUserID, message.authorId == currentUserID && pendingMessages.contains(where: {
-                $0.text == message.text && $0.image == message.imageDataURL
-            }) {
+            // Confirm only the exact optimistic message. Comparing text here
+            // used to discard legitimate rapid messages such as "a, a, a".
+            if let clientID = message.clientMessageID,
+               let pending = pendingMessages.first(where: { $0.id == clientID }) {
+                pendingMessages.removeAll { $0.id == clientID }
+                confirmPersistedMessage(message, for: pending)
                 continue
             }
-            // Older servers can accept one send through both WebSocket and
-            // HTTP, yielding two ids. Keep a single visible delivery.
-            if messages.contains(where: { isDuplicateDelivery($0, of: message) }) {
-                continue
-            }
-            if let pending = messages.firstIndex(where: {
-                $0.id < 0 && $0.authorId == message.authorId &&
-                $0.text == message.text && $0.imageDataURL == message.imageDataURL
-            }) {
-                messages[pending] = message
-            } else {
-                messages.append(message)
-            }
+            // Server ids are authoritative and unique. Two equal texts are two
+            // real messages unless their id/client id is also equal.
+            messages.append(message)
         }
-    }
-    private func chatMessageDate(_ message: ChatMessage) -> Date? {
-        guard let value = message.createdAt else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) { return date }
-        let standard = ISO8601DateFormatter()
-        standard.formatOptions = [.withInternetDateTime]
-        return standard.date(from: value)
-    }
-    private func isDuplicateDelivery(_ existing: ChatMessage, of incoming: ChatMessage) -> Bool {
-        guard existing.id > 0,
-              incoming.id > 0,
-              existing.authorId == incoming.authorId,
-              existing.text == incoming.text,
-              existing.imageDataURL == incoming.imageDataURL,
-              let existingDate = chatMessageDate(existing),
-              let incomingDate = chatMessageDate(incoming) else { return false }
-        return abs(existingDate.timeIntervalSince(incomingDate)) < 3
     }
     private func flushPendingMessages() async {
         guard !isFlushingMessages else { return }

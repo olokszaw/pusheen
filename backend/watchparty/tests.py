@@ -77,7 +77,7 @@ class RoomApiTests(APITestCase):
         RoomMember.objects.create(room=room, user=self.owner)
         self.authenticate(self.owner_token)
         burst = [
-            {"text": f"fast-{index}", "client_message_id": f"burst-{index}"}
+            {"text": "a", "client_message_id": f"burst-{index}"}
             for index in range(12)
         ]
         response = self.client.post(
@@ -85,6 +85,10 @@ class RoomApiTests(APITestCase):
         )
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual([item["text"] for item in response.data], [item["text"] for item in burst])
+        self.assertEqual(
+            [item["client_message_id"] for item in response.data],
+            [item["client_message_id"] for item in burst],
+        )
         self.assertEqual(
             list(ChatMessage.objects.filter(room=room).order_by("id").values_list("text", flat=True)),
             [item["text"] for item in burst],
