@@ -754,13 +754,15 @@ struct RoomView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { updateKeyboardFrame($0) }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { updateKeyboardFrame($0) }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in resetKeyboardLayout() }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { resetKeyboardLayout(animatedWith: $0) }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in resetKeyboardLayout() }
         .onChange(of: chatFocused) { _, focused in
             if focused && controlsVisible {
                 withAnimation(.easeOut(duration: 0.18)) { controlsVisible = false }
             }
-            if !focused && keyboardHeight > 0 { keyboardHeight = 0 }
+            if !focused && keyboardHeight > 0 {
+                withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = 0 }
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             // iOS can dismiss the software keyboard while the app is inactive
@@ -887,7 +889,7 @@ struct RoomView: View {
             ? 0
             : min(420, overlap.height)
         guard nextHeight > 0 else {
-            resetKeyboardLayout()
+            resetKeyboardLayout(animatedWith: notification)
             return
         }
         // Ignore keyboards presented by a profile/settings sheet above the
@@ -895,12 +897,27 @@ struct RoomView: View {
         guard chatFocused else { return }
         keyboardHeight = nextHeight
     }
-    private func resetKeyboardLayout() {
+    private func resetKeyboardLayout(animatedWith notification: Notification? = nil) {
+        if let notification {
+            withAnimation(keyboardAnimation(from: notification)) {
+                keyboardHeight = 0
+                chatFocused = false
+            }
+            return
+        }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { keyboardHeight = 0 }
-        if chatFocused {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) { chatFocused = false }
+        chatFocused = false
+    }
+    private func keyboardAnimation(from notification: Notification) -> Animation {
+        let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
+        let rawCurve = (notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.intValue
+        switch rawCurve.flatMap(UIView.AnimationCurve.init(rawValue:)) {
+        case .easeIn: return .easeIn(duration: duration)
+        case .easeOut: return .easeOut(duration: duration)
+        case .linear: return .linear(duration: duration)
+        default: return .easeInOut(duration: duration)
         }
     }
 }
@@ -1405,8 +1422,6 @@ struct NativeChatPane: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
-    @State private var wasAtBottomBeforeKeyboard = true
-    @State private var didDragChatWhileKeyboardVisible = false
     @State private var didInitialScroll = false
     @State private var forceScrollOnNextMessage = false
     @State private var unreadMessageCount = 0
@@ -1447,13 +1462,6 @@ struct NativeChatPane: View {
                     }
                     .scrollDismissesKeyboard(.interactively)
                     .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 4)
-                            .onChanged { _ in
-                                guard keyboardHeight > 0, !didDragChatWhileKeyboardVisible else { return }
-                                didDragChatWhileKeyboardVisible = true
-                            }
-                    )
                     .onTapGesture { focused = false; inputFocused = false }
                     .onScrollGeometryChange(for: Bool.self, of: { geometry in
                         let distanceToBottom = max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
@@ -1484,22 +1492,14 @@ struct NativeChatPane: View {
                         }
                     }
                     .onChange(of: keyboardHeight) { oldHeight, newHeight in
-                        if oldHeight == 0, newHeight > 0 {
-                            // Geometry changes during the keyboard animation are
-                            // not a deliberate history scroll by the user.
-                            wasAtBottomBeforeKeyboard = sticksToBottom
-                            didDragChatWhileKeyboardVisible = false
-                            return
+                        // The chat becomes taller as the keyboard closes. Keep
+                        // the newest bubbles attached to the composer instead of
+                        // leaving them at the top of the expanded scroll view.
+                        if oldHeight > 0, newHeight == 0 {
+                            inputFocused = false
+                            focused = false
                         }
-                        guard oldHeight > 0, newHeight == 0 else { return }
-                        inputFocused = false
-                        focused = false
-                        let shouldRestoreBottom = wasAtBottomBeforeKeyboard && !didDragChatWhileKeyboardVisible
-                        didDragChatWhileKeyboardVisible = false
-                        guard shouldRestoreBottom else { return }
-                        sticksToBottom = true
-                        clearUnreadMessages()
-                        // Run after the keyboard-free container height commits.
+                        guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
                         DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
                     }
                     .onChange(of: requestedMessageID) { _, messageID in
