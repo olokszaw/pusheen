@@ -465,19 +465,42 @@ class RoomApiTests(APITestCase):
         UserProfile.objects.create(user=self.guest, nickname="Guest profile")
         FriendLink.objects.create(user=self.owner, friend=self.guest)
         self.authenticate(self.guest_token)
-        heartbeat = self.client.get("/api/friends/requests/")
+        heartbeat = self.client.post("/api/presence/", {"active": True}, format="json")
         self.assertEqual(heartbeat.status_code, 200)
         self.authenticate(self.owner_token)
         visible = self.client.get(f"/api/users/{self.guest.id}/profile/")
         self.assertTrue(visible.data["activity_visible"])
         self.assertTrue(visible.data["is_online"])
+
+        # Polling ordinary endpoints must never revive an app that explicitly
+        # entered the background.
+        self.authenticate(self.guest_token)
+        offline = self.client.post("/api/presence/", {"active": False}, format="json")
+        self.assertEqual(offline.status_code, 200)
+        self.assertFalse(offline.data["is_online"])
+        self.client.get("/api/friends/requests/")
+        self.authenticate(self.owner_token)
+        visible = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        self.assertFalse(visible.data["is_online"])
+
+        self.authenticate(self.guest_token)
+        self.client.post("/api/presence/", {"active": True}, format="json")
         presence = UserPresence.objects.get(user=self.guest)
         presence.show_activity = False
         presence.save(update_fields=["show_activity"])
+        self.authenticate(self.owner_token)
         hidden = self.client.get(f"/api/users/{self.guest.id}/profile/")
         self.assertFalse(hidden.data["activity_visible"])
         self.assertFalse(hidden.data["is_online"])
         self.assertIsNone(hidden.data["last_seen"])
+
+    def test_stale_presence_is_offline_even_without_clean_disconnect(self):
+        UserPresence.objects.create(user=self.guest, is_active=True)
+        UserPresence.objects.filter(user=self.guest).update(last_seen=timezone.now() - timedelta(seconds=16))
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["is_online"])
 
     def test_room_invitation_full_flow_and_duplicate_protection(self):
         room = Room.objects.create(owner=self.owner, title="Invite room", thumbnail_url="https://example.com/cover.jpg")

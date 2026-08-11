@@ -5,6 +5,12 @@ from django.utils import timezone
 from .models import UserPresence
 
 
+def _presence_cache_key(user):
+    joined_at = getattr(user, "date_joined", None)
+    generation = int(joined_at.timestamp() * 1_000_000) if joined_at else 0
+    return f"presence-touch:{user.pk}:{generation}"
+
+
 def touch_presence(user, minimum_interval=5):
     """Best-effort presence update that must never break the requested API.
 
@@ -16,25 +22,40 @@ def touch_presence(user, minimum_interval=5):
     if not user or not user.is_authenticated:
         return False
 
-    joined_at = getattr(user, "date_joined", None)
-    generation = int(joined_at.timestamp() * 1_000_000) if joined_at else 0
-    # Include the account generation: test databases and restored installations
-    # may reuse an integer PK after deleting a user, while cache entries survive.
-    cache_key = f"presence-touch:{user.pk}:{generation}"
+    cache_key = _presence_cache_key(user)
     if minimum_interval > 0 and not cache.add(cache_key, True, timeout=minimum_interval):
         return True
 
     now = timezone.now()
     try:
-        updated = UserPresence.objects.filter(user_id=user.pk).update(last_seen=now)
+        updated = UserPresence.objects.filter(user_id=user.pk).update(last_seen=now, is_active=True)
         if not updated:
             try:
-                UserPresence.objects.create(user_id=user.pk, last_seen=now)
+                UserPresence.objects.create(user_id=user.pk, last_seen=now, is_active=True)
             except IntegrityError:
-                UserPresence.objects.filter(user_id=user.pk).update(last_seen=now)
+                UserPresence.objects.filter(user_id=user.pk).update(last_seen=now, is_active=True)
         return True
     except OperationalError:
         # A presence write is never important enough to fail profile/friends.
         # Clear the throttle so a later request can retry after the lock ends.
         cache.delete(cache_key)
+        return False
+
+
+def mark_presence_offline(user):
+    """Record an explicit background/termination transition immediately."""
+    if not user or not user.is_authenticated:
+        return False
+    cache_key = _presence_cache_key(user)
+    cache.delete(cache_key)
+    now = timezone.now()
+    try:
+        updated = UserPresence.objects.filter(user_id=user.pk).update(last_seen=now, is_active=False)
+        if not updated:
+            try:
+                UserPresence.objects.create(user_id=user.pk, last_seen=now, is_active=False)
+            except IntegrityError:
+                UserPresence.objects.filter(user_id=user.pk).update(last_seen=now, is_active=False)
+        return True
+    except OperationalError:
         return False

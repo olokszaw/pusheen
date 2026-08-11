@@ -29,7 +29,9 @@ final class SessionStore: ObservableObject {
     let api = APIClient()
     private var friendRequestPollingTask: Task<Void, Never>?
     private var appActivityTask: Task<Void, Never>?
+    private var presenceHeartbeatTask: Task<Void, Never>?
     private var restoreRetryTask: Task<Void, Never>?
+    private var appIsActive = true
     private var knownIncomingRequestIDs = Set<Int>()
     private var hasPrimedFriendRequests = false
     private let cachedProfileKey = "pusheen.cached-profile"
@@ -56,8 +58,7 @@ final class SessionStore: ObservableObject {
             isOffline = false
             restoreRetryTask = nil
             if let stats = try? await api.viewingStats() { viewingStats = stats; saveCachedViewingStats() }
-            startFriendRequestPolling()
-            startActivityHeartbeat()
+            startForegroundTasks()
         } catch APIError.unauthorized {
             logout()
         } catch {
@@ -69,8 +70,32 @@ final class SessionStore: ObservableObject {
     }
     func login(username: String, password: String) async throws { let auth = try await api.login(username: username, password: password); apply(auth) }
     func register(nickname: String, username: String, password: String) async throws { let auth = try await api.register(nickname: nickname, username: username, password: password); apply(auth) }
-    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; saveCachedProfile(); api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startFriendRequestPolling(); startActivityHeartbeat(); Task { if let stats = try? await self.api.viewingStats() { self.viewingStats = stats; self.saveCachedViewingStats() } } }
-    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; roomInvitations = []; roomInvitationNotice = nil; roomInvitationStatusNotice = nil; acceptedInvitedRoom = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey) }
+    func apply(_ auth: AuthPayload) { token = auth.token; profile = auth.profile; saveCachedProfile(); api.token = auth.token; authenticationState = .signedIn; UserDefaults.standard.set(auth.token, forKey: "pusheen.token"); startForegroundTasks(); Task { if let stats = try? await self.api.viewingStats() { self.viewingStats = stats; self.saveCachedViewingStats() } } }
+    func logout() { friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil; appActivityTask?.cancel(); appActivityTask = nil; presenceHeartbeatTask?.cancel(); presenceHeartbeatTask = nil; restoreRetryTask?.cancel(); restoreRetryTask = nil; friendRequests = FriendRequestsResponse(incoming: [], outgoing: []); friendRequestNotice = nil; roomInvitations = []; roomInvitationNotice = nil; roomInvitationStatusNotice = nil; acceptedInvitedRoom = nil; knownIncomingRequestIDs = []; hasPrimedFriendRequests = false; isOffline = false; token = nil; profile = nil; viewingStats = nil; api.token = nil; authenticationState = .signedOut; UserDefaults.standard.removeObject(forKey: "pusheen.token"); UserDefaults.standard.removeObject(forKey: cachedProfileKey); UserDefaults.standard.removeObject(forKey: cachedViewingStatsKey) }
+
+    func setAppActive(_ active: Bool) {
+        guard appIsActive != active else {
+            if active { startForegroundTasks() }
+            return
+        }
+        appIsActive = active
+        if active {
+            startForegroundTasks()
+        } else {
+            friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil
+            appActivityTask?.cancel(); appActivityTask = nil
+            presenceHeartbeatTask?.cancel(); presenceHeartbeatTask = nil
+            guard token != nil else { return }
+            Task { [api] in try? await api.setPresence(active: false) }
+        }
+    }
+
+    private func startForegroundTasks() {
+        guard appIsActive, authenticationState == .signedIn, token != nil else { return }
+        startFriendRequestPolling()
+        startActivityHeartbeat()
+        startPresenceHeartbeat()
+    }
 
     private static func loadCachedProfile() -> Profile? {
         guard let data = UserDefaults.standard.data(forKey: "pusheen.cached-profile") else { return nil }
@@ -177,6 +202,17 @@ final class SessionStore: ObservableObject {
             }
         }
     }
+
+    private func startPresenceHeartbeat() {
+        presenceHeartbeatTask?.cancel()
+        presenceHeartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.appIsActive, self.token != nil else { return }
+                try? await self.api.setPresence(active: true)
+                try? await Task.sleep(for: .seconds(6))
+            }
+        }
+    }
 }
 
 final class APIClient {
@@ -210,6 +246,7 @@ final class APIClient {
     func login(username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/login/", method: "POST", body: ["username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
     func register(nickname: String, username: String, password: String) async throws -> AuthPayload { let data = try await request("/api/auth/register/", method: "POST", body: ["nickname": nickname, "username": username, "password": password], authenticated: false); return try decoder.decode(AuthPayload.self, from: data) }
     func profile() async throws -> Profile { let data = try await request("/api/profile/"); return try decoder.decode(Profile.self, from: data) }
+    func setPresence(active: Bool) async throws { _ = try await request("/api/presence/", method: "POST", body: ["active": active], timeout: 5) }
     func publicProfile(userID: Int) async throws -> PublicUserProfile { let data = try await request("/api/users/\(userID)/profile/"); return try decoder.decode(PublicUserProfile.self, from: data) }
     func rooms() async throws -> [Room] { let data = try await request("/api/rooms/"); return try decoder.decode([Room].self, from: data) }
     func searchMovies(_ query: String) async throws -> [MovieCatalogItem] {

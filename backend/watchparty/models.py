@@ -168,6 +168,11 @@ class UserPresence(models.Model):
         related_name="watch_presence",
     )
     last_seen = models.DateTimeField(auto_now=True)
+    # `last_seen` alone cannot distinguish a user who has just closed the app
+    # from one who is still connected.  Heartbeats set this flag and app
+    # lifecycle/disconnect events clear it immediately; the timestamp TTL is
+    # still the final safeguard for crashed clients and lost networks.
+    is_active = models.BooleanField(default=False)
     show_activity = models.BooleanField(default=True)
 
 

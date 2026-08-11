@@ -6,7 +6,6 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.db import transaction
 from django.utils import timezone as django_timezone
 from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute
-from .presence import touch_presence
 
 
 class RoomConsumer(AsyncJsonWebsocketConsumer):
@@ -328,7 +327,6 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 "is_online": True,
                 "changed": was_offline,
             }
-        touch_presence(member.user, minimum_interval=0)
         return payload
 
     @database_sync_to_async
@@ -358,7 +356,8 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 "is_online": member.active_connections > 0,
                 "changed": member.active_connections == 0,
             }
-        touch_presence(member.user, minimum_interval=0)
+        # Disconnect is not activity.  The app lifecycle heartbeat decides
+        # global presence; marking active here kept closed clients online.
         return payload
 
     @database_sync_to_async
@@ -372,7 +371,6 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         was_stale = not member.last_heartbeat_at or member.last_heartbeat_at < django_timezone.now() - timedelta(seconds=24)
         member.last_heartbeat_at = django_timezone.now()
         member.save(update_fields=["last_heartbeat_at"])
-        touch_presence(member.user)
         profile = getattr(member.user, "watch_profile", None)
         identity = getattr(member.user, "client_identity", None)
         return {

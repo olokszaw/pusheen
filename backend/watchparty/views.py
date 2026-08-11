@@ -50,7 +50,7 @@ from .models import (
     TelegramStickerPack,
 )
 from .permissions import IsRoomOwner
-from .presence import touch_presence
+from .presence import mark_presence_offline, touch_presence
 from .serializers import (
     ChatMessageSerializer,
     JoinSerializer,
@@ -171,7 +171,7 @@ def presence_payload(user):
     presence = getattr(user, "watch_presence", None)
     if not presence or not presence.show_activity:
         return {"activity_visible": False, "is_online": False, "last_seen": None}
-    online = presence.last_seen >= timezone.now() - timedelta(seconds=12)
+    online = presence.is_active and presence.last_seen >= timezone.now() - timedelta(seconds=15)
     return {
         "activity_visible": True,
         "is_online": online,
@@ -181,6 +181,18 @@ def presence_payload(user):
 
 def social_profile(user):
     return {**public_profile(user), **presence_payload(user)}
+
+
+@api_view(["POST"])
+def app_presence(request):
+    """Explicit app-lifecycle presence; ordinary API polling never counts."""
+    active = request.data.get("active") is True
+    if active:
+        touch_presence(request.user, minimum_interval=0)
+    else:
+        mark_presence_offline(request.user)
+    current = get_user_model().objects.select_related("watch_presence").get(pk=request.user.pk)
+    return Response(presence_payload(current))
 
 
 def valid_username(value):
@@ -449,7 +461,6 @@ def public_user_profile(request, user_id):
     shown in rooms and friend search. Viewing analytics never expose raw room
     history and are available only to the owner or a confirmed friend.
     """
-    touch_presence(request.user)
     target = get_object_or_404(
         get_user_model().objects.select_related("watch_profile", "client_identity", "watch_presence"),
         pk=user_id,
@@ -486,7 +497,6 @@ def request_profile(friend_request, user):
 @api_view(["GET", "POST", "DELETE"])
 def friends(request):
     """Search confirmed friends. POST sends a request; DELETE removes a friend."""
-    touch_presence(request.user)
     users = get_user_model()
     if request.method == "GET":
         query = request.query_params.get("username", "").strip()
@@ -538,7 +548,6 @@ def friends(request):
 
 @api_view(["GET", "POST"])
 def friend_requests(request):
-    touch_presence(request.user)
     if request.method == "GET":
         incoming = FriendRequest.objects.filter(recipient=request.user).select_related("sender", "sender__watch_profile")
         outgoing = FriendRequest.objects.filter(sender=request.user).select_related("recipient", "recipient__watch_profile")
@@ -652,7 +661,6 @@ def room_invitation_payload(invitation):
 
 @api_view(["GET"])
 def room_invitations(request):
-    touch_presence(request.user)
     invitations = (
         RoomInvitation.objects.filter(recipient=request.user, status=RoomInvitation.PENDING)
         .exclude(room__members__user=request.user)
@@ -666,7 +674,6 @@ def room_invitations(request):
 
 @api_view(["POST"])
 def invite_room_friends(request, room_id):
-    touch_presence(request.user)
     room = get_object_or_404(Room, pk=room_id)
     if not RoomMember.objects.filter(room=room, user=request.user).exists():
         return Response({"detail": "Вы не состоите в этой комнате"}, status=403)
@@ -715,7 +722,6 @@ def invite_room_friends(request, room_id):
 
 @api_view(["POST"])
 def respond_room_invitation(request, invitation_id):
-    touch_presence(request.user)
     invitation = get_object_or_404(
         RoomInvitation.objects.select_related("room", "room__owner", "room__playback"),
         pk=invitation_id,

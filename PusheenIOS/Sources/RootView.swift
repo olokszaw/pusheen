@@ -1306,7 +1306,7 @@ private struct InviteFriendsPanel: View {
                             HStack(spacing: 11) {
                                 ZStack(alignment: .bottomTrailing) {
                                     AvatarView(dataURL: friend.avatarDataURL, name: friend.nickname, size: 46, showsBorder: false)
-                                    if friend.isOnline == true {
+                                    if presenceIsOnline(isOnline: friend.isOnline, lastSeen: friend.lastSeen, visible: friend.activityVisible) {
                                         Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 10, height: 10)
                                             .overlay(Circle().stroke(Color.black.opacity(0.55), lineWidth: 2))
                                     }
@@ -3500,7 +3500,7 @@ private struct PublicProfileScreen: View {
                     }
                     ZStack(alignment: .bottomTrailing) {
                         AvatarView(dataURL: shownAvatar, name: shownName, size: 112, showsBorder: false)
-                        if profile?.isOnline == true {
+                        if presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 17, height: 17)
                                 .overlay(Circle().stroke(Color.black.opacity(0.64), lineWidth: 3))
                         }
@@ -3525,7 +3525,7 @@ private struct PublicProfileScreen: View {
                                 .accessibilityHint("Нажмите, чтобы скопировать username")
                         }
                         Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible))
-                            .font(.caption).foregroundStyle(profile?.isOnline == true ? Color.cyan.opacity(0.86) : Color.secondary).padding(.top, 2)
+                            .font(.caption).foregroundStyle(presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) ? Color.cyan.opacity(0.86) : Color.secondary).padding(.top, 2)
                     }
                     if let loaded = profile, loaded.userId != session.profile?.userId, !loaded.isFriend {
                         Button { Task { await toggleFriend(loaded) } } label: {
@@ -3579,7 +3579,12 @@ private struct PublicProfileScreen: View {
             }
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.84), value: context)
-        .task(id: user.id) { await load() }
+        .task(id: user.id) {
+            while !Task.isCancelled {
+                await load()
+                try? await Task.sleep(for: .seconds(6))
+            }
+        }
     }
 
     private func fullMetric(_ icon: String, _ value: String, _ title: String, context: ProfileContext) -> some View {
@@ -3631,15 +3636,18 @@ private struct PublicProfileScreen: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.66)
     }
     private func load() async {
-        loading = true
+        let initialLoad = profile == nil
+        if initialLoad { loading = true }
         loadError = nil
         do {
             profile = try await session.api.publicProfile(userID: user.id)
         } catch {
-            profile = nil
-            loadError = error.localizedDescription
+            if initialLoad {
+                profile = nil
+                loadError = error.localizedDescription
+            }
         }
-        loading = false
+        if initialLoad { loading = false }
     }
     private func toggleFriend(_ loaded: PublicUserProfile) async {
         guard !friendshipBusy else { return }
@@ -3689,9 +3697,19 @@ private struct UsernameAnchoredHighlight: View {
     }
 }
 
+private func presenceIsOnline(isOnline: Bool?, lastSeen: String?, visible: Bool?) -> Bool {
+    guard visible != false, isOnline == true, let lastSeen else { return false }
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    guard let date = fractional.date(from: lastSeen) ?? ISO8601DateFormatter().date(from: lastSeen) else { return false }
+    // Server TTL is 15 seconds.  The extra three seconds tolerate normal
+    // network jitter without allowing a cached green dot to live forever.
+    return Date().timeIntervalSince(date) < 18
+}
+
 private func presenceText(isOnline: Bool?, lastSeen: String?, visible: Bool?) -> String {
     if visible == false { return "Активность скрыта" }
-    if isOnline == true { return "Онлайн" }
+    if presenceIsOnline(isOnline: isOnline, lastSeen: lastSeen, visible: visible) { return "Онлайн" }
     guard let lastSeen else { return "Был(а) недавно" }
     let fractional = ISO8601DateFormatter(); fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     let standard = ISO8601DateFormatter()
@@ -5210,7 +5228,13 @@ struct FriendsGlassView: View {
             }.padding(20)
         }
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
-        .task { await loadFriends(); await session.refreshFriendRequests() }
+        .task {
+            await session.refreshFriendRequests()
+            while !Task.isCancelled {
+                await loadFriends()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
         .onChange(of: session.friendRequests) { _, _ in Task { await loadFriends() } }
     }
     private func loadFriends() async { friends = (try? await session.api.friends()) ?? [] }
@@ -5344,7 +5368,7 @@ private struct FriendSwipeRow: View {
                 HStack(spacing: 11) {
                     ZStack(alignment: .bottomTrailing) {
                         AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
-                        if person.isOnline == true {
+                        if presenceIsOnline(isOnline: person.isOnline, lastSeen: person.lastSeen, visible: person.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 10, height: 10)
                                 .overlay(Circle().stroke(Color.black.opacity(0.55), lineWidth: 2))
                         }
