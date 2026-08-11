@@ -43,6 +43,12 @@ final class RoomViewModel: ObservableObject {
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
     private var hasAppliedInitialPlaybackState = false
+    // AVPlayer seek is asynchronous. Until its completion, the periodic clock
+    // still reports the pre-seek frame (often the end of the movie). Keep the
+    // user's requested position authoritative so Play cannot send that stale
+    // frame back to the room.
+    private var pendingSeekPosition: Double?
+    private var seekGeneration = 0
     // Quick Tunnel reconnects can repeat the same presence transition several
     // times. Keep genuine join/leave notices while suppressing identical noise.
     private var lastPresenceNoticeAt: [String: Date] = [:]
@@ -138,6 +144,7 @@ final class RoomViewModel: ObservableObject {
             }
             timer = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main) { [weak self] time in
                 guard let self else { return }
+                guard self.pendingSeekPosition == nil else { return }
                 // The clock is display-only. Publishing it more often forces the
                 // whole room hierarchy to reevaluate while the user scrolls chat.
                 let nextPosition = time.seconds.isFinite ? time.seconds : 0
@@ -170,6 +177,7 @@ final class RoomViewModel: ObservableObject {
         messageFallbackTasks.values.forEach { $0.cancel() }
         messageFallbackTasks.removeAll()
         pendingMessages.removeAll()
+        pendingSeekPosition = nil
         socket.close()
     }
     private func startActivityReporting() {
@@ -210,6 +218,7 @@ final class RoomViewModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self, !self.isStopped else { return }
                 if self.socket.connected,
+                   self.pendingSeekPosition == nil,
                    let player = self.player,
                    let item = self.player?.currentItem,
                    item.status == .readyToPlay {
@@ -259,8 +268,38 @@ final class RoomViewModel: ObservableObject {
             NSLog("Pusheen audio route changed: %@", AVAudioSession.sharedInstance().currentRoute.description)
         })
     }
-    func toggle() { guard isOwner else { return }; let next = !isPlaying; if next { player?.play() } else { player?.pause() }; isPlaying = next; socket.playback(action: next ? "play" : "pause", isPlaying: next, position: position) }
-    func seek(_ value: Double) { guard isOwner else { return }; player?.seek(to: CMTime(seconds: value, preferredTimescale: 600)); position = value; socket.playback(action: "seek", isPlaying: isPlaying, position: value) }
+    func toggle() {
+        guard isOwner else { return }
+        let next = !isPlaying
+        let commandPosition = pendingSeekPosition ?? position
+        if next { player?.play() } else { player?.pause() }
+        isPlaying = next
+        position = commandPosition
+        socket.playback(action: next ? "play" : "pause", isPlaying: next, position: commandPosition)
+    }
+
+    func seek(_ value: Double) {
+        guard isOwner else { return }
+        let nonnegativeValue = max(0, value)
+        let upperBound = duration.isFinite && duration > 0 ? duration : nonnegativeValue
+        let target = min(nonnegativeValue, upperBound)
+        seekGeneration &+= 1
+        let generation = seekGeneration
+        pendingSeekPosition = target
+        position = target
+        player?.seek(
+            to: CMTime(seconds: target, preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.seekGeneration == generation else { return }
+                self.pendingSeekPosition = nil
+                self.position = target
+            }
+        }
+        socket.playback(action: "seek", isPlaying: isPlaying, position: target)
+    }
     func send(_ text: String, as profile: Profile?) { send(text: text, image: "", replyTo: nil, as: profile) }
     func send(text: String, image: String, replyTo: ChatReplyPreview? = nil, as profile: Profile?) {
         guard !isStopped else { return }
