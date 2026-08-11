@@ -168,6 +168,12 @@ struct CurrentWatching: Codable, Hashable {
     let previewURL: String
     let headers: [String: String]
     let sourceType: String
+    // The backend already projects `positionSeconds` to the instant when its
+    // response is built. Continue that clock from the instant this iPhone
+    // decoded the response, not from the backend wall clock: the VPS and the
+    // phone may use different/misconfigured clocks and must not push a short
+    // video straight to its final frame.
+    let playbackSnapshotReceivedAt = Date()
     enum CodingKeys: String, CodingKey {
         case title, headers
         case thumbnailURL = "thumbnail_url"
@@ -178,6 +184,26 @@ struct CurrentWatching: Codable, Hashable {
         case previewURL = "preview_url"
         case sourceType = "source_type"
     }
+}
+
+/// Advances a public watch preview from the instant the response reached this
+/// device. Server timestamps are deliberately not an input: a VPS clock skew
+/// must never be interpreted as elapsed media time.
+func projectedCurrentWatchingPosition(
+    positionSeconds: Double,
+    isPlaying: Bool,
+    receivedAt: Date,
+    now: Date,
+    durationSeconds: Double
+) -> Double {
+    var position = positionSeconds.isFinite ? max(0, positionSeconds) : 0
+    if isPlaying {
+        position += max(0, now.timeIntervalSince(receivedAt))
+    }
+    if durationSeconds.isFinite, durationSeconds > 0 {
+        return min(position, max(0, durationSeconds - 0.05))
+    }
+    return position
 }
 
 struct PublicUserProfile: Codable, Identifiable, Hashable {

@@ -77,6 +77,8 @@ jobs:
           /tmp/activity-calendar-tests
           swiftc Sources/Models.swift Sources/StickerRecentsStore.swift Tests/StickerRecentsStoreTests/main.swift -o /tmp/sticker-recents-tests
           /tmp/sticker-recents-tests
+          swiftc Sources/Models.swift Tests/CurrentWatchingClockTests/main.swift -o /tmp/current-watching-clock-tests
+          /tmp/current-watching-clock-tests
 
       - name: Build native SwiftUI app
         working-directory: PusheenIOS

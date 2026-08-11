@@ -3676,22 +3676,13 @@ private struct CurrentWatchingPreview: View {
     }
 
     private func projectedPosition(at date: Date) -> Double {
-        var position = max(0, watching.positionSeconds)
-        if watching.isPlaying, let updated = isoDate(watching.serverUpdatedAt) {
-            position += max(0, date.timeIntervalSince(updated))
-        }
-        if effectiveDuration > 0 {
-            // A seek at/beyond an unknown final frame can leave AVPlayerLayer
-            // black. Keep the target inside the duration learned from AVAsset.
-            return min(position, max(0, effectiveDuration - 0.05))
-        }
-        return position
-    }
-
-    private func isoDate(_ value: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        projectedCurrentWatchingPosition(
+            positionSeconds: watching.positionSeconds,
+            isPlaying: watching.isPlaying,
+            receivedAt: watching.playbackSnapshotReceivedAt,
+            now: date,
+            durationSeconds: effectiveDuration
+        )
     }
 
     private func clock(_ value: Double) -> String {
