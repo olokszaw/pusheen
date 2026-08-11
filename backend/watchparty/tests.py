@@ -651,6 +651,35 @@ class RoomSocketTests(TransactionTestCase):
     def test_guest_receives_every_identical_message_from_rapid_socket_burst(self):
         async_to_sync(self._assert_identical_chat_burst)()
 
+    def test_typing_status_is_realtime_and_clears_on_disconnect(self):
+        async_to_sync(self._assert_typing_status)()
+
+    async def _assert_typing_status(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        guest_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+        await self._next_event(guest_socket, "playback_state")
+
+        await owner_socket.send_json_to({"type": "typing", "is_typing": True})
+        started = await self._next_event(guest_socket, "typing")
+        self.assertEqual(started["user_id"], self.owner.id)
+        self.assertTrue(started["is_typing"])
+        self.assertEqual(await self._message_count(), 0)
+
+        # A vanished socket must clear the badge without waiting for the UI's
+        # local expiry timer.
+        await owner_socket.disconnect()
+        stopped = await self._next_event(guest_socket, "typing")
+        self.assertEqual(stopped["user_id"], self.owner.id)
+        self.assertFalse(stopped["is_typing"])
+        await guest_socket.disconnect()
+
     async def _assert_identical_chat_burst(self):
         owner_socket = WebsocketCommunicator(
             application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
@@ -720,6 +749,10 @@ class RoomSocketTests(TransactionTestCase):
     @database_sync_to_async
     def _room_message_texts(self):
         return list(ChatMessage.objects.filter(room=self.room).values_list("text", flat=True))
+
+    @database_sync_to_async
+    def _message_count(self):
+        return ChatMessage.objects.filter(room=self.room).count()
 
     async def _assert_owner_control(self):
         owner_socket = WebsocketCommunicator(

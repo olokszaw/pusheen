@@ -13,6 +13,7 @@ final class RoomViewModel: ObservableObject {
     @Published var player: AVPlayer?
     @Published var messages: [ChatMessage] = []
     @Published var members: [RoomMember] = []
+    @Published private(set) var typingUserIDs: Set<Int> = []
     @Published var isOwner = false
     @Published var isMuted = false
     @Published var isPlaying = false
@@ -30,6 +31,9 @@ final class RoomViewModel: ObservableObject {
     private var audioObservers: [NSObjectProtocol] = []
     private var activityTask: Task<Void, Never>?
     private var messageSyncTask: Task<Void, Never>?
+    private var localTypingExpiryTask: Task<Void, Never>?
+    private var remoteTypingExpiryTasks: [Int: Task<Void, Never>] = [:]
+    private var isSendingTypingState = false
     private var pendingMessages: [PendingChatMessage] = []
     private var isFlushingMessages = false
     private var streamGenres: [String] = []
@@ -113,6 +117,10 @@ final class RoomViewModel: ObservableObject {
         activityTask = nil
         messageSyncTask?.cancel()
         messageSyncTask = nil
+        stopTyping()
+        remoteTypingExpiryTasks.values.forEach { $0.cancel() }
+        remoteTypingExpiryTasks.removeAll()
+        typingUserIDs.removeAll()
         socket.close()
     }
     private func startActivityReporting() {
@@ -178,6 +186,7 @@ final class RoomViewModel: ObservableObject {
     func send(text: String, image: String, replyTo: ChatReplyPreview? = nil, as profile: Profile?) {
         guard !isMuted else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !image.isEmpty else { return }
+        stopTyping()
         // Render immediately; the server confirmation replaces this temporary
         // message with its permanent id a moment later.
         let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
@@ -201,6 +210,32 @@ final class RoomViewModel: ObservableObject {
                   self.pendingMessages.contains(where: { $0.id == pendingID }) else { return }
             await self.flushPendingMessages()
         }
+    }
+    var typingMembers: [RoomMember] {
+        members.filter { typingUserIDs.contains($0.userId) && $0.userId != currentUserID }
+    }
+    func draftDidChange(_ value: String) {
+        guard !isMuted else { stopTyping(); return }
+        let hasText = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard hasText else { stopTyping(); return }
+        localTypingExpiryTask?.cancel()
+        if !isSendingTypingState {
+            isSendingTypingState = true
+            socket.typing(true)
+        }
+        // One start plus a debounced stop avoids a WebSocket event per letter.
+        localTypingExpiryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.4))
+            guard !Task.isCancelled else { return }
+            self?.stopTyping()
+        }
+    }
+    private func stopTyping() {
+        localTypingExpiryTask?.cancel()
+        localTypingExpiryTask = nil
+        guard isSendingTypingState else { return }
+        isSendingTypingState = false
+        socket.typing(false)
     }
     func react(messageID: Int, emoji: String) { socket.reaction(messageID: messageID, emoji: emoji) }
     func moderate(member: RoomMember, action: String) async {
@@ -262,6 +297,23 @@ final class RoomViewModel: ObservableObject {
                 messages[index].reactions.removeAll { $0.emoji == emoji }
                 if count > 0 { messages[index].reactions.append(ChatReaction(emoji: emoji, count: count, reacted: reacted)) }
             }
+        case "typing":
+            let userID = (event["user_id"] as? NSNumber)?.intValue ?? 0
+            guard userID != 0, userID != currentUserID else { return }
+            remoteTypingExpiryTasks[userID]?.cancel()
+            remoteTypingExpiryTasks[userID] = nil
+            if event["is_typing"] as? Bool == true {
+                typingUserIDs.insert(userID)
+                // A lost stop packet must not leave the indicator visible.
+                remoteTypingExpiryTasks[userID] = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(2.4))
+                    guard !Task.isCancelled else { return }
+                    self?.typingUserIDs.remove(userID)
+                    self?.remoteTypingExpiryTasks[userID] = nil
+                }
+            } else {
+                typingUserIDs.remove(userID)
+            }
         case "presence":
             let userID = (event["user_id"] as? NSNumber)?.intValue ?? 0
             let nickname = event["nickname"] as? String ?? "Участник"
@@ -279,6 +331,11 @@ final class RoomViewModel: ObservableObject {
                 members[index] = member
             } else if userID != 0 {
                 members.append(member)
+            }
+            if !online {
+                remoteTypingExpiryTasks[userID]?.cancel()
+                remoteTypingExpiryTasks[userID] = nil
+                typingUserIDs.remove(userID)
             }
             if userID != 0, event["changed"] as? Bool == true, previousOnline != online {
                 let now = Date()

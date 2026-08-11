@@ -707,7 +707,7 @@ struct RoomView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                             .zIndex(20)
                     }
-                    NativeChatPane(messages: model.messages, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardHeight: keyboardHeight, isMuted: model.isMuted, send: { text, image, reply in model.send(text: text, image: image, replyTo: reply, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }, previewProfile: { message in
+                    NativeChatPane(messages: model.messages, typingMembers: model.typingMembers, currentUserID: session.profile?.userId, draft: $draft, focused: $chatFocused, keyboardHeight: keyboardHeight, isMuted: model.isMuted, typingChanged: model.draftDidChange, send: { text, image, reply in model.send(text: text, image: image, replyTo: reply, as: session.profile) }, react: { id, emoji in model.react(messageID: id, emoji: emoji) }, previewProfile: { message in
                         guard message.authorId != session.profile?.userId else { return }
                         profilePreview = UserProfileReference(message)
                     }, openProfile: { message in
@@ -1364,11 +1364,13 @@ struct PlaybackScrubber: View {
 struct NativeChatPane: View {
     @EnvironmentObject private var session: SessionStore
     let messages: [ChatMessage]
+    let typingMembers: [RoomMember]
     let currentUserID: Int?
     @Binding var draft: String
     @Binding var focused: Bool
     let keyboardHeight: CGFloat
     let isMuted: Bool
+    let typingChanged: (String) -> Void
     let send: (String, String, ChatReplyPreview?) -> Void
     let react: (Int, String) -> Void
     let previewProfile: (ChatMessage) -> Void
@@ -1495,6 +1497,11 @@ struct NativeChatPane: View {
             }
             .frame(maxHeight: .infinity)
             VStack(spacing: 7) {
+            if !typingMembers.isEmpty {
+                TypingParticipantsIndicator(members: typingMembers)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if let reply = replyingTo {
                 HStack(spacing: 9) {
                     Capsule().fill(.cyan.opacity(0.76)).frame(width: 3, height: 30)
@@ -1608,7 +1615,11 @@ struct NativeChatPane: View {
             FluentEmojiCache.shared.warmCommonEmoji()
             messages.forEach { FluentEmojiCache.shared.prefetch(in: $0.text) }
         }
-        .onChange(of: draft) { _, value in FluentEmojiCache.shared.prefetch(in: value) }
+        .onChange(of: draft) { _, value in
+            FluentEmojiCache.shared.prefetch(in: value)
+            typingChanged(value)
+        }
+        .animation(.spring(response: 0.28, dampingFraction: 0.84), value: typingMembers.map(\.userId))
         .onChange(of: messages.count) { _, _ in
             if let text = messages.last?.text { FluentEmojiCache.shared.prefetch(in: text) }
         }
@@ -1820,6 +1831,54 @@ struct NativeChatPane: View {
         unreadPreviewToken = UUID()
         unreadMessageCount = 0
         showsUnreadSender = false
+    }
+}
+
+private struct TypingParticipantsIndicator: View {
+    let members: [RoomMember]
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 7) {
+                ForEach(members.prefix(4)) { member in
+                    HStack(spacing: 7) {
+                        AvatarView(
+                            dataURL: member.avatarDataURL,
+                            name: member.nickname,
+                            size: 27,
+                            showsBorder: false
+                        )
+                        BouncingTypingDots()
+                    }
+                    .padding(.leading, 4)
+                    .padding(.trailing, 9)
+                    .frame(height: 35)
+                    .passiveLiquidCard(Capsule())
+                    .accessibilityLabel("\(member.nickname) is typing")
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: 39)
+    }
+}
+
+private struct BouncingTypingDots: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(.cyan.opacity(0.9))
+                        .frame(width: 4.5, height: 4.5)
+                        .offset(y: CGFloat(sin(time * 6.2 - Double(index) * 0.9)) * 2.4)
+                }
+            }
+            .frame(width: 20, height: 16)
+        }
+        .accessibilityHidden(true)
     }
 }
 

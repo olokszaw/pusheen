@@ -47,6 +47,7 @@ jobs:
             watchparty.tests.RoomApiTests.test_room_invitation_full_flow_and_duplicate_protection \
             watchparty.tests.RoomSocketTests.test_guest_recovers_history_and_live_chat_after_reconnect \
             watchparty.tests.RoomSocketTests.test_guest_receives_every_identical_message_from_rapid_socket_burst \
+            watchparty.tests.RoomSocketTests.test_typing_status_is_realtime_and_clears_on_disconnect \
             --verbosity 2
 
       - name: Install XcodeGen

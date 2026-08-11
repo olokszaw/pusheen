@@ -52,6 +52,7 @@ final class RoomSocket: ObservableObject {
         return send(payload)
     }
     func reaction(messageID: Int, emoji: String) { send(["type": "message_reaction", "message_id": messageID, "emoji": emoji]) }
+    func typing(_ isTyping: Bool) { send(["type": "typing", "is_typing": isTyping]) }
 
     func close() {
         wasClosedByView = true

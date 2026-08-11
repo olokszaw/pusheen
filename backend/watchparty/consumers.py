@@ -37,6 +37,16 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         if hasattr(self, "heartbeat_watchdog"):
             self.heartbeat_watchdog.cancel()
         if hasattr(self, "room_id") and self.scope["user"].is_authenticated:
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "room.typing",
+                    "payload": {
+                        "user_id": self.scope["user"].id,
+                        "is_typing": False,
+                    },
+                },
+            )
             presence = await self.mark_disconnected()
             if presence:
                 await self.channel_layer.group_send(
@@ -63,6 +73,17 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             )
         elif event == "message_reaction":
             await self.toggle_reaction(content.get("message_id"), content.get("emoji", ""))
+        elif event == "typing":
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "room.typing",
+                    "payload": {
+                        "user_id": self.scope["user"].id,
+                        "is_typing": bool(content.get("is_typing")),
+                    },
+                },
+            )
 
     async def watch_heartbeat(self):
         try:
@@ -136,6 +157,11 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         payload = dict(event["payload"])
         payload["reacted"] = self.scope["user"].id in payload.pop("user_ids")
         await self.send_json({"type": "message_reaction", **payload})
+
+    async def room_typing(self, event):
+        # Typing is transient room state. It must never touch the database or
+        # block chat delivery; clients also expire it locally as a safety net.
+        await self.send_json({"type": "typing", **event["payload"]})
 
     async def room_presence(self, event):
         await self.send_json({"type": "presence", **event["payload"]})
