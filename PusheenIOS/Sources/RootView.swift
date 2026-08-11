@@ -3947,33 +3947,15 @@ private struct UsernameAnchoredHighlight: View {
 }
 
 private func presenceIsOnline(isOnline: Bool?, lastSeen: String?, visible: Bool?) -> Bool {
-    guard visible != false, isOnline == true, let lastSeen else { return false }
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    guard let date = fractional.date(from: lastSeen) ?? ISO8601DateFormatter().date(from: lastSeen) else { return false }
-    // Server TTL is 15 seconds.  The extra three seconds tolerate normal
-    // network jitter without allowing a cached green dot to live forever.
-    return Date().timeIntervalSince(date) < 18
+    PresenceTimestampFormatter.isOnline(isOnline: isOnline, visible: visible)
 }
 
 private func presenceText(isOnline: Bool?, lastSeen: String?, visible: Bool?) -> String {
-    if visible == false { return "Активность скрыта" }
-    if presenceIsOnline(isOnline: isOnline, lastSeen: lastSeen, visible: visible) { return "Онлайн" }
-    guard let lastSeen else { return "Был(а) недавно" }
-    let fractional = ISO8601DateFormatter(); fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let standard = ISO8601DateFormatter()
-    guard let date = fractional.date(from: lastSeen) ?? standard.date(from: lastSeen) else { return "Был(а) недавно" }
-    let minutes = max(0, Int(Date().timeIntervalSince(date) / 60))
-    if minutes < 2 { return "Был(а) недавно" }
-    if minutes < 60 { return "Был(а) \(minutes) мин. назад" }
-    let hours = minutes / 60
-    if hours < 6 { return "Был(а) \(hours) ч. назад" }
-    let calendar = Calendar.autoupdatingCurrent
-    let time = DateFormatter(); time.locale = .autoupdatingCurrent; time.timeStyle = .short; time.dateStyle = .none
-    if calendar.isDateInToday(date) { return "Был(а) сегодня в \(time.string(from: date))" }
-    if calendar.isDateInYesterday(date) { return "Был(а) вчера в \(time.string(from: date))" }
-    let full = DateFormatter(); full.locale = .autoupdatingCurrent; full.setLocalizedDateFormatFromTemplate("d MMM HH:mm")
-    return "Был(а) \(full.string(from: date))"
+    PresenceTimestampFormatter.string(
+        isOnline: isOnline,
+        lastSeen: lastSeen,
+        visible: visible
+    )
 }
 
 private func compactDuration(_ seconds: Int) -> String {
@@ -5416,6 +5398,8 @@ struct FriendsGlassView: View {
     @State private var requestFilter: FriendRequestFilter?
     @State private var profilePreview: UserProfileReference?
     @State private var fullProfile: UserProfileReference?
+    @State private var friendsPresenceSnapshotFresh = false
+    @State private var lastFriendsRefreshAt: Date?
     @FocusState private var searchFocused: Bool
     var body: some View {
         ZStack { AcrylicBackground()
@@ -5458,6 +5442,7 @@ struct FriendsGlassView: View {
                                 person: person,
                                 showAdd: expanded && !person.isFriend,
                                 pending: session.friendRequests.outgoing.contains { $0.userId == person.userId },
+                                presenceSnapshotFresh: friendsPresenceSnapshotFresh,
                                 preview: { profilePreview = UserProfileReference(person) },
                                 openProfile: { fullProfile = UserProfileReference(person) },
                                 add: {
@@ -5495,8 +5480,17 @@ struct FriendsGlassView: View {
     }
     private func loadFriends() async {
         // A transient tunnel error must not erase the list or freeze it on the
-        // last offline label.  Replace the snapshot only after a valid response.
-        if let refreshed = try? await session.api.friends() { friends = refreshed }
+        // last offline label. Replace the list only after a valid response, but
+        // expire a previously green presence snapshot if refreshing has failed
+        // for longer than the backend TTL.
+        do {
+            friends = try await session.api.friends()
+            lastFriendsRefreshAt = Date()
+            friendsPresenceSnapshotFresh = true
+        } catch {
+            let age = lastFriendsRefreshAt.map { Date().timeIntervalSince($0) } ?? .infinity
+            if age > 18 { friendsPresenceSnapshotFresh = false }
+        }
     }
     private func search() async { results = (try? await session.api.friends(query: query)) ?? [] }
 }
@@ -5549,6 +5543,7 @@ private struct FriendSwipeRow: View {
     let person: FriendProfile
     let showAdd: Bool
     let pending: Bool
+    let presenceSnapshotFresh: Bool
     let preview: () -> Void
     let openProfile: () -> Void
     let add: () async -> Void
@@ -5628,14 +5623,14 @@ private struct FriendSwipeRow: View {
                 HStack(spacing: 11) {
                     ZStack(alignment: .bottomTrailing) {
                         AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
-                        if presenceIsOnline(isOnline: person.isOnline, lastSeen: person.lastSeen, visible: person.activityVisible) {
+                        if presenceIsOnline(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, visible: person.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 10, height: 10)
                                 .overlay(Circle().stroke(Color.black.opacity(0.55), lineWidth: 2))
                         }
                     }
                     VStack(alignment: .leading, spacing: 3) {
                         Text(person.nickname).bold().lineLimit(1)
-                        Text("@\(person.username) · \(presenceText(isOnline: person.isOnline, lastSeen: person.lastSeen, visible: person.activityVisible))")
+                        Text("@\(person.username) · \(presenceText(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, visible: person.activityVisible))")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }

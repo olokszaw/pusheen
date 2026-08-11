@@ -69,6 +69,37 @@ let americanTime = ChatTimestampFormatter.string(
 expect(russianTime.contains("16:05"), "24-hour locales must receive 24-hour message times")
 expect(americanTime.contains("4:05") && americanTime.uppercased().contains("PM"), "12-hour locales must receive AM/PM message times")
 
+let utcTimestamp = "2026-08-11T14:42:00.000Z"
+let utcPlusSeven = TimeZone(secondsFromGMT: 7 * 3_600)!
+let laterNow = ISO8601DateFormatter().date(from: "2026-08-11T20:50:00Z")!
+let localizedPresence = PresenceTimestampFormatter.string(
+    isOnline: false,
+    lastSeen: utcTimestamp,
+    visible: true,
+    now: laterNow,
+    locale: Locale(identifier: "ru_RU"),
+    timeZone: utcPlusSeven
+)
+expect(
+    localizedPresence.contains("21:42") && !localizedPresence.contains("14:42"),
+    "Presence timestamps must be rendered in the phone time zone instead of raw UTC"
+)
+expect(
+    PresenceTimestampFormatter.isOnline(isOnline: true, visible: true),
+    "The client must trust the backend heartbeat decision instead of rejecting it using a different clock"
+)
+expect(
+    PresenceTimestampFormatter.string(
+        isOnline: true,
+        lastSeen: "2026-08-11T00:00:00Z",
+        visible: true,
+        now: laterNow,
+        locale: Locale(identifier: "ru_RU"),
+        timeZone: utcPlusSeven
+    ) == "Онлайн",
+    "A server-authoritative online status must survive device/server clock skew"
+)
+
 let messageJSON = """
 {"id":1,"author_id":7,"nickname":"Test","text":"Hi","image_data_url":"","avatar_data_url":"","reactions":[],"created_at":"2026-08-02T16:05:00Z"}
 """.data(using: .utf8)!

@@ -233,7 +233,13 @@ final class APIClient {
 
     private func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, authenticated: Bool = true, timeout: TimeInterval = 8, authorizationToken: String? = nil) async throws -> Data {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }
-        var request = URLRequest(url: url); request.httpMethod = method; request.timeoutInterval = timeout
+        // Presence, rooms and chat are live resources. Reusing an HTTP cache
+        // entry here can make a successful three-second poll keep returning an
+        // old online state through URLCache or an intermediary proxy.
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+        request.httpMethod = method
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if authenticated, let credential = authorizationToken ?? token { request.setValue("Token \(credential)", forHTTPHeaderField: "Authorization") }
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
