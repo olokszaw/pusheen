@@ -62,6 +62,8 @@ jobs:
         run: |
           swiftc Sources/ActivityCalendarLayout.swift Sources/ChatTimestampFormatter.swift Sources/Models.swift Tests/ActivityCalendarLayoutTests/main.swift -o /tmp/activity-calendar-tests
           /tmp/activity-calendar-tests
+          swiftc Sources/Models.swift Sources/StickerRecentsStore.swift Tests/StickerRecentsStoreTests/main.swift -o /tmp/sticker-recents-tests
+          /tmp/sticker-recents-tests
 
       - name: Build native SwiftUI app
         working-directory: PusheenIOS

@@ -1887,46 +1887,84 @@ private struct TelegramStickerKeyboard: View {
     let select: (TelegramSticker) -> Void
     let close: () -> Void
     @State private var packs: [TelegramStickerPack] = []
-    @State private var selectedPack = 0
+    @State private var selectedPackID: Int?
+    @State private var showsRecents = false
+    @State private var recentStickers: [TelegramSticker] = []
+
+    private var visibleStickers: [TelegramSticker] {
+        if showsRecents { return recentStickers }
+        return packs.first(where: { $0.id == selectedPackID })?.stickers ?? []
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
-                if !packs.isEmpty {
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 7) {
-                            ForEach(Array(packs.enumerated()), id: \.element.id) { index, pack in
-                                Button(pack.title) { selectedPack = index }
-                                    .font(.caption.weight(.semibold))
-                                    .padding(.horizontal, 11)
-                                    .frame(height: 31)
-                                    .passiveLiquidCard(Capsule())
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(index == selectedPack ? .cyan : .primary)
-                            }
+                ScrollView(.horizontal) {
+                    HStack(spacing: 5) {
+                        Button {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            showsRecents = true
+                        } label: {
+                            Image(systemName: "clock")
+                                .font(.system(size: 19, weight: .medium))
+                                .foregroundStyle(showsRecents ? .cyan : .secondary)
+                                .frame(width: 40, height: 40)
+                                .background(showsRecents ? Color.cyan.opacity(0.12) : .clear, in: Circle())
+                                .overlay(Circle().stroke(showsRecents ? Color.cyan.opacity(0.34) : .clear, lineWidth: 0.8))
                         }
-                        .padding(.leading, 10)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Недавние стикеры")
+
+                        ForEach(packs) { pack in
+                            Button {
+                                UISelectionFeedbackGenerator().selectionChanged()
+                                showsRecents = false
+                                selectedPackID = pack.id
+                            } label: {
+                                ZStack {
+                                    Circle()
+                                        .fill(!showsRecents && selectedPackID == pack.id ? Color.white.opacity(0.1) : .clear)
+                                    if let cover = pack.stickers.first {
+                                        TelegramStickerThumbnail(sticker: cover, size: 34)
+                                    } else {
+                                        Image(systemName: "face.smiling")
+                                            .font(.system(size: 18, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(width: 42, height: 42)
+                                .overlay(Circle().stroke(!showsRecents && selectedPackID == pack.id ? Color.cyan.opacity(0.42) : .clear, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(pack.title)
+                        }
                     }
-                    .scrollIndicators(.hidden)
+                    .padding(.leading, 10)
+                    .padding(.vertical, 2)
                 }
+                .scrollIndicators(.hidden)
                 Button(action: close) {
                     Image(systemName: "keyboard.chevron.compact.down")
                         .font(.body.weight(.semibold))
-                        .frame(width: 38, height: 31)
-                        .passiveLiquidCard(Capsule())
+                        .frame(width: 40, height: 40)
+                        .passiveLiquidCard(Circle())
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 10)
             }
-            if packs.isEmpty {
+            if packs.isEmpty && !showsRecents {
                 ContentUnavailableView("Нет наборов", systemImage: "face.smiling", description: Text("Импортируй набор в настройках профиля"))
+                    .frame(maxHeight: .infinity)
+            } else if showsRecents && recentStickers.isEmpty {
+                ContentUnavailableView("Недавних пока нет", systemImage: "clock", description: Text("Отправленные стикеры появятся здесь"))
                     .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 5), spacing: 7) {
-                        ForEach(packs[selectedPack].stickers) { sticker in
+                        ForEach(visibleStickers) { sticker in
                             Button {
                                 UISelectionFeedbackGenerator().selectionChanged()
-                                select(sticker)
+                                choose(sticker)
                             } label: {
                                 TelegramStickerThumbnail(sticker: sticker)
                                     .frame(width: 54, height: 54)
@@ -1948,13 +1986,24 @@ private struct TelegramStickerKeyboard: View {
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.11), lineWidth: 0.8))
-        .task { packs = (try? await session.api.stickerPacks()) ?? []; selectedPack = min(selectedPack, max(0, packs.count - 1)) }
+        .task {
+            recentStickers = StickerRecentsStore.load(userID: session.profile?.userId)
+            packs = (try? await session.api.stickerPacks()) ?? []
+            if selectedPackID == nil { selectedPackID = packs.first?.id }
+            if packs.isEmpty && !recentStickers.isEmpty { showsRecents = true }
+        }
+    }
+
+    private func choose(_ sticker: TelegramSticker) {
+        recentStickers = StickerRecentsStore.record(sticker, userID: session.profile?.userId)
+        select(sticker)
     }
 }
 
 private struct TelegramStickerThumbnail: View {
     @EnvironmentObject private var session: SessionStore
     let sticker: TelegramSticker
+    var size: CGFloat = 54
     @State private var image: UIImage?
     @State private var failed = false
     var body: some View {
@@ -1974,7 +2023,7 @@ private struct TelegramStickerThumbnail: View {
                 }
             }
         }
-        .frame(width: 54, height: 54)
+        .frame(width: size, height: size)
         .clipped()
         .task(id: sticker.id) {
             if let cached = StickerThumbnailCache.shared.image(for: sticker.id) {
