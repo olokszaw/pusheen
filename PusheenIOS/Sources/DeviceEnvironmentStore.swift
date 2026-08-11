@@ -36,7 +36,6 @@ final class DeviceEnvironmentStore: ObservableObject {
     }
 
     func refresh() {
-        TimeZone.resetSystemTimeZone()
         currentTime = Date()
         formattingRevision &+= 1
     }
