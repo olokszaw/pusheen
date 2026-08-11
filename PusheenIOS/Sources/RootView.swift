@@ -775,7 +775,7 @@ struct RoomView: View {
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .task { model.setCurrentUserID(session.profile?.userId); await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
-            .sheet(isPresented: $showMembers) { MembersSheet(room: room, members: model.members, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
+            .sheet(isPresented: $showMembers) { MembersSheet(room: room, members: model.activeMembers, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
     }
     private func leaveRoom() {
         var transaction = Transaction()
@@ -1405,6 +1405,8 @@ struct NativeChatPane: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var pendingPhoto: PendingChatPhoto?
     @State private var sticksToBottom = true
+    @State private var wasAtBottomBeforeKeyboard = true
+    @State private var didDragChatWhileKeyboardVisible = false
     @State private var didInitialScroll = false
     @State private var forceScrollOnNextMessage = false
     @State private var unreadMessageCount = 0
@@ -1445,6 +1447,13 @@ struct NativeChatPane: View {
                     }
                     .scrollDismissesKeyboard(.interactively)
                     .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 4)
+                            .onChanged { _ in
+                                guard keyboardHeight > 0, !didDragChatWhileKeyboardVisible else { return }
+                                didDragChatWhileKeyboardVisible = true
+                            }
+                    )
                     .onTapGesture { focused = false; inputFocused = false }
                     .onScrollGeometryChange(for: Bool.self, of: { geometry in
                         let distanceToBottom = max(0, geometry.contentSize.height - geometry.containerSize.height - geometry.contentOffset.y)
@@ -1475,14 +1484,22 @@ struct NativeChatPane: View {
                         }
                     }
                     .onChange(of: keyboardHeight) { oldHeight, newHeight in
-                        // The chat becomes taller as the keyboard closes. Keep
-                        // the newest bubbles attached to the composer instead of
-                        // leaving them at the top of the expanded scroll view.
-                        if oldHeight > 0, newHeight == 0 {
-                            inputFocused = false
-                            focused = false
+                        if oldHeight == 0, newHeight > 0 {
+                            // Geometry changes during the keyboard animation are
+                            // not a deliberate history scroll by the user.
+                            wasAtBottomBeforeKeyboard = sticksToBottom
+                            didDragChatWhileKeyboardVisible = false
+                            return
                         }
-                        guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
+                        guard oldHeight > 0, newHeight == 0 else { return }
+                        inputFocused = false
+                        focused = false
+                        let shouldRestoreBottom = wasAtBottomBeforeKeyboard && !didDragChatWhileKeyboardVisible
+                        didDragChatWhileKeyboardVisible = false
+                        guard shouldRestoreBottom else { return }
+                        sticksToBottom = true
+                        clearUnreadMessages()
+                        // Run after the keyboard-free container height commits.
                         DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
                     }
                     .onChange(of: requestedMessageID) { _, messageID in

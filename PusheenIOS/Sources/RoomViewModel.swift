@@ -34,6 +34,8 @@ final class RoomViewModel: ObservableObject {
     private var localTypingExpiryTask: Task<Void, Never>?
     private var remoteTypingExpiryTasks: [Int: Task<Void, Never>] = [:]
     private var isSendingTypingState = false
+    private var messageFallbackTasks: [String: Task<Void, Never>] = [:]
+    private var isStopped = false
     private var pendingMessages: [PendingChatMessage] = []
     private var isFlushingMessages = false
     private var streamGenres: [String] = []
@@ -51,6 +53,7 @@ final class RoomViewModel: ObservableObject {
     }
 
     func start() async {
+        isStopped = false
         do {
             configureAudioSession()
             async let history = api.messages(roomID: room.id)
@@ -62,6 +65,7 @@ final class RoomViewModel: ObservableObject {
                 members = loadedPeople
                 isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
             }
+            guard !isStopped, !Task.isCancelled else { return }
             // Keep retrying history even if the video endpoint is unavailable.
             // When internet returns, messages appear without reopening the room.
             startMessageSync()
@@ -77,6 +81,7 @@ final class RoomViewModel: ObservableObject {
             }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
             let stream = try await api.stream(roomID: room.id)
+            guard !isStopped, !Task.isCancelled else { return }
             streamGenres = stream.genres
             guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
             let assetOptions: [String: Any] = stream.headers.isEmpty ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": stream.headers]
@@ -113,6 +118,7 @@ final class RoomViewModel: ObservableObject {
         } catch let caughtError { error = caughtError.localizedDescription }
     }
     func stop() {
+        isStopped = true
         activityTask?.cancel()
         activityTask = nil
         messageSyncTask?.cancel()
@@ -121,6 +127,9 @@ final class RoomViewModel: ObservableObject {
         remoteTypingExpiryTasks.values.forEach { $0.cancel() }
         remoteTypingExpiryTasks.removeAll()
         typingUserIDs.removeAll()
+        messageFallbackTasks.values.forEach { $0.cancel() }
+        messageFallbackTasks.removeAll()
+        pendingMessages.removeAll()
         socket.close()
     }
     private func startActivityReporting() {
@@ -146,7 +155,7 @@ final class RoomViewModel: ObservableObject {
         messageSyncTask?.cancel()
         messageSyncTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self else { return }
+                guard let self, !self.isStopped else { return }
                 await self.flushPendingMessages()
                 if let serverMessages = try? await self.api.messages(roomID: self.room.id) {
                     self.mergeServerMessages(serverMessages)
@@ -184,6 +193,7 @@ final class RoomViewModel: ObservableObject {
     func seek(_ value: Double) { guard isOwner else { return }; player?.seek(to: CMTime(seconds: value, preferredTimescale: 600)); position = value; socket.playback(action: "seek", isPlaying: isPlaying, position: value) }
     func send(_ text: String, as profile: Profile?) { send(text: text, image: "", replyTo: nil, as: profile) }
     func send(text: String, image: String, replyTo: ChatReplyPreview? = nil, as profile: Profile?) {
+        guard !isStopped else { return }
         guard !isMuted else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !image.isEmpty else { return }
         stopTyping()
@@ -199,20 +209,26 @@ final class RoomViewModel: ObservableObject {
         // persisted message as soon as the server handles it. The FIFO HTTP
         // outbox remains the reliable fallback for a tunnel/socket interruption.
         let sentRealtime = socket.chat(text: text, image: image, clientMessageID: pendingID, replyToID: replyTo?.id)
-        Task { [weak self] in
+        let fallbackTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.messageFallbackTasks[pendingID] = nil }
             // Give the realtime path a short head start. If the acknowledgement
             // never arrives, the same client id makes the HTTP retry idempotent.
             // If the handshake is not actually ready, fall back immediately;
             // waiting here was the visible delay during rapid sends.
             try? await Task.sleep(for: .milliseconds(sentRealtime ? 180 : 40))
             guard !Task.isCancelled,
+                  !self.isStopped,
                   self.pendingMessages.contains(where: { $0.id == pendingID }) else { return }
             await self.flushPendingMessages()
         }
+        messageFallbackTasks[pendingID] = fallbackTask
     }
     var typingMembers: [RoomMember] {
         members.filter { typingUserIDs.contains($0.userId) && $0.userId != currentUserID }
+    }
+    var activeMembers: [RoomMember] {
+        members.filter { $0.isOnline || $0.userId == currentUserID }
     }
     func draftDidChange(_ value: String) {
         guard !isMuted else { stopTyping(); return }
@@ -283,6 +299,8 @@ final class RoomViewModel: ObservableObject {
                 let clientMessageID = event["client_message_id"] as? String
                 if let clientMessageID,
                    let pending = pendingMessages.first(where: { $0.id == clientMessageID }) {
+                    messageFallbackTasks[clientMessageID]?.cancel()
+                    messageFallbackTasks[clientMessageID] = nil
                     pendingMessages.removeAll { $0.id == clientMessageID }
                     confirmPersistedMessage(message, for: pending)
                 } else {
@@ -385,6 +403,8 @@ final class RoomViewModel: ObservableObject {
             // used to discard legitimate rapid messages such as "a, a, a".
             if let clientID = message.clientMessageID,
                let pending = pendingMessages.first(where: { $0.id == clientID }) {
+                messageFallbackTasks[clientID]?.cancel()
+                messageFallbackTasks[clientID] = nil
                 pendingMessages.removeAll { $0.id == clientID }
                 confirmPersistedMessage(message, for: pending)
                 continue
@@ -395,13 +415,13 @@ final class RoomViewModel: ObservableObject {
         }
     }
     private func flushPendingMessages() async {
-        guard !isFlushingMessages else { return }
+        guard !isStopped, !isFlushingMessages else { return }
         isFlushingMessages = true
         defer { isFlushingMessages = false }
         // A disconnected socket often collects a burst while the network is
         // returning. Persist it as one ordered transaction instead of turning
         // every tap into a serial  HTTP request and a visible delayed queue.
-        while !pendingMessages.isEmpty {
+        while !isStopped, !Task.isCancelled, !pendingMessages.isEmpty {
             let batch = Array(pendingMessages.prefix(40))
             let body = batch.map { pending -> [String: Any] in
                 var value: [String: Any] = [
@@ -414,12 +434,15 @@ final class RoomViewModel: ObservableObject {
             }
             do {
                 let persisted = try await api.sendMessagesBatch(roomID: room.id, messages: body)
+                guard !isStopped, !Task.isCancelled else { return }
                 let pendingByID = Dictionary(uniqueKeysWithValues: batch.map { ($0.id, $0) })
                 var confirmedIDs = Set<String>()
                 for message in persisted {
                     guard let clientID = message.clientMessageID,
                           let pending = pendingByID[clientID] else { continue }
                     confirmedIDs.insert(clientID)
+                    messageFallbackTasks[clientID]?.cancel()
+                    messageFallbackTasks[clientID] = nil
                     pendingMessages.removeAll { $0.id == clientID }
                     confirmPersistedMessage(message, for: pending)
                 }
@@ -442,6 +465,7 @@ final class RoomViewModel: ObservableObject {
         }
     }
     private func recoverMessagesImmediately() async {
+        guard !isStopped else { return }
         if let serverMessages = try? await api.messages(roomID: room.id) {
             mergeServerMessages(serverMessages)
         }
