@@ -1033,6 +1033,7 @@ struct MembersSheet: View {
     var body: some View {
         ZStack {
             AcrylicBackground()
+            if !showInviteFriends {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Участники").font(.title2.bold())
@@ -1076,11 +1077,13 @@ struct MembersSheet: View {
                 }; Spacer()
             }
             .padding(20)
-            .blur(radius: selected == nil && !showInviteFriends ? 0 : 13)
-            .scaleEffect(selected == nil && !showInviteFriends ? 1 : 0.985)
-            .allowsHitTesting(selected == nil && !showInviteFriends)
+            .blur(radius: selected == nil ? 0 : 13)
+            .scaleEffect(selected == nil ? 1 : 0.985)
+            .allowsHitTesting(selected == nil)
+            .transition(.move(edge: .leading).combined(with: .opacity))
+            }
 
-            if let member = selected {
+            if !showInviteFriends, let member = selected {
                 Color.black.opacity(0.34)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
@@ -1101,7 +1104,7 @@ struct MembersSheet: View {
             if showInviteFriends {
                 InviteFriendsPanel(room: room, currentMembers: members, close: closeInviteFriends)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
-                .zIndex(3)
+                    .zIndex(3)
             }
         }
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
@@ -1209,9 +1212,7 @@ private struct InviteFriendsPanel: View {
     }
 
     var body: some View {
-        ZStack {
-            AcrylicBackground()
-            VStack(spacing: 13) {
+        VStack(spacing: 13) {
                 HStack {
                     Label("Пригласить друзей", systemImage: "person.2.badge.plus")
                         .font(.title3.bold())
@@ -1273,11 +1274,10 @@ private struct InviteFriendsPanel: View {
                 }
                 .buttonStyle(.plain).liquidCard(Capsule()).disabled(selectedIDs.isEmpty || sending)
                 .opacity(selectedIDs.isEmpty ? 0.48 : 1)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 14)
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { friends = (try? await session.api.friends()) ?? [] }
     }
