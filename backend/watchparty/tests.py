@@ -59,10 +59,14 @@ class RoomApiTests(APITestCase):
             f"/api/rooms/{room.id}/messages/", {"text": "Visible message"}, format="json"
         )
         self.assertEqual(posted.status_code, 201, posted.data)
+        self.assertIn("created_at_age_seconds", posted.data)
+        self.assertGreaterEqual(posted.data["created_at_age_seconds"], 0)
         self.authenticate(self.guest_token)
         history = self.client.get(f"/api/rooms/{room.id}/messages/")
         self.assertEqual(history.status_code, 200)
         self.assertEqual([item["text"] for item in history.data], ["Visible message"])
+        self.assertIn("created_at_age_seconds", history.data[0])
+        self.assertGreaterEqual(history.data[0]["created_at_age_seconds"], 0)
 
     def test_retrying_client_message_id_does_not_duplicate_chat(self):
         room = Room.objects.create(owner=self.owner, title="Retry chat")
@@ -1060,6 +1064,7 @@ class RoomSocketTests(TransactionTestCase):
         self.assertEqual([item["text"] for item in received], ["a"] * 12)
         self.assertEqual([item["client_message_id"] for item in received], expected_client_ids)
         self.assertEqual(len({item["id"] for item in received}), 12)
+        self.assertTrue(all(item["created_at_age_seconds"] >= 0 for item in received))
         self.assertEqual(await self._room_message_texts(), ["a"] * 12)
 
         await owner_socket.disconnect()

@@ -346,6 +346,12 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 "has_image": bool(reply_to.image_data_url),
             } if reply_to else None),
             "created_at": message.created_at.isoformat(),
+            # The iPhone anchors this elapsed duration to its own clock.  Do
+            # not make chat display depend on the Windows server wall clock.
+            "created_at_age_seconds": max(
+                0,
+                int((django_timezone.now() - message.created_at).total_seconds()),
+            ),
         }, created
 
     @database_sync_to_async

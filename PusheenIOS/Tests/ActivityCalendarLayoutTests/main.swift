@@ -158,9 +158,22 @@ expect(
 )
 
 let messageJSON = """
-{"id":1,"author_id":7,"nickname":"Test","text":"Hi","image_data_url":"","avatar_data_url":"","reactions":[],"created_at":"2026-08-02T16:05:00Z"}
+{"id":1,"author_id":7,"nickname":"Test","text":"Hi","image_data_url":"","avatar_data_url":"","reactions":[],"created_at":"2026-08-02T16:05:00Z","created_at_age_seconds":300}
 """.data(using: .utf8)!
 let decodedMessage = try JSONDecoder().decode(ChatMessage.self, from: messageJSON)
 expect(decodedMessage.createdAt == "2026-08-02T16:05:00Z", "Chat messages must decode the server creation timestamp")
+expect(decodedMessage.createdAtAgeSeconds == 300, "Chat messages must decode the clock-skew-safe age")
+
+let phoneNow = ISO8601DateFormatter().date(from: "2026-08-11T18:42:00Z")!
+let skewedServerTime = "2026-08-11T15:37:00Z"
+let phoneLocalMessageTime = ChatTimestampFormatter.string(
+    from: skewedServerTime,
+    ageSeconds: 300,
+    ageAnchor: phoneNow,
+    now: phoneNow,
+    locale: Locale(identifier: "ru_RU"),
+    timeZone: utc
+)
+expect(phoneLocalMessageTime.contains("18:37"), "Chat time must be reconstructed from the iPhone clock, not the VPS hour")
 
 print("ActivityCalendarLayout tests passed")

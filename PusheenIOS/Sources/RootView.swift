@@ -2824,7 +2824,11 @@ struct NativeMessageBubble: View, Equatable {
         }
     }
     private var sentTime: String {
-        ChatTimestampFormatter.string(from: message.createdAt)
+        ChatTimestampFormatter.string(
+            from: message.createdAt,
+            ageSeconds: message.createdAtAgeSeconds,
+            ageAnchor: message.timestampSnapshotReceivedAt
+        )
     }
     private var isStickerMessage: Bool {
         guard message.text.isEmpty else { return false }

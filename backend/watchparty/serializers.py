@@ -137,13 +137,25 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     reactions = serializers.SerializerMethodField()
     reply_to = serializers.SerializerMethodField()
     client_message_id = serializers.CharField(read_only=True)
+    created_at_age_seconds = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatMessage
         fields = (
             "id", "author_id", "author", "nickname", "avatar_data_url",
-            "text", "image_data_url", "reactions", "reply_to", "client_message_id", "created_at",
+            "text", "image_data_url", "reactions", "reply_to", "client_message_id",
+            "created_at", "created_at_age_seconds",
         )
+
+    def get_created_at_age_seconds(self, message):
+        """Return clock-skew-safe message age for clients.
+
+        The VPS wall clock can be configured incorrectly.  A duration between
+        two timestamps produced by that same clock is still correct, so iOS
+        can anchor this age to its own receipt time and display the phone's
+        local clock instead of the server's hour.
+        """
+        return max(0, int((timezone.now() - message.created_at).total_seconds()))
 
     def get_reply_to(self, message):
         original = message.reply_to

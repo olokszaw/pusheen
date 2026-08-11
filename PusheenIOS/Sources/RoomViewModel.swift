@@ -271,7 +271,7 @@ final class RoomViewModel: ObservableObject {
         // message with its permanent id a moment later.
         let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
         if let profile {
-            messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], replyTo: replyTo, createdAt: ISO8601DateFormatter().string(from: Date())))
+            messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], replyTo: replyTo, createdAt: ISO8601DateFormatter().string(from: Date()), createdAtAgeSeconds: 0))
         }
         let pendingID = UUID().uuidString
         pendingMessages.append(PendingChatMessage(id: pendingID, localMessageID: localID, text: text, image: image, replyTo: replyTo))

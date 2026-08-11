@@ -1,6 +1,18 @@
 import Foundation
 
 enum ChatTimestampFormatter {
+    static func resolvedDate(
+        from rawValue: String?,
+        ageSeconds: Int? = nil,
+        ageAnchor: Date? = nil,
+        now: Date = Date()
+    ) -> Date? {
+        if let ageSeconds {
+            return (ageAnchor ?? now).addingTimeInterval(-Double(max(0, ageSeconds)))
+        }
+        return date(from: rawValue)
+    }
+
     static func date(from rawValue: String?) -> Date? {
         guard let rawValue, !rawValue.isEmpty else { return nil }
         let fractional = ISO8601DateFormatter()
@@ -14,10 +26,18 @@ enum ChatTimestampFormatter {
 
     static func string(
         from rawValue: String?,
+        ageSeconds: Int? = nil,
+        ageAnchor: Date? = nil,
+        now: Date = Date(),
         locale: Locale = .autoupdatingCurrent,
         timeZone: TimeZone = .autoupdatingCurrent
     ) -> String {
-        guard let date = date(from: rawValue) else { return "" }
+        guard let date = resolvedDate(
+            from: rawValue,
+            ageSeconds: ageSeconds,
+            ageAnchor: ageAnchor,
+            now: now
+        ) else { return "" }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.timeZone = timeZone
