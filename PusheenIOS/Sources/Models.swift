@@ -152,9 +152,10 @@ struct ViewingStats: Codable, Hashable {
 
 struct FriendProfile: Codable, Identifiable, Hashable {
     let userId: Int; let username: String; let nickname: String; let avatarDataURL: String; let isFriend: Bool
-    let isOnline: Bool?; let lastSeen: String?; let activityVisible: Bool?
+    let isOnline: Bool?; let lastSeen: String?; let lastSeenAgeSeconds: Int?; let activityVisible: Bool?
+    let presenceSnapshotReceivedAt = Date()
     var id: Int { userId }
-    enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isFriend = "is_friend"; case isOnline = "is_online"; case lastSeen = "last_seen"; case activityVisible = "activity_visible" }
+    enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isFriend = "is_friend"; case isOnline = "is_online"; case lastSeen = "last_seen"; case lastSeenAgeSeconds = "last_seen_age_seconds"; case activityVisible = "activity_visible" }
 }
 
 struct CurrentWatching: Codable, Hashable {
@@ -189,8 +190,10 @@ struct PublicUserProfile: Codable, Identifiable, Hashable {
     let stats: ViewingStats?
     let isOnline: Bool?
     let lastSeen: String?
+    let lastSeenAgeSeconds: Int?
     let activityVisible: Bool?
     let nowWatching: CurrentWatching?
+    let presenceSnapshotReceivedAt = Date()
     var id: Int { userId }
     enum CodingKeys: String, CodingKey {
         case username, nickname, stats
@@ -200,6 +203,7 @@ struct PublicUserProfile: Codable, Identifiable, Hashable {
         case analyticsVisible = "analytics_visible"
         case isOnline = "is_online"
         case lastSeen = "last_seen"
+        case lastSeenAgeSeconds = "last_seen_age_seconds"
         case activityVisible = "activity_visible"
         case nowWatching = "now_watching"
     }
@@ -212,13 +216,16 @@ struct RoomInvitationSender: Codable, Hashable {
     let avatarDataURL: String
     let isOnline: Bool?
     let lastSeen: String?
+    let lastSeenAgeSeconds: Int?
     let activityVisible: Bool?
+    let presenceSnapshotReceivedAt = Date()
     enum CodingKeys: String, CodingKey {
         case username, nickname
         case userId = "user_id"
         case avatarDataURL = "avatar_data_url"
         case isOnline = "is_online"
         case lastSeen = "last_seen"
+        case lastSeenAgeSeconds = "last_seen_age_seconds"
         case activityVisible = "activity_visible"
     }
 }

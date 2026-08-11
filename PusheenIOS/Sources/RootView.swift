@@ -1363,7 +1363,7 @@ private struct InviteFriendsPanel: View {
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(friend.nickname).font(.subheadline.bold()).lineLimit(1)
-                                    Text("@\(friend.username) · \(presenceText(isOnline: friend.isOnline, lastSeen: friend.lastSeen, visible: friend.activityVisible))")
+                                    Text("@\(friend.username) · \(presenceText(isOnline: friend.isOnline, lastSeen: friend.lastSeen, lastSeenAgeSeconds: friend.lastSeenAgeSeconds, ageAnchor: friend.presenceSnapshotReceivedAt, visible: friend.activityVisible))")
                                         .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer()
@@ -3769,7 +3769,7 @@ private struct PublicProfileScreen: View {
                                 )
                                 .accessibilityHint("Нажмите, чтобы скопировать username")
                         }
-                        Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible))
+                        Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, lastSeenAgeSeconds: profile?.lastSeenAgeSeconds, ageAnchor: profile?.presenceSnapshotReceivedAt, visible: profile?.activityVisible))
                             .font(.caption).foregroundStyle(presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) ? Color.cyan.opacity(0.86) : Color.secondary).padding(.top, 2)
                     }
                     if let loaded = profile, loaded.userId != session.profile?.userId, !loaded.isFriend {
@@ -3946,10 +3946,12 @@ private func presenceIsOnline(isOnline: Bool?, lastSeen: String?, visible: Bool?
     PresenceTimestampFormatter.isOnline(isOnline: isOnline, visible: visible)
 }
 
-private func presenceText(isOnline: Bool?, lastSeen: String?, visible: Bool?) -> String {
+private func presenceText(isOnline: Bool?, lastSeen: String?, lastSeenAgeSeconds: Int? = nil, ageAnchor: Date? = nil, visible: Bool?) -> String {
     PresenceTimestampFormatter.string(
         isOnline: isOnline,
         lastSeen: lastSeen,
+        lastSeenAgeSeconds: lastSeenAgeSeconds,
+        ageAnchor: ageAnchor,
         visible: visible
     )
 }
@@ -5626,7 +5628,7 @@ private struct FriendSwipeRow: View {
                     }
                     VStack(alignment: .leading, spacing: 3) {
                         Text(person.nickname).bold().lineLimit(1)
-                        Text("@\(person.username) · \(presenceText(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, visible: person.activityVisible))")
+                        Text("@\(person.username) · \(presenceText(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, lastSeenAgeSeconds: person.lastSeenAgeSeconds, ageAnchor: person.presenceSnapshotReceivedAt, visible: person.activityVisible))")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }

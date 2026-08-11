@@ -170,7 +170,12 @@ def safe_activity_map(value):
 def presence_payload(user):
     presence = getattr(user, "watch_presence", None)
     if not presence or not presence.show_activity:
-        return {"activity_visible": False, "is_online": False, "last_seen": None}
+        return {
+            "activity_visible": False,
+            "is_online": False,
+            "last_seen": None,
+            "last_seen_age_seconds": None,
+        }
 
     now = timezone.now()
     app_online = presence.is_active and presence.last_seen >= now - timedelta(seconds=15)
@@ -198,6 +203,12 @@ def presence_payload(user):
         "activity_visible": True,
         "is_online": online,
         "last_seen": last_seen.isoformat(),
+        # Clients anchor this elapsed value to their own clock/time zone. A
+        # fixed offset configured on the Windows server cannot leak into the
+        # hour displayed by an iPhone.
+        "last_seen_age_seconds": max(
+            0, int((now - last_seen).total_seconds())
+        ),
     }
 
 

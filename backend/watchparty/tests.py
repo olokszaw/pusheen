@@ -529,6 +529,7 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data[0]["is_online"])
         self.assertGreaterEqual(datetime.fromisoformat(response.data[0]["last_seen"]), heartbeat_at)
+        self.assertLessEqual(response.data[0]["last_seen_age_seconds"], 1)
 
     @patch("watchparty.views.resolve_media_stream")
     def test_current_watching_position_is_projected_exactly_once(self, resolver):
@@ -686,6 +687,7 @@ class RoomApiTests(APITestCase):
         self.assertFalse(hidden.data["activity_visible"])
         self.assertFalse(hidden.data["is_online"])
         self.assertIsNone(hidden.data["last_seen"])
+        self.assertIsNone(hidden.data["last_seen_age_seconds"])
 
     def test_stale_presence_is_offline_even_without_clean_disconnect(self):
         UserPresence.objects.create(user=self.guest, is_active=True)
@@ -694,6 +696,7 @@ class RoomApiTests(APITestCase):
         response = self.client.get(f"/api/users/{self.guest.id}/profile/")
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data["is_online"])
+        self.assertGreaterEqual(response.data["last_seen_age_seconds"], 16)
 
     def test_room_invitation_full_flow_and_duplicate_protection(self):
         room = Room.objects.create(owner=self.owner, title="Invite room", thumbnail_url="https://example.com/cover.jpg")

@@ -39,6 +39,8 @@ enum PresenceTimestampFormatter {
     static func string(
         isOnline: Bool?,
         lastSeen: String?,
+        lastSeenAgeSeconds: Int? = nil,
+        ageAnchor: Date? = nil,
         visible: Bool?,
         now: Date = Date(),
         locale: Locale = .autoupdatingCurrent,
@@ -46,7 +48,17 @@ enum PresenceTimestampFormatter {
     ) -> String {
         if visible == false { return "Активность скрыта" }
         if self.isOnline(isOnline: isOnline, visible: visible) { return "Онлайн" }
-        guard let date = ChatTimestampFormatter.date(from: lastSeen) else {
+        // Prefer elapsed time from the backend and anchor it to this iPhone's
+        // own clock. The raw ISO timestamp remains only as compatibility with
+        // older servers. This prevents a wrong Windows wall clock from
+        // changing the hour displayed on every phone.
+        let date: Date?
+        if let lastSeenAgeSeconds {
+            date = (ageAnchor ?? now).addingTimeInterval(-Double(max(0, lastSeenAgeSeconds)))
+        } else {
+            date = ChatTimestampFormatter.date(from: lastSeen)
+        }
+        guard let date else {
             return "Был(а) недавно"
         }
 

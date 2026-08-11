@@ -84,6 +84,22 @@ expect(
     localizedPresence.contains("21:42") && !localizedPresence.contains("14:42"),
     "Presence timestamps must be rendered in the phone time zone instead of raw UTC"
 )
+let phoneNow = ISO8601DateFormatter().date(from: "2026-08-11T14:42:00Z")!
+let serverClockIndependentPresence = PresenceTimestampFormatter.string(
+    isOnline: false,
+    lastSeen: "2026-08-11T02:42:00.000Z",
+    lastSeenAgeSeconds: 6 * 3_600,
+    ageAnchor: phoneNow,
+    visible: true,
+    now: phoneNow,
+    locale: Locale(identifier: "ru_RU"),
+    timeZone: utcPlusSeven
+)
+expect(
+    serverClockIndependentPresence.contains("15:42")
+        && !serverClockIndependentPresence.contains("09:42"),
+    "Presence must anchor elapsed time to the iPhone clock instead of the server wall clock"
+)
 expect(
     PresenceTimestampFormatter.isOnline(isOnline: true, visible: true),
     "The client must trust the backend heartbeat decision instead of rejecting it using a different clock"
