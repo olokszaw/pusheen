@@ -51,6 +51,13 @@ class RoomMember(models.Model):
     is_muted = models.BooleanField(default=False)
     active_connections = models.PositiveSmallIntegerField(default=0)
     last_heartbeat_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    # Ephemeral viewer clock used by the read-only friend preview. The shared
+    # PlaybackState remains owner-controlled; these fields describe what this
+    # particular member's AVPlayer is actually displaying right now.
+    viewer_position_seconds = models.FloatField(default=0)
+    viewer_duration_seconds = models.FloatField(default=0)
+    viewer_is_playing = models.BooleanField(default=False)
+    viewer_playback_at = models.DateTimeField(null=True, blank=True, db_index=True)
     class Meta:
         unique_together = ("room", "user")
 

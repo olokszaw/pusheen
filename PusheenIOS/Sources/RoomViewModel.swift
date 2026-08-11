@@ -31,6 +31,7 @@ final class RoomViewModel: ObservableObject {
     private var playbackEndObserver: NSObjectProtocol?
     private var audioObservers: [NSObjectProtocol] = []
     private var activityTask: Task<Void, Never>?
+    private var playbackSnapshotTask: Task<Void, Never>?
     private var messageSyncTask: Task<Void, Never>?
     private var localTypingExpiryTask: Task<Void, Never>?
     private var remoteTypingExpiryTasks: [Int: Task<Void, Never>] = [:]
@@ -42,7 +43,6 @@ final class RoomViewModel: ObservableObject {
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
     private var hasAppliedInitialPlaybackState = false
-    private var lastPlaybackSnapshotAt = Date.distantPast
     // Quick Tunnel reconnects can repeat the same presence transition several
     // times. Keep genuine join/leave notices while suppressing identical noise.
     private var lastPresenceNoticeAt: [String: Date] = [:]
@@ -103,18 +103,23 @@ final class RoomViewModel: ObservableObject {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    guard let self, self.isOwner, !self.isStopped else { return }
+                    guard let self, !self.isStopped else { return }
                     let finalPosition = self.player?.currentTime().seconds ?? self.duration
                     self.isPlaying = false
-                    self.socket.playback(
-                        action: "pause",
-                        isPlaying: false,
-                        position: finalPosition.isFinite ? finalPosition : self.duration
-                    )
+                    // A guest reaches the end locally too. Previously this
+                    // state was cleared only for the owner, so a guest kept
+                    // reporting `playing` at the final frame forever and their
+                    // public preview was repeatedly projected to the end.
                     self.socket.playbackSnapshot(
                         isPlaying: false,
                         position: finalPosition.isFinite ? finalPosition : self.duration,
                         duration: self.duration
+                    )
+                    guard self.isOwner else { return }
+                    self.socket.playback(
+                        action: "pause",
+                        isPlaying: false,
+                        position: finalPosition.isFinite ? finalPosition : self.duration
                     )
                 }
             }
@@ -139,18 +144,8 @@ final class RoomViewModel: ObservableObject {
                 if abs(self.position - nextPosition) >= 0.5 { self.position = nextPosition }
                 let value = self.player?.currentItem?.duration.seconds ?? 0
                 if value.isFinite && value > 0 && abs(self.duration - value) >= 0.1 { self.duration = value }
-                let now = Date()
-                if self.isOwner,
-                   self.socket.connected,
-                   now.timeIntervalSince(self.lastPlaybackSnapshotAt) >= 2 {
-                    self.lastPlaybackSnapshotAt = now
-                    self.socket.playbackSnapshot(
-                        isPlaying: self.isPlaying,
-                        position: nextPosition,
-                        duration: value.isFinite && value > 0 ? value : self.duration
-                    )
-                }
             }
+            startPlaybackSnapshotReporting()
             startActivityReporting()
         } catch let caughtError { error = caughtError.localizedDescription }
     }
@@ -164,6 +159,8 @@ final class RoomViewModel: ObservableObject {
         playbackEndObserver = nil
         activityTask?.cancel()
         activityTask = nil
+        playbackSnapshotTask?.cancel()
+        playbackSnapshotTask = nil
         messageSyncTask?.cancel()
         messageSyncTask = nil
         stopTyping()
@@ -204,6 +201,36 @@ final class RoomViewModel: ObservableObject {
                     self.mergeServerMessages(serverMessages)
                 }
                 try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+    private func startPlaybackSnapshotReporting() {
+        playbackSnapshotTask?.cancel()
+        playbackSnapshotTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, !self.isStopped else { return }
+                if self.socket.connected,
+                   let player = self.player,
+                   let item = self.player?.currentItem,
+                   item.status == .readyToPlay {
+                    let actual = player.currentTime().seconds
+                    let itemDuration = item.duration.seconds
+                    if actual.isFinite {
+                        let hasDuration = itemDuration.isFinite && itemDuration > 0
+                        let isActuallyAdvancing = player.timeControlStatus == .playing
+                            && (!hasDuration || actual < itemDuration - 0.1)
+                        // Every participant reports the frame their AVPlayer is
+                        // truly showing. The server uses this only for that
+                        // user's muted profile preview; owner-only room control
+                        // remains unchanged.
+                        self.socket.playbackSnapshot(
+                            isPlaying: isActuallyAdvancing,
+                            position: max(0, actual),
+                            duration: hasDuration ? itemDuration : 0
+                        )
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(1_500))
             }
         }
     }

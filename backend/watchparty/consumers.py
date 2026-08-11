@@ -114,16 +114,15 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         await self.channel_layer.group_send(self.group_name, {"type": "room.playback", "payload": state})
 
     async def apply_playback_snapshot(self, content):
-        """Persist the creator's actual AVPlayer clock without disturbing viewers.
+        """Persist this member's actual AVPlayer clock without disturbing viewers.
 
         Play/seek commands are sparse.  Extrapolating one old command forever
         made a public preview drift beyond the real duration and ask AVPlayer
-        for a frame that does not exist.  This low-frequency snapshot refreshes
-        only the server anchor; it is deliberately not broadcast as another
-        seek command to the room.
+        for a frame that does not exist. Every member reports the clock they are
+        truly seeing so their own public profile can mirror it. Only the owner
+        may also refresh the shared room timeline, and no snapshot is broadcast
+        as another seek command.
         """
-        if not await self.is_owner():
-            return
         try:
             position = max(0.0, float(content.get("position_seconds", 0)))
             duration = max(0.0, float(content.get("duration_seconds", 0)))
@@ -131,8 +130,16 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             return
         if not math.isfinite(position) or not math.isfinite(duration):
             return
+        is_playing = bool(content.get("is_playing"))
+        await self.save_member_playback_snapshot(
+            is_playing=is_playing,
+            position=position,
+            duration=duration,
+        )
+        if not await self.is_owner():
+            return
         await self.save_playback_snapshot(
-            is_playing=bool(content.get("is_playing")),
+            is_playing=is_playing,
             position=position,
             duration=duration,
         )
@@ -246,6 +253,20 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         state.position_seconds = position
         state.save(update_fields=["is_playing", "position_seconds", "updated_at"])
         return {"room_id": room.id, "command": action, "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
+
+    @database_sync_to_async
+    def save_member_playback_snapshot(self, is_playing, position, duration):
+        if duration > 0:
+            position = min(position, duration)
+        RoomMember.objects.filter(
+            room_id=self.room_id,
+            user_id=self.scope["user"].id,
+        ).update(
+            viewer_is_playing=is_playing,
+            viewer_position_seconds=position,
+            viewer_duration_seconds=duration,
+            viewer_playback_at=django_timezone.now(),
+        )
 
     @database_sync_to_async
     def save_playback_snapshot(self, is_playing, position, duration):

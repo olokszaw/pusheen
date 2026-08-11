@@ -232,15 +232,36 @@ def _current_watching_payload(request, target):
         playback = None
 
     snapshot_at = timezone.now()
-    position = max(0.0, float(playback.position_seconds if playback else 0))
-    is_playing = bool(playback and playback.is_playing)
-    playback_updated_at = playback.updated_at if playback else snapshot_at
+    viewer_snapshot_is_fresh = bool(
+        member.viewer_playback_at
+        and member.viewer_playback_at >= snapshot_at - timedelta(seconds=8)
+    )
+    if viewer_snapshot_is_fresh:
+        position = max(0.0, float(member.viewer_position_seconds or 0))
+        is_playing = bool(member.viewer_is_playing)
+        playback_updated_at = member.viewer_playback_at
+    else:
+        position = max(0.0, float(playback.position_seconds if playback else 0))
+        is_playing = bool(playback and playback.is_playing)
+        playback_updated_at = playback.updated_at if playback else snapshot_at
+
+    elapsed = max(0.0, (snapshot_at - playback_updated_at).total_seconds())
     if is_playing:
-        position += max(0.0, (snapshot_at - playback_updated_at).total_seconds())
+        if viewer_snapshot_is_fresh or elapsed <= 8:
+            position += elapsed
+        else:
+            # A room heartbeat can remain live while an old shared play command
+            # has no reporting AVPlayer behind it. Never extrapolate that stale
+            # command all the way to the last frame of the movie.
+            is_playing = False
 
     title = room.title
     thumbnail = room.thumbnail_url
-    duration = max(0.0, float(room.duration_seconds or 0))
+    duration = max(
+        0.0,
+        float(room.duration_seconds or 0),
+        float(member.viewer_duration_seconds or 0) if viewer_snapshot_is_fresh else 0.0,
+    )
     preview_url = ""
     preview_headers = {}
     source_type = "upload" if room.uploaded_video else detect_media_source(room.vk_video_url)
@@ -249,7 +270,9 @@ def _current_watching_payload(request, target):
         if title.startswith(("pusheen-movie-", "pusheen-file-")):
             title = "Видео из галереи"
         if room.uploaded_video.storage.exists(room.uploaded_video.name):
-            preview_url = request.build_absolute_uri(f"/api/users/{target.id}/watch-preview/")
+            preview_url = request.build_absolute_uri(
+                f"/api/users/{target.id}/watch-preview/?room_id={room.id}"
+            )
             authorization = request.headers.get("Authorization", "")
             if authorization:
                 preview_headers["Authorization"] = authorization
@@ -1203,6 +1226,11 @@ def public_user_watch_preview(request, user_id):
     if not presence["activity_visible"]:
         return Response({"detail": "Активность скрыта"}, status=403)
     member = _active_room_member(target)
+    requested_room_id = request.query_params.get("room_id")
+    if requested_room_id and (
+        not member or str(member.room_id) != str(requested_room_id)
+    ):
+        return Response({"detail": "Превью комнаты устарело"}, status=404)
     if not member or not member.room.uploaded_video:
         return Response({"detail": "Активное видео не найдено"}, status=404)
     return _uploaded_video_response(request, member.room)

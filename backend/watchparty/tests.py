@@ -570,6 +570,50 @@ class RoomApiTests(APITestCase):
         self.assertGreaterEqual(snapshot_at, before)
         self.assertLessEqual(snapshot_at, after)
 
+    @patch("watchparty.views.resolve_media_stream")
+    def test_current_watching_prefers_target_viewer_clock_over_stale_room_clock(self, resolver):
+        resolver.return_value = {
+            "url": "https://cdn.example/live.mp4",
+            "title": "Live movie",
+            "duration_seconds": 44,
+            "headers": {},
+        }
+        room = Room.objects.create(
+            owner=self.owner,
+            title="Live movie",
+            vk_video_url="https://vkvideo.ru/video-9_10",
+            duration_seconds=44,
+        )
+        playback = PlaybackState.objects.create(
+            room=room, position_seconds=44, is_playing=True
+        )
+        PlaybackState.objects.filter(pk=playback.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=5)
+        )
+        RoomMember.objects.create(
+            room=room,
+            user=self.guest,
+            active_connections=1,
+            last_heartbeat_at=timezone.now(),
+            viewer_position_seconds=11.25,
+            viewer_duration_seconds=44,
+            viewer_is_playing=True,
+            viewer_playback_at=timezone.now(),
+        )
+        UserPresence.objects.create(user=self.guest, is_active=True)
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        FriendLink.objects.create(user=self.guest, friend=self.owner)
+        self.authenticate(self.owner_token)
+
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+
+        self.assertEqual(response.status_code, 200)
+        watching = response.data["now_watching"]
+        self.assertTrue(watching["is_playing"])
+        self.assertGreaterEqual(watching["position_seconds"], 11.25)
+        self.assertLess(watching["position_seconds"], 13)
+        self.assertEqual(watching["duration_seconds"], 44)
+
     def test_friend_can_range_stream_active_upload_without_joining_room(self):
         room = Room.objects.create(
             owner=self.guest,
@@ -911,6 +955,9 @@ class RoomSocketTests(TransactionTestCase):
     def test_owner_playback_snapshot_refreshes_real_clock_and_duration(self):
         async_to_sync(self._assert_playback_snapshot)()
 
+    def test_guest_snapshot_updates_own_preview_without_controlling_room(self):
+        async_to_sync(self._assert_guest_viewer_snapshot)()
+
     def test_guest_recovers_history_and_live_chat_after_reconnect(self):
         async_to_sync(self._assert_chat_recovery)()
 
@@ -1092,9 +1139,45 @@ class RoomSocketTests(TransactionTestCase):
 
         await owner_socket.disconnect()
 
+    async def _assert_guest_viewer_snapshot(self):
+        guest_socket = WebsocketCommunicator(
+            application,
+            f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}",
+        )
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(guest_socket, "playback_state")
+
+        await guest_socket.send_json_to({
+            "type": "playback_snapshot",
+            "is_playing": True,
+            "position_seconds": 17.5,
+            "duration_seconds": 44,
+        })
+        await guest_socket.send_json_to({"type": "request_state"})
+        shared_state = await self._next_event(guest_socket, "playback_state")
+        viewer = await self._guest_viewer_clock()
+
+        self.assertFalse(shared_state["is_playing"])
+        self.assertEqual(shared_state["position_seconds"], 0)
+        self.assertTrue(viewer["is_playing"])
+        self.assertAlmostEqual(viewer["position"], 17.5)
+        self.assertAlmostEqual(viewer["duration"], 44)
+        self.assertIsNotNone(viewer["updated_at"])
+        await guest_socket.disconnect()
+
     @database_sync_to_async
     def _room_duration(self):
         return Room.objects.get(pk=self.room.pk).duration_seconds
+
+    @database_sync_to_async
+    def _guest_viewer_clock(self):
+        member = RoomMember.objects.get(room=self.room, user=self.guest)
+        return {
+            "is_playing": member.viewer_is_playing,
+            "position": member.viewer_position_seconds,
+            "duration": member.viewer_duration_seconds,
+            "updated_at": member.viewer_playback_at,
+        }
 
     async def _next_event(self, socket, event_type):
         for _ in range(8):

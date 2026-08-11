@@ -3521,7 +3521,6 @@ private struct UserProfilePreviewCard: View {
 private struct CurrentWatchingPreview: View {
     let watching: CurrentWatching
     @State private var player: AVPlayer?
-    @State private var playerReady = false
     @State private var resolvedDuration: Double = 0
     @State private var itemStatusObservation: NSKeyValueObservation?
 
@@ -3533,24 +3532,15 @@ private struct CurrentWatchingPreview: View {
     var body: some View {
         VStack(spacing: 9) {
             ZStack(alignment: .bottom) {
-                if !watching.thumbnailURL.isEmpty {
-                    AsyncImage(url: URL(string: watching.thumbnailURL)) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        Color.black.opacity(0.46)
-                    }
-                } else {
-                    LinearGradient(
-                        colors: [.indigo.opacity(0.42), .black.opacity(0.72)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                }
-                if let player, playerReady {
+                // Never flash a thumbnail/gradient pretending to be the live
+                // preview. The surface is black only until AVPlayer produces
+                // its first real frame, then it continuously renders the same
+                // media clock as the watched user.
+                Color.black
+                if let player {
                     BarePlayerSurface(player: player)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
-                        .transition(.opacity)
                 }
                 LinearGradient(
                     colors: [.clear, .black.opacity(0.74)],
@@ -3608,6 +3598,7 @@ private struct CurrentWatchingPreview: View {
         .task(id: watching.previewURL) { await configurePlayer() }
         .onChange(of: watching.positionSeconds) { _, _ in synchronizePlayer() }
         .onChange(of: watching.isPlaying) { _, _ in synchronizePlayer() }
+        .onChange(of: watching.serverUpdatedAt) { _, _ in synchronizePlayer() }
         .onChange(of: watching.durationSeconds) { _, value in
             if resolvedDuration <= 0, value.isFinite, value > 0 { resolvedDuration = value }
         }
@@ -3623,13 +3614,9 @@ private struct CurrentWatchingPreview: View {
         let options: [String: Any] = watching.headers.isEmpty
             ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": watching.headers]
         let asset = AVURLAsset(url: url, options: options)
-        if let loaded = try? await asset.load(.duration), loaded.seconds.isFinite, loaded.seconds > 0 {
-            resolvedDuration = loaded.seconds
-        } else {
-            resolvedDuration = watching.durationSeconds.isFinite ? max(0, watching.durationSeconds) : 0
-        }
-        guard !Task.isCancelled else { return }
+        resolvedDuration = watching.durationSeconds.isFinite ? max(0, watching.durationSeconds) : 0
         let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = 2
         let previewPlayer = AVPlayer(playerItem: item)
         previewPlayer.isMuted = true
         previewPlayer.volume = 0
@@ -3640,9 +3627,19 @@ private struct CurrentWatchingPreview: View {
             Task { @MainActor in
                 guard self.player === previewPlayer else { return }
                 if observedItem.status == .readyToPlay {
-                    withAnimation(.easeOut(duration: 0.18)) { self.playerReady = true }
+                    self.synchronizePlayer()
                 }
             }
+        }
+        Task {
+            let loaded = try? await asset.load(.duration)
+            guard !Task.isCancelled,
+                  self.player === previewPlayer,
+                  let seconds = loaded?.seconds,
+                  seconds.isFinite,
+                  seconds > 0 else { return }
+            self.resolvedDuration = seconds
+            self.synchronizePlayer()
         }
         previewPlayer.seek(
             to: CMTime(seconds: projectedPosition(at: Date()), preferredTimescale: 600),
@@ -3676,7 +3673,6 @@ private struct CurrentWatchingPreview: View {
         itemStatusObservation = nil
         player?.pause()
         player = nil
-        playerReady = false
     }
 
     private func projectedPosition(at date: Date) -> Double {
