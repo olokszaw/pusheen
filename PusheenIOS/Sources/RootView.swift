@@ -250,7 +250,27 @@ struct HomeView: View {
             ZStack {
                 ZStack { AcrylicBackground()
                     ScrollView { VStack(alignment: .leading, spacing: 18) {
-                HStack { Text("Мои комнаты").font(.title2.bold()); Spacer(); Menu { Button("Создать комнату", systemImage: "plus") { showCreate = true }; Button("Войти по коду", systemImage: "number") { showJoin = true } } label: { Image(systemName: "plus").font(.headline).frame(width: 38, height: 38).liquidCard(Circle()) }.buttonStyle(.plain) }
+                HStack(spacing: 10) {
+                    Image(systemName: "play.rectangle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.cyan)
+                        .frame(width: 34, height: 34)
+                        .background(.cyan.opacity(0.08), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(.cyan.opacity(0.24), lineWidth: 0.8))
+                    Text("Мои комнаты")
+                        .font(.title3.weight(.bold))
+                    Spacer()
+                    Menu {
+                        Button("Создать комнату", systemImage: "plus") { showCreate = true }
+                        Button("Войти по коду", systemImage: "number") { showJoin = true }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.headline)
+                            .frame(width: 38, height: 38)
+                            .liquidCard(Circle())
+                    }
+                    .buttonStyle(AlivePressButtonStyle())
+                }
                 ForEach(rooms) { room in
                     let canSelect = room.owner == session.profile?.userId
                     let selected = selectedRoomIDs.contains(room.id)
@@ -278,7 +298,9 @@ struct HomeView: View {
                                 })
                         )
                 }
-                if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
+                if rooms.isEmpty {
+                    ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle")
+                }
                     }.padding(18) }.task { await monitorRooms() }.onChange(of: session.isOffline) { _, offline in if !offline { Task { await load() } } }
                 }
                 .blur(radius: previewedRoom == nil ? 0 : 17)
