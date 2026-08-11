@@ -8,6 +8,8 @@ from django.db import transaction
 from django.utils import timezone as django_timezone
 from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute
 
+ROOM_DISCONNECT_GRACE_SECONDS = 5.0
+
 
 class RoomConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
@@ -47,12 +49,29 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                     },
                 },
             )
-            presence = await self.mark_disconnected()
-            if presence:
-                await self.channel_layer.group_send(
-                    self.group_name, {"type": "room.presence", "payload": presence}
+            disconnected_at = await self.mark_disconnected_pending()
+            if disconnected_at:
+                # A socket can be replaced during a tunnel/VPN/network handoff
+                # while the user never leaves the room. Give the replacement
+                # connection a short window to arrive before announcing a real
+                # leave. The token makes an older timer unable to close a newer
+                # connection generation.
+                asyncio.create_task(
+                    self.finalize_disconnect_after_grace(disconnected_at)
                 )
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def finalize_disconnect_after_grace(self, disconnected_at):
+        try:
+            await asyncio.sleep(ROOM_DISCONNECT_GRACE_SECONDS)
+            presence = await self.finalize_disconnected(disconnected_at)
+            if presence:
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {"type": "room.presence", "payload": presence},
+                )
+        except asyncio.CancelledError:
+            return
 
     async def receive_json(self, content, **_kwargs):
         self.last_heartbeat = time.monotonic()
@@ -369,17 +388,26 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             member = RoomMember.objects.select_for_update(of=("self",)).select_related("user", "room").get(
                 room_id=self.room_id, user=self.scope["user"]
             )
-            was_offline = (
-                member.active_connections == 0
-                or not member.last_heartbeat_at
-                or member.last_heartbeat_at < django_timezone.now() - timedelta(seconds=24)
+            now = django_timezone.now()
+            heartbeat_was_stale = (
+                not member.last_heartbeat_at
+                or member.last_heartbeat_at < now - timedelta(seconds=24)
             )
-            if was_offline:
+            reconnecting_during_grace = bool(
+                member.active_connections == 0
+                and member.last_heartbeat_at
+                and member.last_heartbeat_at
+                >= now - timedelta(seconds=ROOM_DISCONNECT_GRACE_SECONDS)
+            )
+            was_offline = heartbeat_was_stale or (
+                member.active_connections == 0 and not reconnecting_during_grace
+            )
+            if heartbeat_was_stale:
                 # A dead process/socket can leave the diagnostic counter stale.
                 # TTL is authoritative, so start a fresh generation here.
                 member.active_connections = 0
             member.active_connections += 1
-            member.last_heartbeat_at = django_timezone.now()
+            member.last_heartbeat_at = now
             member.save(update_fields=["active_connections", "last_heartbeat_at"])
             profile = getattr(member.user, "watch_profile", None)
             identity = getattr(member.user, "client_identity", None)
@@ -395,7 +423,22 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         return payload
 
     @database_sync_to_async
-    def mark_disconnected(self):
+    def mark_disconnected_pending(self):
+        with transaction.atomic():
+            try:
+                member = RoomMember.objects.select_for_update(of=("self",)).get(
+                    room_id=self.room_id, user=self.scope["user"]
+                )
+            except RoomMember.DoesNotExist:
+                return None
+            member.active_connections = max(0, member.active_connections - 1)
+            disconnected_at = django_timezone.now()
+            member.last_heartbeat_at = disconnected_at
+            member.save(update_fields=["active_connections", "last_heartbeat_at"])
+            return disconnected_at if member.active_connections == 0 else None
+
+    @database_sync_to_async
+    def finalize_disconnected(self, disconnected_at):
         with transaction.atomic():
             try:
                 member = RoomMember.objects.select_for_update(of=("self",)).select_related("user", "room").get(
@@ -403,27 +446,26 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 )
             except RoomMember.DoesNotExist:
                 return None
-            member.active_connections = max(0, member.active_connections - 1)
-            member.last_heartbeat_at = (
-                django_timezone.now()
-                if member.active_connections > 0
-                else django_timezone.now() - timedelta(seconds=25)
-            )
-            member.save(update_fields=["active_connections", "last_heartbeat_at"])
+            # Any reconnect or newer disconnect changes one of these values.
+            # In that case this timer belongs to an obsolete socket generation.
+            if (
+                member.active_connections > 0
+                or member.last_heartbeat_at != disconnected_at
+            ):
+                return None
+            member.last_heartbeat_at = django_timezone.now() - timedelta(seconds=25)
+            member.save(update_fields=["last_heartbeat_at"])
             profile = getattr(member.user, "watch_profile", None)
             identity = getattr(member.user, "client_identity", None)
-            payload = {
+            return {
                 "user_id": member.user_id,
                 "username": member.user.username,
                 "nickname": profile.nickname if profile else member.user.username,
                 "avatar_data_url": profile.avatar_data_url if profile and profile.avatar_data_url else getattr(identity, "avatar_data_url", ""),
                 "is_owner": member.room.owner_id == member.user_id,
-                "is_online": member.active_connections > 0,
-                "changed": member.active_connections == 0,
+                "is_online": False,
+                "changed": True,
             }
-        # Disconnect is not activity.  The app lifecycle heartbeat decides
-        # global presence; marking active here kept closed clients online.
-        return payload
 
     @database_sync_to_async
     def mark_heartbeat(self):

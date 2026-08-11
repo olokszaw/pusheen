@@ -58,6 +58,7 @@ jobs:
             watchparty.tests.RoomSocketTests.test_guest_recovers_history_and_live_chat_after_reconnect \
             watchparty.tests.RoomSocketTests.test_guest_receives_every_identical_message_from_rapid_socket_burst \
             watchparty.tests.RoomSocketTests.test_typing_status_is_realtime_and_clears_on_disconnect \
+            watchparty.tests.RoomSocketTests.test_transient_reconnect_does_not_emit_fake_leave_or_join \
             watchparty.tests.RoomSocketTests.test_owner_playback_snapshot_refreshes_real_clock_and_duration \
             watchparty.tests.RoomSocketTests.test_guest_snapshot_updates_own_preview_without_controlling_room \
             --verbosity 2

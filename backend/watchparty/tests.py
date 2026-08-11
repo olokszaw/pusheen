@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone as datetime_timezone
+import asyncio
 import gzip
 import json
 import os
@@ -969,6 +970,47 @@ class RoomSocketTests(TransactionTestCase):
 
     def test_typing_status_is_realtime_and_clears_on_disconnect(self):
         async_to_sync(self._assert_typing_status)()
+
+    def test_transient_reconnect_does_not_emit_fake_leave_or_join(self):
+        with patch("watchparty.consumers.ROOM_DISCONNECT_GRACE_SECONDS", 0.2):
+            async_to_sync(self._assert_reconnect_presence_grace)()
+
+    async def _assert_reconnect_presence_grace(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        guest_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+        await self._next_event(owner_socket, "presence")
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(guest_socket, "playback_state")
+        initial_join = await self._next_event(owner_socket, "presence")
+        self.assertTrue(initial_join["changed"])
+        self.assertTrue(initial_join["is_online"])
+
+        await guest_socket.disconnect()
+        await asyncio.sleep(0.05)
+        recovered_guest = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await recovered_guest.connect())[0])
+        await self._next_event(recovered_guest, "playback_state")
+        reconnect = await self._next_event(owner_socket, "presence")
+        self.assertTrue(reconnect["is_online"])
+        self.assertFalse(reconnect["changed"])
+        await asyncio.sleep(0.25)
+        self.assertTrue(await owner_socket.receive_nothing(timeout=0.05))
+
+        # A real leave is still announced exactly once after the grace period.
+        await recovered_guest.disconnect()
+        real_leave = await self._next_event(owner_socket, "presence")
+        self.assertFalse(real_leave["is_online"])
+        self.assertTrue(real_leave["changed"])
+        self.assertTrue(await owner_socket.receive_nothing(timeout=0.05))
+        await owner_socket.disconnect()
 
     async def _assert_typing_status(self):
         owner_socket = WebsocketCommunicator(
