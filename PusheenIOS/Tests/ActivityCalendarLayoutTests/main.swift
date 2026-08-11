@@ -140,7 +140,7 @@ expect(
         now: presenceAnchor,
         locale: Locale(identifier: "ru_RU"),
         timeZone: utc
-    ).contains("15:55"),
+    ).contains("сегодня в 15:55"),
     "At five minutes offline the UI must switch to the phone-local clock time"
 )
 expect(

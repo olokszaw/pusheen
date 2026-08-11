@@ -78,7 +78,7 @@ enum PresenceTimestampFormatter {
         time.dateStyle = .none
 
         if calendar.isDateInToday(date) {
-            return "Был(а) в \(time.string(from: date))"
+            return "Был(а) сегодня в \(time.string(from: date))"
         }
         if calendar.isDateInYesterday(date) {
             return "Был(а) вчера в \(time.string(from: date))"
