@@ -164,13 +164,13 @@ let decodedMessage = try JSONDecoder().decode(ChatMessage.self, from: messageJSO
 expect(decodedMessage.createdAt == "2026-08-02T16:05:00Z", "Chat messages must decode the server creation timestamp")
 expect(decodedMessage.createdAtAgeSeconds == 300, "Chat messages must decode the clock-skew-safe age")
 
-let phoneNow = ISO8601DateFormatter().date(from: "2026-08-11T18:42:00Z")!
+let chatPhoneNow = ISO8601DateFormatter().date(from: "2026-08-11T18:42:00Z")!
 let skewedServerTime = "2026-08-11T15:37:00Z"
 let phoneLocalMessageTime = ChatTimestampFormatter.string(
     from: skewedServerTime,
     ageSeconds: 300,
-    ageAnchor: phoneNow,
-    now: phoneNow,
+    ageAnchor: chatPhoneNow,
+    now: chatPhoneNow,
     locale: Locale(identifier: "ru_RU"),
     timeZone: utc
 )
