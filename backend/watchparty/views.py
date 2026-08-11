@@ -835,7 +835,7 @@ def moderate_member(request, room_id, user_id):
         if user_id == request.user.id:
             return Response({"detail": "Нельзя применить это действие к себе"}, status=400)
         member = get_object_or_404(
-            RoomMember.objects.select_for_update().select_related(
+            RoomMember.objects.select_for_update(of=("self",)).select_related(
                 "user", "user__watch_profile", "user__client_identity"
             ),
             room=room,

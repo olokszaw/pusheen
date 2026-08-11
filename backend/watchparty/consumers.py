@@ -302,7 +302,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def mark_connected(self):
         with transaction.atomic():
-            member = RoomMember.objects.select_for_update().select_related("user", "room").get(
+            member = RoomMember.objects.select_for_update(of=("self",)).select_related("user", "room").get(
                 room_id=self.room_id, user=self.scope["user"]
             )
             was_offline = (
@@ -335,7 +335,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     def mark_disconnected(self):
         with transaction.atomic():
             try:
-                member = RoomMember.objects.select_for_update().select_related("user", "room").get(
+                member = RoomMember.objects.select_for_update(of=("self",)).select_related("user", "room").get(
                     room_id=self.room_id, user=self.scope["user"]
                 )
             except RoomMember.DoesNotExist:

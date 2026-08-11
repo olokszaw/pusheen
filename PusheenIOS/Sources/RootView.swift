@@ -1417,7 +1417,7 @@ struct NativeChatPane: View {
     // FocusState without a SwiftUI `.focused` attachment makes SwiftUI reset
     // it to false, which immediately dismisses the keyboard after any tap.
     @State private var inputFocused = false
-    @State private var inputHeight: CGFloat = 38
+    @State private var inputHeight: CGFloat = 34
     @State private var showPhotoLibrary = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var pendingPhoto: PendingChatPhoto?
@@ -1566,11 +1566,11 @@ struct NativeChatPane: View {
                 .passiveLiquidCard(RoundedRectangle(cornerRadius: 15, style: .continuous))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            HStack(alignment: .bottom, spacing: 10) {
+            HStack(alignment: .bottom, spacing: 7) {
                 ChatAccessoryControl(action: presentPhotoLibrary) {
                     Image(systemName: "paperclip")
-                        .font(.system(size: 21, weight: .semibold))
-                        .frame(width: 46, height: 46)
+                        .font(.system(size: 19, weight: .semibold))
+                        .frame(width: 40, height: 40)
                         .passiveLiquidCard(Circle())
                 }
                 .photosPicker(isPresented: $showPhotoLibrary, selection: $selectedPhoto, matching: .images)
@@ -1580,8 +1580,8 @@ struct NativeChatPane: View {
 
                 ChatAccessoryControl(action: presentStickerPicker) {
                     Image(systemName: "face.smiling.inverse")
-                        .font(.system(size: 20, weight: .semibold))
-                        .frame(width: 42, height: 46)
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 40, height: 40)
                         .passiveLiquidCard(Circle())
                 }
                 .disabled(isMuted).opacity(isMuted ? 0.42 : 1)
@@ -1604,19 +1604,19 @@ struct NativeChatPane: View {
                             }
                         }
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 31, weight: .medium))
+                        .font(.system(size: 28, weight: .medium))
                         .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
-                        .frame(width: 38, height: 38)
+                        .frame(width: 34, height: 34)
                         .contentShape(Circle())
                         .onTapGesture { submit() }
                         .allowsHitTesting(!isMuted)
                         .opacity(isMuted ? 0.42 : 1)
                         .accessibilityAddTraits(.isButton)
                 }
-                .padding(.leading, 14)
-                .padding(.trailing, 8)
-                .padding(.vertical, 6)
-                .liquidCard(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                .padding(.leading, 12)
+                .padding(.trailing, 6)
+                .padding(.vertical, 3)
+                .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
             if showStickerPicker {
                 TelegramStickerKeyboard { sticker in
@@ -1632,11 +1632,11 @@ struct NativeChatPane: View {
             }
             // Keep the composer in the unified chat surface.  The old negative
             // offset could make it protrude beyond the lower rounded edge.
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 10)
         }
         .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 7)
         // RoomView owns the single continuous glass surface around video and
         // chat. A second card here created the visible seam and double corners.
         // RoomView shortens the unified surface to the keyboard edge. No
@@ -2610,7 +2610,7 @@ private struct PersistentChatTextField: UIViewRepresentable {
         view.isEditable = isEnabled
         view.isScrollEnabled = false
         view.showsVerticalScrollIndicator = true
-        view.textContainerInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        view.textContainerInset = UIEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
         view.textContainer.lineFragmentPadding = 0
         view.textContainer.maximumNumberOfLines = 5
         view.textContainer.lineBreakMode = .byWordWrapping
@@ -2670,7 +2670,7 @@ private struct PersistentChatTextField: UIViewRepresentable {
             addSubview(placeholderLabel)
             NSLayoutConstraint.activate([
                 placeholderLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
-                placeholderLabel.topAnchor.constraint(equalTo: topAnchor, constant: 8)
+                placeholderLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6)
             ])
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -2680,11 +2680,11 @@ private struct PersistentChatTextField: UIViewRepresentable {
         }
         @discardableResult
         func refreshLayout() -> CGFloat {
-            guard bounds.width > 1 else { return 38 }
+            guard bounds.width > 1 else { return 34 }
             let availableWidth = bounds.width
             let requiredHeight = sizeThatFits(CGSize(width: availableWidth, height: .greatestFiniteMagnitude)).height
-            let fittedHeight = min(112, max(38, ceil(requiredHeight)))
-            let shouldScroll = requiredHeight > 112
+            let fittedHeight = min(96, max(34, ceil(requiredHeight)))
+            let shouldScroll = requiredHeight > 96
             if isScrollEnabled != shouldScroll { isScrollEnabled = shouldScroll }
             if shouldScroll {
                 let bottom = max(-adjustedContentInset.top, contentSize.height - bounds.height + adjustedContentInset.bottom)

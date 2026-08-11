@@ -270,6 +270,23 @@ class RoomApiTests(APITestCase):
         self.assertEqual(retry.status_code, 403)
         self.assertFalse(RoomMember.objects.filter(room=room, user=self.guest).exists())
 
+    def test_owner_can_ban_member_on_postgresql_safe_lock(self):
+        room = Room.objects.create(owner=self.owner, title="Ban member")
+        RoomMember.objects.create(room=room, user=self.owner)
+        RoomMember.objects.create(room=room, user=self.guest)
+        self.authenticate(self.owner_token)
+
+        response = self.client.post(
+            f"/api/rooms/{room.id}/members/{self.guest.id}/moderate/",
+            {"action": "ban"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["action"], "ban")
+        self.assertTrue(RoomBan.objects.filter(room=room, user=self.guest).exists())
+        self.assertFalse(RoomMember.objects.filter(room=room, user=self.guest).exists())
+
     def test_registration_separates_unique_username_and_repeatable_nickname(self):
         first = self.client.post(
             "/api/auth/register/",
