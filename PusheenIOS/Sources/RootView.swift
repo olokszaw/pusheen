@@ -1037,7 +1037,10 @@ struct MembersSheet: View {
                 HStack {
                     Text("Участники").font(.title2.bold())
                     Spacer()
-                    Button { showInviteFriends = true } label: {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.7)
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) { showInviteFriends = true }
+                    } label: {
                         Label("Пригласить", systemImage: "person.badge.plus")
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 11).frame(height: 36)
@@ -1096,19 +1099,8 @@ struct MembersSheet: View {
             }
 
             if showInviteFriends {
-                Color.black.opacity(0.34)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture { closeInviteFriends() }
-                    .transition(.opacity)
-
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    InviteFriendsPanel(room: room, currentMembers: members, close: closeInviteFriends)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 10)
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                InviteFriendsPanel(room: room, currentMembers: members, close: closeInviteFriends)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 .zIndex(3)
             }
         }
@@ -1220,11 +1212,18 @@ private struct InviteFriendsPanel: View {
         ZStack {
             AcrylicBackground()
             VStack(spacing: 13) {
-                Capsule().fill(.white.opacity(0.24)).frame(width: 38, height: 5)
                 HStack {
-                    Text("Пригласить друзей").font(.title3.bold())
+                    Label("Пригласить друзей", systemImage: "person.2.badge.plus")
+                        .font(.title3.bold())
+                        .symbolRenderingMode(.hierarchical)
                     Spacer()
-                    Button(action: close) { Image(systemName: "xmark").frame(width: 34, height: 34).liquidCard(Circle()) }.buttonStyle(.plain)
+                    Button(action: close) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .frame(width: 34, height: 34)
+                            .liquidCard(Circle())
+                    }
+                    .buttonStyle(.plain)
                 }
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -1275,13 +1274,11 @@ private struct InviteFriendsPanel: View {
                 .buttonStyle(.plain).liquidCard(Capsule()).disabled(selectedIDs.isEmpty || sending)
                 .opacity(selectedIDs.isEmpty ? 0.48 : 1)
             }
-            .padding(18)
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
         }
-        .frame(maxWidth: .infinity)
-        .frame(maxHeight: 510)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).stroke(.white.opacity(0.16), lineWidth: 0.8))
-        .shadow(color: .black.opacity(0.38), radius: 28, y: 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { friends = (try? await session.api.friends()) ?? [] }
     }
 
