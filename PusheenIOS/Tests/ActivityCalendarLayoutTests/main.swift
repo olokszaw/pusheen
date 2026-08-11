@@ -116,6 +116,47 @@ expect(
     "A server-authoritative online status must survive device/server clock skew"
 )
 
+let presenceAnchor = ISO8601DateFormatter().date(from: "2026-08-11T16:00:00Z")!
+expect(
+    PresenceTimestampFormatter.string(
+        isOnline: false,
+        lastSeen: nil,
+        lastSeenAgeSeconds: 4 * 60,
+        ageAnchor: presenceAnchor,
+        visible: true,
+        now: presenceAnchor,
+        locale: Locale(identifier: "ru_RU"),
+        timeZone: utc
+    ) == "Был(а) 4 мин. назад",
+    "The first five offline minutes must use relative minutes"
+)
+expect(
+    PresenceTimestampFormatter.string(
+        isOnline: false,
+        lastSeen: nil,
+        lastSeenAgeSeconds: 5 * 60,
+        ageAnchor: presenceAnchor,
+        visible: true,
+        now: presenceAnchor,
+        locale: Locale(identifier: "ru_RU"),
+        timeZone: utc
+    ).contains("15:55"),
+    "At five minutes offline the UI must switch to the phone-local clock time"
+)
+expect(
+    PresenceTimestampFormatter.string(
+        isOnline: false,
+        lastSeen: nil,
+        lastSeenAgeSeconds: nil,
+        ageAnchor: presenceAnchor,
+        visible: true,
+        now: presenceAnchor,
+        locale: Locale(identifier: "ru_RU"),
+        timeZone: utc
+    ) == "Не в сети",
+    "Missing presence data must never display the vague recently label"
+)
+
 let messageJSON = """
 {"id":1,"author_id":7,"nickname":"Test","text":"Hi","image_data_url":"","avatar_data_url":"","reactions":[],"created_at":"2026-08-02T16:05:00Z"}
 """.data(using: .utf8)!

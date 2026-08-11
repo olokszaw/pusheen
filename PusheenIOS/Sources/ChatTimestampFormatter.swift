@@ -58,15 +58,14 @@ enum PresenceTimestampFormatter {
         } else {
             date = ChatTimestampFormatter.date(from: lastSeen)
         }
-        guard let date else {
-            return "Был(а) недавно"
-        }
+        // Never show the vague "recently" state. If an old backend cannot
+        // provide a timestamp, an explicit offline label is more truthful.
+        guard let date else { return "Не в сети" }
 
-        let minutes = max(0, Int(now.timeIntervalSince(date) / 60))
-        if minutes < 2 { return "Был(а) недавно" }
-        if minutes < 60 { return "Был(а) \(minutes) мин. назад" }
-        let hours = minutes / 60
-        if hours < 6 { return "Был(а) \(hours) ч. назад" }
+        let elapsedSeconds = max(0, Int(now.timeIntervalSince(date)))
+        if elapsedSeconds < 60 { return "Был(а) менее минуты назад" }
+        let minutes = elapsedSeconds / 60
+        if minutes < 5 { return "Был(а) \(minutes) мин. назад" }
 
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = locale
@@ -79,7 +78,7 @@ enum PresenceTimestampFormatter {
         time.dateStyle = .none
 
         if calendar.isDateInToday(date) {
-            return "Был(а) сегодня в \(time.string(from: date))"
+            return "Был(а) в \(time.string(from: date))"
         }
         if calendar.isDateInYesterday(date) {
             return "Был(а) вчера в \(time.string(from: date))"
