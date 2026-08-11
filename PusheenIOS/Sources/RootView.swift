@@ -693,7 +693,10 @@ struct RoomView: View {
             let playerHeight = chatFocused ? 176.0 : roomPlayerHeight
             // Leave a tiny visual margin so the lower glass corners do not
             // touch or clip against the physical edge of the display.
-            let roomHeight = max(playerHeight + 180, geometry.size.height - (chatFocused ? keyboardHeight : 0) - 14)
+            // The keyboard overlap is the single source of truth. Tying the
+            // subtraction to focus made the room jump to its full height one
+            // frame before the keyboard had actually finished closing.
+            let roomHeight = max(playerHeight + 180, geometry.size.height - keyboardHeight - 14)
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
             ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
                 VStack(spacing: 0) {
@@ -734,7 +737,6 @@ struct RoomView: View {
                 .frame(width: geometry.size.width, height: roomHeight, alignment: .top)
                 .animation(.spring(response: 0.3, dampingFraction: 0.9), value: controlsVisible)
                 .animation(.spring(response: 0.34, dampingFraction: 0.88), value: chatFocused)
-                .animation(.easeOut(duration: 0.22), value: keyboardHeight)
             }
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12)
@@ -903,7 +905,9 @@ struct RoomView: View {
         // Ignore keyboards presented by a profile/settings sheet above the
         // room. Only the chat's own first responder may resize this surface.
         guard chatFocused else { return }
-        keyboardHeight = nextHeight
+        withAnimation(keyboardAnimation(from: notification)) {
+            keyboardHeight = nextHeight
+        }
     }
     private func resetKeyboardLayout(animatedWith notification: Notification? = nil) {
         if let notification {
@@ -1468,6 +1472,7 @@ struct NativeChatPane: View {
                         .padding(.bottom, 2)
                         .scrollTargetLayout()
                     }
+                    .defaultScrollAnchor(.bottom)
                     .scrollDismissesKeyboard(.interactively)
                     .contentShape(Rectangle())
                     .onTapGesture { focused = false; inputFocused = false }
@@ -1508,14 +1513,12 @@ struct NativeChatPane: View {
                             focused = false
                         }
                         guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
-                        DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
-                        // The safe-area and scroll viewport settle at the end of
-                        // the keyboard animation. Reconcile once more then so a
-                        // transient viewport height cannot leave the composer
-                        // and newest bubble pulled upward.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                        // Follow the keyboard animation immediately instead of
+                        // showing a wrong intermediate frame and correcting it
+                        // after a delay.
+                        DispatchQueue.main.async {
                             guard keyboardHeight == 0, sticksToBottom else { return }
-                            scrollToLatestMessage(proxy, animated: false)
+                            scrollToLatestMessage(proxy, animated: true)
                         }
                     }
                     .onChange(of: requestedMessageID) { _, messageID in
@@ -1556,11 +1559,6 @@ struct NativeChatPane: View {
             }
             .frame(maxHeight: .infinity)
             VStack(spacing: 7) {
-            if !typingMembers.isEmpty {
-                TypingParticipantsIndicator(members: typingMembers)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
             if let reply = replyingTo {
                 HStack(spacing: 9) {
                     Capsule().fill(.cyan.opacity(0.76)).frame(width: 3, height: 30)
@@ -1645,6 +1643,14 @@ struct NativeChatPane: View {
                 .frame(height: 286)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            }
+            .overlay(alignment: .topLeading) {
+                if !typingMembers.isEmpty {
+                    TypingParticipantsIndicator(members: typingMembers)
+                        .offset(y: -42)
+                        .allowsHitTesting(false)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             // Keep the composer in the unified chat surface.  The old negative
             // offset could make it protrude beyond the lower rounded edge.
@@ -1909,10 +1915,9 @@ private struct TypingParticipantsIndicator: View {
                         )
                         BouncingTypingDots()
                     }
-                    .padding(.leading, 4)
-                    .padding(.trailing, 9)
+                    .padding(.horizontal, 3)
                     .frame(height: 35)
-                    .passiveLiquidCard(Capsule())
+                    .shadow(color: .black.opacity(0.30), radius: 6, y: 3)
                     .accessibilityLabel("\(member.nickname) is typing")
                 }
             }
