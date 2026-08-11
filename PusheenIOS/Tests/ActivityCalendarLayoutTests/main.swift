@@ -43,6 +43,17 @@ expect(
     "Month-over-month increase must be calculated from real activity totals"
 )
 
+let partialMonthDate = DateComponents(calendar: calendar, timeZone: calendar.timeZone, year: 2026, month: 8, day: 11).date!
+let partialMonthDaily = [
+    "2026-07-01": 50,
+    "2026-07-20": 10_000,
+    "2026-08-01": 100,
+]
+expect(
+    ActivityCalendarLayout.monthIncreasePercentage(daily: partialMonthDaily, today: partialMonthDate, calendar: calendar) == 100,
+    "An unfinished month must be compared with the same elapsed days of the previous month"
+)
+
 let timestamp = "2026-08-02T16:05:00.000Z"
 let utc = TimeZone(secondsFromGMT: 0)!
 let russianTime = ChatTimestampFormatter.string(

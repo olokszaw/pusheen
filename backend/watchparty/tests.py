@@ -139,6 +139,21 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data[0]["is_online"])
 
+    def test_room_list_counts_only_currently_active_members(self):
+        room = Room.objects.create(owner=self.owner, title="Live count")
+        RoomMember.objects.create(
+            room=room, user=self.owner, active_connections=1,
+            last_heartbeat_at=timezone.now(),
+        )
+        RoomMember.objects.create(
+            room=room, user=self.guest, active_connections=3,
+            last_heartbeat_at=timezone.now() - timedelta(seconds=25),
+        )
+        self.authenticate(self.owner_token)
+        response = self.client.get("/api/rooms/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data[0]["members_count"], 1)
+
     def test_message_history_is_ordered_by_server_timestamp(self):
         room = Room.objects.create(owner=self.owner, title="Ordered chat")
         RoomMember.objects.create(room=room, user=self.owner)
@@ -164,6 +179,21 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.data["month_increase_percent"], 50)
         activity = ViewingActivity.objects.get(user=self.owner)
         self.assertEqual(activity.month_increase_percent, 50)
+
+    @patch("watchparty.views.timezone.localdate", return_value=date(2026, 8, 11))
+    def test_activity_compares_same_elapsed_period_of_previous_month(self, _localdate):
+        ViewingActivity.objects.create(
+            user=self.owner,
+            daily_seconds={
+                "2026-07-01": 50,
+                "2026-07-20": 10_000,
+                "2026-08-01": 100,
+            },
+        )
+        self.authenticate(self.owner_token)
+        response = self.client.get("/api/activity/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["month_increase_percent"], 100)
 
     @patch("watchparty.views.timezone.localdate", return_value=date(2026, 8, 2))
     def test_activity_streak_is_server_calculated_as_seven_days(self, _localdate):

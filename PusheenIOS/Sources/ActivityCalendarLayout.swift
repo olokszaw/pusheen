@@ -106,14 +106,16 @@ struct ActivityCalendarLayout {
             from: calendar.dateComponents([.year, .month], from: today)
         ) ?? today
         let previousStart = calendar.date(byAdding: .month, value: -1, to: currentStart) ?? currentStart
-        let nextStart = calendar.date(byAdding: .month, value: 1, to: currentStart) ?? today
-
         let current = sum(daily: daily, from: currentStart, through: today, calendar: calendar)
         let previousEnd = calendar.date(byAdding: .day, value: -1, to: currentStart) ?? previousStart
-        let previous = sum(daily: daily, from: previousStart, through: previousEnd, calendar: calendar)
+        let elapsedDays = calendar.dateComponents([.day], from: currentStart, to: today).day ?? 0
+        let comparablePreviousEnd = min(
+            calendar.date(byAdding: .day, value: elapsedDays, to: previousStart) ?? previousEnd,
+            previousEnd
+        )
+        let previous = sum(daily: daily, from: previousStart, through: comparablePreviousEnd, calendar: calendar)
 
         guard previous > 0 else { return current > 0 ? 100 : 0 }
-        guard nextStart > currentStart else { return 0 }
         let change = ((Double(current) - Double(previous)) / Double(previous)) * 100
         return max(0, Int(change.rounded()))
     }

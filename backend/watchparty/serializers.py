@@ -31,7 +31,7 @@ class PlaybackSerializer(serializers.ModelSerializer):
 
 class RoomSerializer(serializers.ModelSerializer):
     owner_name = serializers.SerializerMethodField()
-    members_count = serializers.IntegerField(source="members.count", read_only=True)
+    members_count = serializers.SerializerMethodField()
     playback = PlaybackSerializer(read_only=True)
     media_url = serializers.SerializerMethodField()
     source_type = serializers.SerializerMethodField()
@@ -78,6 +78,14 @@ class RoomSerializer(serializers.ModelSerializer):
 
     def get_owner_name(self, room):
         return public_profile(room.owner)["nickname"]
+
+    def get_members_count(self, room):
+        """Count live room connections, not historical membership rows."""
+        cutoff = timezone.now() - timedelta(seconds=24)
+        return room.members.filter(
+            active_connections__gt=0,
+            last_heartbeat_at__gte=cutoff,
+        ).count()
 
 
 class JoinSerializer(serializers.Serializer):

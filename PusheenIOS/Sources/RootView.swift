@@ -279,7 +279,7 @@ struct HomeView: View {
                         )
                 }
                 if rooms.isEmpty { ContentUnavailableView("Комнат пока нет", systemImage: "play.rectangle.on.rectangle", description: Text("Создай комнату в текущей Flutter-версии — SwiftUI-клиент сразу её увидит.")) }
-                    }.padding(18) }.task { await load() }.onChange(of: session.isOffline) { _, offline in if !offline { Task { await load() } } }
+                    }.padding(18) }.task { await monitorRooms() }.onChange(of: session.isOffline) { _, offline in if !offline { Task { await load() } } }
                 }
                 .blur(radius: previewedRoom == nil ? 0 : 17)
                 .allowsHitTesting(previewedRoom == nil)
@@ -335,6 +335,14 @@ struct HomeView: View {
         guard let refreshed = try? await session.api.rooms() else { return }
         rooms = refreshed
         saveRoomsCache()
+    }
+    private func monitorRooms() async {
+        await load()
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, !session.isOffline else { continue }
+            await load()
+        }
     }
     private func saveRoomsCache() {
         guard let data = try? JSONEncoder().encode(rooms) else { return }
@@ -1084,7 +1092,7 @@ struct MembersSheet: View {
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 11).frame(height: 36)
                     }
-                    .buttonStyle(.plain).liquidCard(Capsule())
+                    .buttonStyle(AlivePressButtonStyle()).liquidCard(Capsule())
                 }
                 ForEach(members) { member in
                     HStack(spacing: 11) {
@@ -1310,7 +1318,7 @@ private struct InviteFriendsPanel: View {
                     Label(sending ? "Отправляем…" : "Пригласить (\(selectedIDs.count))", systemImage: "paperplane.fill")
                         .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).frame(height: 46)
                 }
-                .buttonStyle(.plain).liquidCard(Capsule()).disabled(selectedIDs.isEmpty || sending)
+                .buttonStyle(AlivePressButtonStyle()).liquidCard(Capsule()).disabled(selectedIDs.isEmpty || sending)
                 .opacity(selectedIDs.isEmpty ? 0.48 : 1)
         }
         .padding(.horizontal, 20)
@@ -1501,6 +1509,14 @@ struct NativeChatPane: View {
                         }
                         guard oldHeight > 0, newHeight == 0, sticksToBottom else { return }
                         DispatchQueue.main.async { scrollToLatestMessage(proxy, animated: false) }
+                        // The safe-area and scroll viewport settle at the end of
+                        // the keyboard animation. Reconcile once more then so a
+                        // transient viewport height cannot leave the composer
+                        // and newest bubble pulled upward.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                            guard keyboardHeight == 0, sticksToBottom else { return }
+                            scrollToLatestMessage(proxy, animated: false)
+                        }
                     }
                     .onChange(of: requestedMessageID) { _, messageID in
                         guard let messageID else { return }
@@ -1950,12 +1966,13 @@ private struct TelegramStickerKeyboard: View {
                         } label: {
                             Image(systemName: "clock")
                                 .font(.system(size: 19, weight: .medium))
-                                .foregroundStyle(showsRecents ? .cyan : .secondary)
+                                .foregroundStyle(showsRecents ? .cyan : Color.white.opacity(0.66))
                                 .frame(width: 40, height: 40)
-                                .background(showsRecents ? Color.cyan.opacity(0.12) : .clear, in: Circle())
-                                .overlay(Circle().stroke(showsRecents ? Color.cyan.opacity(0.34) : .clear, lineWidth: 0.8))
+                                .background(showsRecents ? Color.cyan.opacity(0.12) : Color.white.opacity(0.055), in: Circle())
+                                .overlay(Circle().stroke(showsRecents ? Color.cyan.opacity(0.34) : Color.white.opacity(0.11), lineWidth: 0.8))
+                                .symbolEffect(.bounce, value: showsRecents)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(AlivePressButtonStyle())
                         .accessibilityLabel("Недавние стикеры")
 
                         ForEach(packs) { pack in
@@ -2315,9 +2332,18 @@ private struct WebVideoStickerView: UIViewRepresentable {
 private struct ImmediateGalleryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .scaleEffect(configuration.isPressed ? 0.955 : 1)
             .opacity(configuration.isPressed ? 0.82 : 1)
-            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.62), value: configuration.isPressed)
+    }
+}
+
+private struct AlivePressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .brightness(configuration.isPressed ? 0.08 : 0)
+            .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.62), value: configuration.isPressed)
     }
 }
 
@@ -2330,13 +2356,15 @@ private struct ChatAccessoryControl<Label: View>: View {
     let action: () -> Void
     @ViewBuilder let label: () -> Label
     @GestureState private var isPressed = false
+    @State private var activationTick = 0
 
     var body: some View {
         label()
-            .scaleEffect(isPressed ? 0.965 : 1)
-            .opacity(isPressed ? 0.78 : 1)
+            .scaleEffect(isPressed ? 0.91 : 1)
+            .opacity(isPressed ? 0.84 : 1)
+            .symbolEffect(.bounce, value: activationTick)
             .contentShape(Rectangle())
-            .animation(.easeOut(duration: 0.07), value: isPressed)
+            .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.62), value: isPressed)
             .highPriorityGesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .local)
                     .updating($isPressed) { value, state, _ in
@@ -2345,6 +2373,8 @@ private struct ChatAccessoryControl<Label: View>: View {
                     .onEnded { value in
                         guard abs(value.translation.width) < 18,
                               abs(value.translation.height) < 18 else { return }
+                        activationTick += 1
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.64)
                         action()
                     }
             )
@@ -3679,9 +3709,30 @@ struct PusheenTabs: View {
     var body: some View {
         GeometryReader { proxy in
             TabView(selection: $selection) {
-                HomeView().tag(PusheenTab.rooms).tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }
-                FriendsGlassView().tag(PusheenTab.friends).tabItem { Label("Друзья", systemImage: "person.2.fill") }
-                ProfileGlassView().tag(PusheenTab.profile).tabItem { Label("Профиль", systemImage: "person.crop.circle.fill") }
+                HomeView().tag(PusheenTab.rooms).tabItem {
+                    Label {
+                        Text("Комнаты")
+                    } icon: {
+                        Image(systemName: "play.rectangle.fill")
+                            .symbolEffect(.bounce, value: selection == .rooms)
+                    }
+                }
+                FriendsGlassView().tag(PusheenTab.friends).tabItem {
+                    Label {
+                        Text("Друзья")
+                    } icon: {
+                        Image(systemName: "person.2.fill")
+                            .symbolEffect(.bounce, value: selection == .friends)
+                    }
+                }
+                ProfileGlassView().tag(PusheenTab.profile).tabItem {
+                    Label {
+                        Text("Профиль")
+                    } icon: {
+                        Image(systemName: "person.crop.circle.fill")
+                            .symbolEffect(.bounce, value: selection == .profile)
+                    }
+                }
             }
             .tint(.indigo)
             .overlay(alignment: .bottomTrailing) {

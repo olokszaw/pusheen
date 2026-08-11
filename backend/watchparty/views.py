@@ -193,7 +193,7 @@ def auth_payload(user):
 
 
 def month_increase_percent(daily_seconds, current_day=None):
-    """Return the server-authoritative month-over-month increase."""
+    """Compare this month with the same elapsed period of last month."""
     today = current_day or timezone.localdate()
     current_start = today.replace(day=1)
     previous_end = current_start - timedelta(days=1)
@@ -208,7 +208,12 @@ def month_increase_percent(daily_seconds, current_day=None):
         )
 
     current = total_between(current_start, today)
-    previous = total_between(previous_start, previous_end)
+    elapsed_days = (today - current_start).days
+    previous_comparison_end = min(
+        previous_start + timedelta(days=elapsed_days),
+        previous_end,
+    )
+    previous = total_between(previous_start, previous_comparison_end)
     if previous <= 0:
         return 100 if current > 0 else 0
     return max(0, round((current - previous) / previous * 100))
