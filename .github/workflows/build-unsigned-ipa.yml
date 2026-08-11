@@ -45,6 +45,9 @@ jobs:
             watchparty.tests.RoomApiTests.test_sender_can_cancel_outgoing_friend_request \
             watchparty.tests.RoomApiTests.test_presence_is_real_and_privacy_aware \
             watchparty.tests.RoomApiTests.test_stale_presence_is_offline_even_without_clean_disconnect \
+            watchparty.tests.RoomApiTests.test_friend_profile_exposes_read_only_current_watching_without_room_credentials \
+            watchparty.tests.RoomApiTests.test_stale_room_connection_is_not_shown_in_friend_profile \
+            watchparty.tests.RoomApiTests.test_friend_can_range_stream_active_upload_without_joining_room \
             watchparty.tests.RoomApiTests.test_create_room_keeps_one_invite_code \
             watchparty.tests.RoomApiTests.test_guest_joins_existing_room_without_new_code \
             watchparty.tests.RoomApiTests.test_gallery_room_upload_stream_and_delete_are_one_consistent_flow \

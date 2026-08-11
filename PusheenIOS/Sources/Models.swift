@@ -157,6 +157,28 @@ struct FriendProfile: Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isFriend = "is_friend"; case isOnline = "is_online"; case lastSeen = "last_seen"; case activityVisible = "activity_visible" }
 }
 
+struct CurrentWatching: Codable, Hashable {
+    let title: String
+    let thumbnailURL: String
+    let durationSeconds: Double
+    let positionSeconds: Double
+    let isPlaying: Bool
+    let serverUpdatedAt: String
+    let previewURL: String
+    let headers: [String: String]
+    let sourceType: String
+    enum CodingKeys: String, CodingKey {
+        case title, headers
+        case thumbnailURL = "thumbnail_url"
+        case durationSeconds = "duration_seconds"
+        case positionSeconds = "position_seconds"
+        case isPlaying = "is_playing"
+        case serverUpdatedAt = "server_updated_at"
+        case previewURL = "preview_url"
+        case sourceType = "source_type"
+    }
+}
+
 struct PublicUserProfile: Codable, Identifiable, Hashable {
     let userId: Int
     let username: String
@@ -168,6 +190,7 @@ struct PublicUserProfile: Codable, Identifiable, Hashable {
     let isOnline: Bool?
     let lastSeen: String?
     let activityVisible: Bool?
+    let nowWatching: CurrentWatching?
     var id: Int { userId }
     enum CodingKeys: String, CodingKey {
         case username, nickname, stats
@@ -178,6 +201,7 @@ struct PublicUserProfile: Codable, Identifiable, Hashable {
         case isOnline = "is_online"
         case lastSeen = "last_seen"
         case activityVisible = "activity_visible"
+        case nowWatching = "now_watching"
     }
 }
 

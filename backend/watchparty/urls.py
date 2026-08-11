@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import RoomDetailView, RoomListCreateView, account_login, activity, app_presence, demo_login, friend_requests, friends, invite_room_friends, join_room, moderate_member, profile, public_user_profile, register, respond_room_invitation, room_invitations, room_members, room_messages, room_messages_batch, room_stream, room_uploaded_media, room_upload_video, username_available, telegram_sticker_packs, telegram_sticker_file
+from .views import RoomDetailView, RoomListCreateView, account_login, activity, app_presence, demo_login, friend_requests, friends, invite_room_friends, join_room, moderate_member, profile, public_user_profile, public_user_watch_preview, register, respond_room_invitation, room_invitations, room_members, room_messages, room_messages_batch, room_stream, room_uploaded_media, room_upload_video, username_available, telegram_sticker_packs, telegram_sticker_file
 
 urlpatterns = [
     path("auth/demo-login/", demo_login),
@@ -9,6 +9,7 @@ urlpatterns = [
     path("profile/", profile),
     path("presence/", app_presence),
     path("users/<int:user_id>/profile/", public_user_profile),
+    path("users/<int:user_id>/watch-preview/", public_user_watch_preview),
     path("activity/", activity),
     path("friends/", friends),
     path("friends/requests/", friend_requests),

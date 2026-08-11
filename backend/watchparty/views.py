@@ -183,6 +183,82 @@ def social_profile(user):
     return {**public_profile(user), **presence_payload(user)}
 
 
+def _active_room_member(user):
+    """Return the user's newest live room connection, never a stale membership."""
+    cutoff = timezone.now() - timedelta(seconds=24)
+    return (
+        RoomMember.objects.filter(
+            user=user,
+            active_connections__gt=0,
+            last_heartbeat_at__gte=cutoff,
+        )
+        .select_related("room", "room__playback")
+        .order_by("-last_heartbeat_at")
+        .first()
+    )
+
+
+def _current_watching_payload(request, target):
+    """Build a friend-safe, read-only live preview without room credentials."""
+    member = _active_room_member(target)
+    if not member:
+        return None
+    room = member.room
+    try:
+        playback = room.playback
+    except PlaybackState.DoesNotExist:
+        playback = None
+
+    position = max(0.0, float(playback.position_seconds if playback else 0))
+    is_playing = bool(playback and playback.is_playing)
+    server_updated_at = playback.updated_at if playback else timezone.now()
+    if is_playing:
+        position += max(0.0, (timezone.now() - server_updated_at).total_seconds())
+
+    title = room.title
+    thumbnail = room.thumbnail_url
+    duration = max(0.0, float(room.duration_seconds or 0))
+    preview_url = ""
+    preview_headers = {}
+    source_type = "upload" if room.uploaded_video else detect_media_source(room.vk_video_url)
+
+    if room.uploaded_video:
+        if room.uploaded_video.storage.exists(room.uploaded_video.name):
+            preview_url = request.build_absolute_uri(f"/api/users/{target.id}/watch-preview/")
+            authorization = request.headers.get("Authorization", "")
+            if authorization:
+                preview_headers["Authorization"] = authorization
+    elif room.vk_video_url:
+        cache_key = f"room-stream:v3:{source_type}:{room.id}:{room.vk_video_url}"
+        stream = cache.get(cache_key)
+        if stream is None:
+            try:
+                stream = resolve_media_stream(room.vk_video_url, source_type)
+            except Exception:
+                stream = {}
+            else:
+                cache.set(cache_key, stream, timeout=20 * 60)
+        preview_url = str(stream.get("url") or "")
+        preview_headers = dict(stream.get("headers") or {})
+        title = str(stream.get("title") or title)
+        thumbnail = str(stream.get("thumbnail") or thumbnail)
+        duration = max(duration, float(stream.get("duration_seconds") or 0))
+
+    if duration > 0:
+        position = min(position, duration)
+    return {
+        "title": title,
+        "thumbnail_url": thumbnail,
+        "duration_seconds": duration,
+        "position_seconds": position,
+        "is_playing": is_playing,
+        "server_updated_at": server_updated_at.isoformat(),
+        "preview_url": preview_url,
+        "headers": preview_headers,
+        "source_type": source_type,
+    }
+
+
 @api_view(["POST"])
 def app_presence(request):
     """Explicit app-lifecycle presence; ordinary API polling never counts."""
@@ -479,6 +555,7 @@ def public_user_profile(request, user_id):
         "is_friend": is_friend,
         "analytics_visible": analytics_visible,
         "stats": None,
+        "now_watching": None,
     }
     if analytics_visible:
         activity_obj, _ = ViewingActivity.objects.get_or_create(user=target)
@@ -487,6 +564,14 @@ def public_user_profile(request, user_id):
             activity_obj.month_increase_percent = current_percent
             activity_obj.save(update_fields=["month_increase_percent", "updated_at"])
         payload["stats"] = activity_payload(activity_obj)
+        presence = presence_payload(target)
+        if presence["activity_visible"]:
+            # A provider/storage outage must never make the whole public
+            # profile fail. The live tile can safely disappear until retry.
+            try:
+                payload["now_watching"] = _current_watching_payload(request, target)
+            except Exception:
+                payload["now_watching"] = None
     return Response(payload)
 
 
@@ -985,6 +1070,45 @@ def _video_file_chunks(file_path, start, length):
             yield chunk
 
 
+def _uploaded_video_response(request, room):
+    if not room.uploaded_video or not room.uploaded_video.storage.exists(room.uploaded_video.name):
+        return Response({"detail": "Загруженное видео не найдено"}, status=404)
+    try:
+        file_path = room.uploaded_video.path
+        file_size = os.path.getsize(file_path)
+    except (NotImplementedError, OSError):
+        return Response({"detail": "Файл временно недоступен"}, status=503)
+
+    start, end = 0, max(0, file_size - 1)
+    range_header = request.headers.get("Range", "")
+    if range_header:
+        match = re.match(r"^bytes=(\d*)-(\d*)$", range_header.strip())
+        if not match:
+            return HttpResponse(status=416, headers={"Content-Range": f"bytes */{file_size}"})
+        first, last = match.groups()
+        if first:
+            start = int(first)
+            end = int(last) if last else end
+        elif last:
+            suffix = min(int(last), file_size)
+            start = max(0, file_size - suffix)
+        if start >= file_size or start > end:
+            return HttpResponse(status=416, headers={"Content-Range": f"bytes */{file_size}"})
+        end = min(end, file_size - 1)
+    length = end - start + 1
+    content_type = mimetypes.guess_type(room.uploaded_video.name)[0] or "video/mp4"
+    response = StreamingHttpResponse(
+        _video_file_chunks(file_path, start, length),
+        status=206 if range_header else 200,
+        content_type=content_type,
+    )
+    response["Accept-Ranges"] = "bytes"
+    response["Content-Length"] = str(length)
+    if range_header:
+        response["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+    return response
+
+
 @api_view(["POST"])
 def room_upload_video(request, room_id):
     """Attach an owner-selected local movie without touching URL providers."""
@@ -1034,42 +1158,26 @@ def room_uploaded_media(request, room_id):
         or RoomBan.objects.filter(room=room, user=request.user).exists()
     ):
         return Response({"detail": "Нет доступа к видео этой комнаты"}, status=403)
-    if not room.uploaded_video or not room.uploaded_video.storage.exists(room.uploaded_video.name):
-        return Response({"detail": "Загруженное видео не найдено"}, status=404)
-    try:
-        file_path = room.uploaded_video.path
-        file_size = os.path.getsize(file_path)
-    except (NotImplementedError, OSError):
-        return Response({"detail": "Файл временно недоступен"}, status=503)
+    return _uploaded_video_response(request, room)
 
-    start, end = 0, max(0, file_size - 1)
-    range_header = request.headers.get("Range", "")
-    if range_header:
-        match = re.match(r"^bytes=(\d*)-(\d*)$", range_header.strip())
-        if not match:
-            return HttpResponse(status=416, headers={"Content-Range": f"bytes */{file_size}"})
-        first, last = match.groups()
-        if first:
-            start = int(first)
-            end = int(last) if last else end
-        elif last:
-            suffix = min(int(last), file_size)
-            start = max(0, file_size - suffix)
-        if start >= file_size or start > end:
-            return HttpResponse(status=416, headers={"Content-Range": f"bytes */{file_size}"})
-        end = min(end, file_size - 1)
-    length = end - start + 1
-    content_type = mimetypes.guess_type(room.uploaded_video.name)[0] or "video/mp4"
-    response = StreamingHttpResponse(
-        _video_file_chunks(file_path, start, length),
-        status=206 if range_header else 200,
-        content_type=content_type,
-    )
-    response["Accept-Ranges"] = "bytes"
-    response["Content-Length"] = str(length)
-    if range_header:
-        response["Content-Range"] = f"bytes {start}-{end}/{file_size}"
-    return response
+
+@api_view(["GET"])
+def public_user_watch_preview(request, user_id):
+    """Stream a friend's active local video without joining or exposing its room."""
+    target = get_object_or_404(get_user_model(), pk=user_id)
+    is_self = target.pk == request.user.pk
+    is_friend = FriendLink.objects.filter(
+        Q(user=request.user, friend=target) | Q(user=target, friend=request.user)
+    ).exists()
+    if not (is_self or is_friend):
+        return Response({"detail": "Просмотр недоступен"}, status=403)
+    presence = presence_payload(target)
+    if not presence["activity_visible"]:
+        return Response({"detail": "Активность скрыта"}, status=403)
+    member = _active_room_member(target)
+    if not member or not member.room.uploaded_video:
+        return Response({"detail": "Активное видео не найдено"}, status=404)
+    return _uploaded_video_response(request, member.room)
 
 
 @api_view(["GET", "POST"])

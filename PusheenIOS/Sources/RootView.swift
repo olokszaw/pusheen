@@ -356,6 +356,10 @@ struct HomeView: View {
                 Button("Удалить \(selectedRoomIDs.count)", role: .destructive) { Task { await deleteSelectedRooms() } }
             } message: { Text("Видео, загруженные в эти комнаты, тоже удалятся с сервера.") }
         }
+        // NavigationStack is the only source of truth for tab-bar visibility.
+        // A destination can no longer leave the native Liquid Glass bar hidden
+        // after an interactive pop, overlay, reconnect or programmatic exit.
+        .toolbar(path.isEmpty ? .visible : .hidden, for: .tabBar)
     }
     private func load() async {
         // Render the last known room list immediately, then refresh it without
@@ -747,7 +751,6 @@ struct RoomView: View {
     @State private var keyboardHeight: CGFloat = 0
     @State private var controlsVisible = false
     @State private var isScrubbingPlayer = false
-    @State private var isLeavingRoom = false
     @State private var controlsHideTask: Task<Void, Never>?
     @State private var profilePreview: UserProfileReference?
     @State private var fullProfile: UserProfileReference?
@@ -856,17 +859,13 @@ struct RoomView: View {
             if removed { leaveRoom() }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .toolbar(isLeavingRoom ? .visible : .hidden, for: .tabBar)
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .task { model.setCurrentUserID(session.profile?.userId); await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(room: room, members: model.activeMembers, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
     }
     private func leaveRoom() {
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { isLeavingRoom = true }
-        DispatchQueue.main.async { dismiss() }
+        dismiss()
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
     private var playerControls: some View {
@@ -3461,7 +3460,10 @@ private struct UserProfilePreviewCard: View {
                 Text(shownName).font(.title3.bold()).lineLimit(1)
                 if !shownUsername.isEmpty { Text("@\(shownUsername)").font(.subheadline).foregroundStyle(.secondary) }
             }
-            if let stats = profile?.stats {
+            if let watching = profile?.nowWatching {
+                CurrentWatchingPreview(watching: watching)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            } else if let stats = profile?.stats {
                 HStack(spacing: 8) {
                     previewMetric("play.fill", compactDuration(stats.watchedSeconds), "просмотрено")
                     previewMetric("flame.fill", "\(stats.currentStreakDays ?? 0)", "дней подряд")
@@ -3496,7 +3498,14 @@ private struct UserProfilePreviewCard: View {
         .gesture(DragGesture(minimumDistance: 8)
             .updating($dragY) { value, state, _ in if value.translation.height > 0 { state = value.translation.height } }
             .onEnded { value in if value.translation.height > 78 || value.predictedEndTranslation.height > 150 { close() } })
-        .task(id: user.id) { profile = try? await session.api.publicProfile(userID: user.id) }
+        .task(id: user.id) {
+            while !Task.isCancelled {
+                if let refreshed = try? await session.api.publicProfile(userID: user.id) {
+                    withAnimation(.easeInOut(duration: 0.22)) { profile = refreshed }
+                }
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
     }
 
     private func previewMetric(_ icon: String, _ value: String, _ title: String) -> some View {
@@ -3506,6 +3515,155 @@ private struct UserProfilePreviewCard: View {
             Text(title).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity).padding(.vertical, 8).liquidCard(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct CurrentWatchingPreview: View {
+    let watching: CurrentWatching
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        VStack(spacing: 9) {
+            ZStack(alignment: .bottom) {
+                if !watching.thumbnailURL.isEmpty {
+                    AsyncImage(url: URL(string: watching.thumbnailURL)) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Color.black.opacity(0.46)
+                    }
+                } else {
+                    LinearGradient(
+                        colors: [.indigo.opacity(0.42), .black.opacity(0.72)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+                if let player {
+                    BarePlayerSurface(player: player)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.74)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+                HStack(spacing: 7) {
+                    Circle().fill(.cyan).frame(width: 7, height: 7)
+                        .shadow(color: .cyan.opacity(0.65), radius: 5)
+                    Text("Смотрит сейчас")
+                        .font(.caption2.weight(.bold))
+                    Spacer()
+                    Image(systemName: "speaker.slash.fill")
+                    Text("без звука")
+                }
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.92))
+                .padding(.horizontal, 11)
+                .padding(.bottom, 9)
+            }
+            .frame(height: 128)
+            .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 0.8))
+            .allowsHitTesting(false)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(watching.title.isEmpty ? "Видео" : watching.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let position = projectedPosition(at: context.date)
+                    VStack(spacing: 5) {
+                        GeometryReader { proxy in
+                            let ratio = watching.durationSeconds > 0
+                                ? min(1, max(0, position / watching.durationSeconds)) : 0
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(.white.opacity(0.11))
+                                Capsule().fill(.cyan.opacity(0.82))
+                                    .frame(width: max(5, proxy.size.width * ratio))
+                            }
+                        }
+                        .frame(height: 4)
+                        HStack {
+                            Text(clock(position))
+                            Spacer()
+                            Text(clock(watching.durationSeconds))
+                        }
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .padding(10)
+        .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .task(id: watching.previewURL) { configurePlayer() }
+        .onChange(of: watching.positionSeconds) { _, _ in synchronizePlayer() }
+        .onChange(of: watching.isPlaying) { _, _ in synchronizePlayer() }
+        .onDisappear { player?.pause(); player = nil }
+    }
+
+    @MainActor
+    private func configurePlayer() {
+        player?.pause()
+        guard let url = URL(string: watching.previewURL), !watching.previewURL.isEmpty else {
+            player = nil
+            return
+        }
+        let options: [String: Any] = watching.headers.isEmpty
+            ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": watching.headers]
+        let previewPlayer = AVPlayer(playerItem: AVPlayerItem(asset: AVURLAsset(url: url, options: options)))
+        previewPlayer.isMuted = true
+        previewPlayer.volume = 0
+        previewPlayer.automaticallyWaitsToMinimizeStalling = true
+        player = previewPlayer
+        previewPlayer.seek(
+            to: CMTime(seconds: projectedPosition(at: Date()), preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        ) { _ in
+            DispatchQueue.main.async {
+                previewPlayer.isMuted = true
+                previewPlayer.volume = 0
+                if watching.isPlaying { previewPlayer.play() }
+            }
+        }
+    }
+
+    @MainActor
+    private func synchronizePlayer() {
+        guard let player else { return }
+        let expected = projectedPosition(at: Date())
+        let actual = player.currentTime().seconds
+        if !actual.isFinite || abs(actual - expected) > 2.5 {
+            player.seek(to: CMTime(seconds: expected, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        player.isMuted = true
+        player.volume = 0
+        watching.isPlaying ? player.play() : player.pause()
+    }
+
+    private func projectedPosition(at date: Date) -> Double {
+        var position = max(0, watching.positionSeconds)
+        if watching.isPlaying, let updated = isoDate(watching.serverUpdatedAt) {
+            position += max(0, date.timeIntervalSince(updated))
+        }
+        return watching.durationSeconds > 0 ? min(position, watching.durationSeconds) : position
+    }
+
+    private func isoDate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    private func clock(_ value: Double) -> String {
+        let total = max(0, Int(value.isFinite ? value : 0))
+        if total >= 3_600 {
+            return String(format: "%d:%02d:%02d", total / 3_600, (total % 3_600) / 60, total % 60)
+        }
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 }
 

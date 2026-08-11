@@ -452,6 +452,89 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.data["stats"]["watched_seconds"], 7200)
         self.assertEqual(response.data["stats"]["genres"][0]["name"], "Drama")
 
+    @patch("watchparty.views.resolve_media_stream")
+    def test_friend_profile_exposes_read_only_current_watching_without_room_credentials(self, resolver):
+        resolver.return_value = {
+            "url": "https://cdn.example/movie.mp4",
+            "title": "Current movie",
+            "thumbnail": "https://cdn.example/cover.jpg",
+            "duration_seconds": 600,
+            "headers": {"Referer": "https://vkvideo.ru/"},
+        }
+        room = Room.objects.create(
+            owner=self.guest,
+            title="Private room title",
+            vk_video_url="https://vkvideo.ru/video-1_2",
+            duration_seconds=600,
+        )
+        PlaybackState.objects.create(room=room, position_seconds=125, is_playing=False)
+        RoomMember.objects.create(
+            room=room,
+            user=self.guest,
+            active_connections=1,
+            last_heartbeat_at=timezone.now(),
+        )
+        UserPresence.objects.create(user=self.guest, is_active=True)
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        FriendLink.objects.create(user=self.guest, friend=self.owner)
+        self.authenticate(self.owner_token)
+
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+
+        self.assertEqual(response.status_code, 200)
+        watching = response.data["now_watching"]
+        self.assertEqual(watching["title"], "Current movie")
+        self.assertEqual(watching["position_seconds"], 125)
+        self.assertEqual(watching["preview_url"], "https://cdn.example/movie.mp4")
+        self.assertNotIn("room_id", watching)
+        self.assertNotIn("invite_code", watching)
+
+    def test_stale_room_connection_is_not_shown_in_friend_profile(self):
+        room = Room.objects.create(owner=self.guest, title="Old room")
+        PlaybackState.objects.create(room=room, position_seconds=10)
+        RoomMember.objects.create(
+            room=room,
+            user=self.guest,
+            active_connections=1,
+            last_heartbeat_at=timezone.now() - timedelta(seconds=25),
+        )
+        UserPresence.objects.create(user=self.guest, is_active=True)
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        self.authenticate(self.owner_token)
+
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["now_watching"])
+
+    def test_friend_can_range_stream_active_upload_without_joining_room(self):
+        room = Room.objects.create(
+            owner=self.guest,
+            title="Uploaded movie",
+            uploaded_video=SimpleUploadedFile("friend-preview.mp4", b"0123456789", content_type="video/mp4"),
+        )
+        PlaybackState.objects.create(room=room, position_seconds=3, is_playing=False)
+        RoomMember.objects.create(
+            room=room,
+            user=self.guest,
+            active_connections=1,
+            last_heartbeat_at=timezone.now(),
+        )
+        UserPresence.objects.create(user=self.guest, is_active=True)
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        self.authenticate(self.owner_token)
+
+        profile = self.client.get(f"/api/users/{self.guest.id}/profile/")
+        preview = self.client.get(
+            f"/api/users/{self.guest.id}/watch-preview/",
+            HTTP_RANGE="bytes=2-5",
+        )
+
+        self.assertIn(f"/api/users/{self.guest.id}/watch-preview/", profile.data["now_watching"]["preview_url"])
+        self.assertEqual(preview.status_code, 206)
+        self.assertEqual(preview["Content-Range"], "bytes 2-5/10")
+        self.assertEqual(b"".join(preview.streaming_content), b"2345")
+
     def test_legacy_one_way_friend_link_can_see_aggregate_profile_analytics(self):
         UserProfile.objects.create(user=self.guest, nickname="Guest profile")
         ViewingActivity.objects.create(user=self.guest, watched_seconds=7200, genre_counts={"Drama": 7200})
