@@ -171,11 +171,33 @@ def presence_payload(user):
     presence = getattr(user, "watch_presence", None)
     if not presence or not presence.show_activity:
         return {"activity_visible": False, "is_online": False, "last_seen": None}
-    online = presence.is_active and presence.last_seen >= timezone.now() - timedelta(seconds=15)
+
+    now = timezone.now()
+    app_online = presence.is_active and presence.last_seen >= now - timedelta(seconds=15)
+
+    # A live room WebSocket is also authoritative proof that the application
+    # is open.  Keeping app presence and room presence completely separate made
+    # the friends list say "last seen" while the very same profile exposed an
+    # active watch session.  The room heartbeat expires independently, so a
+    # dead socket can keep this true for at most the normal 24-second TTL.
+    room_last_seen = (
+        RoomMember.objects.filter(
+            user_id=user.pk,
+            active_connections__gt=0,
+            last_heartbeat_at__gte=now - timedelta(seconds=24),
+        )
+        .order_by("-last_heartbeat_at")
+        .values_list("last_heartbeat_at", flat=True)
+        .first()
+    )
+    online = app_online or room_last_seen is not None
+    last_seen = max(
+        value for value in (presence.last_seen, room_last_seen) if value is not None
+    )
     return {
         "activity_visible": True,
         "is_online": online,
-        "last_seen": presence.last_seen.isoformat(),
+        "last_seen": last_seen.isoformat(),
     }
 
 
@@ -209,11 +231,12 @@ def _current_watching_payload(request, target):
     except PlaybackState.DoesNotExist:
         playback = None
 
+    snapshot_at = timezone.now()
     position = max(0.0, float(playback.position_seconds if playback else 0))
     is_playing = bool(playback and playback.is_playing)
-    server_updated_at = playback.updated_at if playback else timezone.now()
+    playback_updated_at = playback.updated_at if playback else snapshot_at
     if is_playing:
-        position += max(0.0, (timezone.now() - server_updated_at).total_seconds())
+        position += max(0.0, (snapshot_at - playback_updated_at).total_seconds())
 
     title = room.title
     thumbnail = room.thumbnail_url
@@ -223,6 +246,8 @@ def _current_watching_payload(request, target):
     source_type = "upload" if room.uploaded_video else detect_media_source(room.vk_video_url)
 
     if room.uploaded_video:
+        if title.startswith(("pusheen-movie-", "pusheen-file-")):
+            title = "Видео из галереи"
         if room.uploaded_video.storage.exists(room.uploaded_video.name):
             preview_url = request.build_absolute_uri(f"/api/users/{target.id}/watch-preview/")
             authorization = request.headers.get("Authorization", "")
@@ -252,7 +277,10 @@ def _current_watching_payload(request, target):
         "duration_seconds": duration,
         "position_seconds": position,
         "is_playing": is_playing,
-        "server_updated_at": server_updated_at.isoformat(),
+        # `position` above is already projected to snapshot_at. Returning the
+        # old database timestamp made iOS add the same elapsed interval a
+        # second time, which is how a short movie displayed a 7-hour position.
+        "server_updated_at": snapshot_at.isoformat(),
         "preview_url": preview_url,
         "headers": preview_headers,
         "source_type": source_type,

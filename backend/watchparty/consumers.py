@@ -1,4 +1,5 @@
 import asyncio
+import math
 import time
 from datetime import datetime, timedelta, timezone
 from channels.db import database_sync_to_async
@@ -63,6 +64,8 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "playback_state", **await self.current_state()})
         elif event == "playback_command":
             await self.apply_playback_command(content)
+        elif event == "playback_snapshot":
+            await self.apply_playback_snapshot(content)
         elif event == "chat_message":
             await self.broadcast_chat(
                 content.get("text", ""),
@@ -109,6 +112,30 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             video_url=content.get("vk_video_url") if action == "change_video" else None,
         )
         await self.channel_layer.group_send(self.group_name, {"type": "room.playback", "payload": state})
+
+    async def apply_playback_snapshot(self, content):
+        """Persist the creator's actual AVPlayer clock without disturbing viewers.
+
+        Play/seek commands are sparse.  Extrapolating one old command forever
+        made a public preview drift beyond the real duration and ask AVPlayer
+        for a frame that does not exist.  This low-frequency snapshot refreshes
+        only the server anchor; it is deliberately not broadcast as another
+        seek command to the room.
+        """
+        if not await self.is_owner():
+            return
+        try:
+            position = max(0.0, float(content.get("position_seconds", 0)))
+            duration = max(0.0, float(content.get("duration_seconds", 0)))
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not math.isfinite(position) or not math.isfinite(duration):
+            return
+        await self.save_playback_snapshot(
+            is_playing=bool(content.get("is_playing")),
+            position=position,
+            duration=duration,
+        )
 
     async def room_playback(self, event):
         # `is_owner` is connection-specific. Never broadcast the creator's
@@ -219,6 +246,23 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         state.position_seconds = position
         state.save(update_fields=["is_playing", "position_seconds", "updated_at"])
         return {"room_id": room.id, "command": action, "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
+
+    @database_sync_to_async
+    def save_playback_snapshot(self, is_playing, position, duration):
+        room = Room.objects.select_related("playback").get(id=self.room_id)
+        if room.owner_id != self.scope["user"].id:
+            return
+        if duration > 0:
+            position = min(position, duration)
+            # Local gallery uploads often arrived before the client knew the
+            # asset duration.  The playing device is the most reliable source.
+            if abs(float(room.duration_seconds or 0) - duration) > 0.25:
+                room.duration_seconds = duration
+                room.save(update_fields=["duration_seconds"])
+        state = room.playback
+        state.is_playing = is_playing
+        state.position_seconds = position
+        state.save(update_fields=["is_playing", "position_seconds", "updated_at"])
 
     @database_sync_to_async
     def save_chat(self, text, image_data_url, client_message_id, reply_to_id):

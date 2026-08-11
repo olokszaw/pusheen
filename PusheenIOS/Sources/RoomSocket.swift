@@ -40,6 +40,15 @@ final class RoomSocket: ObservableObject {
     }
 
     func playback(action: String, isPlaying: Bool, position: Double, videoURL: String? = nil) { var value: [String: Any] = ["type": "playback_command", "action": action, "is_playing": isPlaying, "position_seconds": position]; if let videoURL { value["vk_video_url"] = videoURL }; send(value) }
+    func playbackSnapshot(isPlaying: Bool, position: Double, duration: Double) {
+        guard position.isFinite, duration.isFinite else { return }
+        send([
+            "type": "playback_snapshot",
+            "is_playing": isPlaying,
+            "position_seconds": max(0, position),
+            "duration_seconds": max(0, duration),
+        ])
+    }
     @discardableResult
     func chat(text: String, image: String = "", clientMessageID: String, replyToID: Int? = nil) -> Bool {
         var payload: [String: Any] = [

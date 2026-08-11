@@ -28,6 +28,7 @@ final class RoomViewModel: ObservableObject {
     private let socket = RoomSocket()
     private var timer: Any?
     private var itemStatusObservation: NSKeyValueObservation?
+    private var playbackEndObserver: NSObjectProtocol?
     private var audioObservers: [NSObjectProtocol] = []
     private var activityTask: Task<Void, Never>?
     private var messageSyncTask: Task<Void, Never>?
@@ -41,6 +42,7 @@ final class RoomViewModel: ObservableObject {
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
     private var hasAppliedInitialPlaybackState = false
+    private var lastPlaybackSnapshotAt = Date.distantPast
     // Quick Tunnel reconnects can repeat the same presence transition several
     // times. Keep genuine join/leave notices while suppressing identical noise.
     private var lastPresenceNoticeAt: [String: Date] = [:]
@@ -92,6 +94,30 @@ final class RoomViewModel: ObservableObject {
             roomPlayer.volume = 1
             player = roomPlayer
             isPlaying = room.playback?.isPlaying ?? false
+            if let playbackEndObserver {
+                NotificationCenter.default.removeObserver(playbackEndObserver)
+            }
+            playbackEndObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isOwner, !self.isStopped else { return }
+                    let finalPosition = self.player?.currentTime().seconds ?? self.duration
+                    self.isPlaying = false
+                    self.socket.playback(
+                        action: "pause",
+                        isPlaying: false,
+                        position: finalPosition.isFinite ? finalPosition : self.duration
+                    )
+                    self.socket.playbackSnapshot(
+                        isPlaying: false,
+                        position: finalPosition.isFinite ? finalPosition : self.duration,
+                        duration: self.duration
+                    )
+                }
+            }
             itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
@@ -113,12 +139,29 @@ final class RoomViewModel: ObservableObject {
                 if abs(self.position - nextPosition) >= 0.5 { self.position = nextPosition }
                 let value = self.player?.currentItem?.duration.seconds ?? 0
                 if value.isFinite && value > 0 && abs(self.duration - value) >= 0.1 { self.duration = value }
+                let now = Date()
+                if self.isOwner,
+                   self.socket.connected,
+                   now.timeIntervalSince(self.lastPlaybackSnapshotAt) >= 2 {
+                    self.lastPlaybackSnapshotAt = now
+                    self.socket.playbackSnapshot(
+                        isPlaying: self.isPlaying,
+                        position: nextPosition,
+                        duration: value.isFinite && value > 0 ? value : self.duration
+                    )
+                }
             }
             startActivityReporting()
         } catch let caughtError { error = caughtError.localizedDescription }
     }
     func stop() {
         isStopped = true
+        if let timer { player?.removeTimeObserver(timer) }
+        timer = nil
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        if let playbackEndObserver { NotificationCenter.default.removeObserver(playbackEndObserver) }
+        playbackEndObserver = nil
         activityTask?.cancel()
         activityTask = nil
         messageSyncTask?.cancel()

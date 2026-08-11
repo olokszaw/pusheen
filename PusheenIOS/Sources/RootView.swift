@@ -3521,6 +3521,14 @@ private struct UserProfilePreviewCard: View {
 private struct CurrentWatchingPreview: View {
     let watching: CurrentWatching
     @State private var player: AVPlayer?
+    @State private var playerReady = false
+    @State private var resolvedDuration: Double = 0
+    @State private var itemStatusObservation: NSKeyValueObservation?
+
+    private var effectiveDuration: Double {
+        if resolvedDuration.isFinite, resolvedDuration > 0 { return resolvedDuration }
+        return watching.durationSeconds.isFinite ? max(0, watching.durationSeconds) : 0
+    }
 
     var body: some View {
         VStack(spacing: 9) {
@@ -3538,10 +3546,11 @@ private struct CurrentWatchingPreview: View {
                         endPoint: .bottomTrailing
                     )
                 }
-                if let player {
+                if let player, playerReady {
                     BarePlayerSurface(player: player)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
+                        .transition(.opacity)
                 }
                 LinearGradient(
                     colors: [.clear, .black.opacity(0.74)],
@@ -3554,8 +3563,6 @@ private struct CurrentWatchingPreview: View {
                     Text("Смотрит сейчас")
                         .font(.caption2.weight(.bold))
                     Spacer()
-                    Image(systemName: "speaker.slash.fill")
-                    Text("без звука")
                 }
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.92))
@@ -3575,8 +3582,8 @@ private struct CurrentWatchingPreview: View {
                     let position = projectedPosition(at: context.date)
                     VStack(spacing: 5) {
                         GeometryReader { proxy in
-                            let ratio = watching.durationSeconds > 0
-                                ? min(1, max(0, position / watching.durationSeconds)) : 0
+                            let ratio = effectiveDuration > 0
+                                ? min(1, max(0, position / effectiveDuration)) : 0
                             ZStack(alignment: .leading) {
                                 Capsule().fill(.white.opacity(0.11))
                                 Capsule().fill(.cyan.opacity(0.82))
@@ -3587,7 +3594,7 @@ private struct CurrentWatchingPreview: View {
                         HStack {
                             Text(clock(position))
                             Spacer()
-                            Text(clock(watching.durationSeconds))
+                            Text(clock(effectiveDuration))
                         }
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -3598,30 +3605,49 @@ private struct CurrentWatchingPreview: View {
         }
         .padding(10)
         .liquidCard(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .task(id: watching.previewURL) { configurePlayer() }
+        .task(id: watching.previewURL) { await configurePlayer() }
         .onChange(of: watching.positionSeconds) { _, _ in synchronizePlayer() }
         .onChange(of: watching.isPlaying) { _, _ in synchronizePlayer() }
-        .onDisappear { player?.pause(); player = nil }
+        .onChange(of: watching.durationSeconds) { _, value in
+            if resolvedDuration <= 0, value.isFinite, value > 0 { resolvedDuration = value }
+        }
+        .onDisappear { tearDownPlayer() }
     }
 
     @MainActor
-    private func configurePlayer() {
-        player?.pause()
+    private func configurePlayer() async {
+        tearDownPlayer()
         guard let url = URL(string: watching.previewURL), !watching.previewURL.isEmpty else {
-            player = nil
             return
         }
         let options: [String: Any] = watching.headers.isEmpty
             ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": watching.headers]
-        let previewPlayer = AVPlayer(playerItem: AVPlayerItem(asset: AVURLAsset(url: url, options: options)))
+        let asset = AVURLAsset(url: url, options: options)
+        if let loaded = try? await asset.load(.duration), loaded.seconds.isFinite, loaded.seconds > 0 {
+            resolvedDuration = loaded.seconds
+        } else {
+            resolvedDuration = watching.durationSeconds.isFinite ? max(0, watching.durationSeconds) : 0
+        }
+        guard !Task.isCancelled else { return }
+        let item = AVPlayerItem(asset: asset)
+        let previewPlayer = AVPlayer(playerItem: item)
         previewPlayer.isMuted = true
         previewPlayer.volume = 0
         previewPlayer.automaticallyWaitsToMinimizeStalling = true
+        previewPlayer.actionAtItemEnd = .pause
         player = previewPlayer
+        itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { observedItem, _ in
+            Task { @MainActor in
+                guard self.player === previewPlayer else { return }
+                if observedItem.status == .readyToPlay {
+                    withAnimation(.easeOut(duration: 0.18)) { self.playerReady = true }
+                }
+            }
+        }
         previewPlayer.seek(
             to: CMTime(seconds: projectedPosition(at: Date()), preferredTimescale: 600),
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
+            toleranceBefore: CMTime(seconds: 0.2, preferredTimescale: 600),
+            toleranceAfter: CMTime(seconds: 0.2, preferredTimescale: 600)
         ) { _ in
             DispatchQueue.main.async {
                 previewPlayer.isMuted = true
@@ -3644,12 +3670,26 @@ private struct CurrentWatchingPreview: View {
         watching.isPlaying ? player.play() : player.pause()
     }
 
+    @MainActor
+    private func tearDownPlayer() {
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        player?.pause()
+        player = nil
+        playerReady = false
+    }
+
     private func projectedPosition(at date: Date) -> Double {
         var position = max(0, watching.positionSeconds)
         if watching.isPlaying, let updated = isoDate(watching.serverUpdatedAt) {
             position += max(0, date.timeIntervalSince(updated))
         }
-        return watching.durationSeconds > 0 ? min(position, watching.durationSeconds) : position
+        if effectiveDuration > 0 {
+            // A seek at/beyond an unknown final frame can leave AVPlayerLayer
+            // black. Keep the target inside the duration learned from AVAsset.
+            return min(position, max(0, effectiveDuration - 0.05))
+        }
+        return position
     }
 
     private func isoDate(_ value: String) -> Date? {
@@ -5448,12 +5488,16 @@ struct FriendsGlassView: View {
             await session.refreshFriendRequests()
             while !Task.isCancelled {
                 await loadFriends()
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(3))
             }
         }
         .onChange(of: session.friendRequests) { _, _ in Task { await loadFriends() } }
     }
-    private func loadFriends() async { friends = (try? await session.api.friends()) ?? [] }
+    private func loadFriends() async {
+        // A transient tunnel error must not erase the list or freeze it on the
+        // last offline label.  Replace the snapshot only after a valid response.
+        if let refreshed = try? await session.api.friends() { friends = refreshed }
+    }
     private func search() async { results = (try? await session.api.friends(query: query)) ?? [] }
 }
 

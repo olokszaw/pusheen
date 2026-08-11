@@ -507,6 +507,69 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.data["now_watching"])
 
+    def test_live_room_heartbeat_is_online_even_if_app_presence_snapshot_is_stale(self):
+        room = Room.objects.create(owner=self.guest, title="Live room")
+        PlaybackState.objects.create(room=room)
+        heartbeat_at = timezone.now()
+        RoomMember.objects.create(
+            room=room,
+            user=self.guest,
+            active_connections=1,
+            last_heartbeat_at=heartbeat_at,
+        )
+        UserPresence.objects.create(user=self.guest, is_active=False)
+        UserPresence.objects.filter(user=self.guest).update(
+            last_seen=timezone.now() - timedelta(hours=4)
+        )
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        self.authenticate(self.owner_token)
+
+        response = self.client.get("/api/friends/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data[0]["is_online"])
+        self.assertGreaterEqual(datetime.fromisoformat(response.data[0]["last_seen"]), heartbeat_at)
+
+    @patch("watchparty.views.resolve_media_stream")
+    def test_current_watching_position_is_projected_exactly_once(self, resolver):
+        resolver.return_value = {
+            "url": "https://cdn.example/live.mp4",
+            "title": "Live movie",
+            "duration_seconds": 600,
+            "headers": {},
+        }
+        room = Room.objects.create(
+            owner=self.guest,
+            title="Live movie",
+            vk_video_url="https://vkvideo.ru/video-7_8",
+            duration_seconds=600,
+        )
+        playback = PlaybackState.objects.create(
+            room=room, position_seconds=10, is_playing=True
+        )
+        anchor = timezone.now() - timedelta(seconds=5)
+        PlaybackState.objects.filter(pk=playback.pk).update(updated_at=anchor)
+        RoomMember.objects.create(
+            room=room,
+            user=self.guest,
+            active_connections=1,
+            last_heartbeat_at=timezone.now(),
+        )
+        UserPresence.objects.create(user=self.guest, is_active=True)
+        FriendLink.objects.create(user=self.owner, friend=self.guest)
+        before = timezone.now()
+        self.authenticate(self.owner_token)
+
+        response = self.client.get(f"/api/users/{self.guest.id}/profile/")
+
+        after = timezone.now()
+        watching = response.data["now_watching"]
+        self.assertGreaterEqual(watching["position_seconds"], 14.5)
+        self.assertLess(watching["position_seconds"], 16)
+        snapshot_at = datetime.fromisoformat(watching["server_updated_at"])
+        self.assertGreaterEqual(snapshot_at, before)
+        self.assertLessEqual(snapshot_at, after)
+
     def test_friend_can_range_stream_active_upload_without_joining_room(self):
         room = Room.objects.create(
             owner=self.guest,
@@ -845,6 +908,9 @@ class RoomSocketTests(TransactionTestCase):
     def test_only_owner_can_change_shared_timeline(self):
         async_to_sync(self._assert_owner_control)()
 
+    def test_owner_playback_snapshot_refreshes_real_clock_and_duration(self):
+        async_to_sync(self._assert_playback_snapshot)()
+
     def test_guest_recovers_history_and_live_chat_after_reconnect(self):
         async_to_sync(self._assert_chat_recovery)()
 
@@ -1000,6 +1066,35 @@ class RoomSocketTests(TransactionTestCase):
 
         await owner_socket.disconnect()
         await guest_socket.disconnect()
+
+    async def _assert_playback_snapshot(self):
+        owner_socket = WebsocketCommunicator(
+            application,
+            f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}",
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+
+        await owner_socket.send_json_to({
+            "type": "playback_snapshot",
+            "is_playing": True,
+            "position_seconds": 88.25,
+            "duration_seconds": 321.5,
+        })
+        # Socket frames are processed in order. The state request therefore
+        # observes the snapshot above and doubles as its acknowledgement.
+        await owner_socket.send_json_to({"type": "request_state"})
+        state = await self._next_event(owner_socket, "playback_state")
+        self.assertGreaterEqual(state["position_seconds"], 88.25)
+        self.assertLess(state["position_seconds"], 89.25)
+        self.assertTrue(state["is_playing"])
+        self.assertAlmostEqual(await self._room_duration(), 321.5)
+
+        await owner_socket.disconnect()
+
+    @database_sync_to_async
+    def _room_duration(self):
+        return Room.objects.get(pk=self.room.pk).duration_seconds
 
     async def _next_event(self, socket, event_type):
         for _ in range(8):

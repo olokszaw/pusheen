@@ -1,5 +1,6 @@
 import Foundation
 import UniformTypeIdentifiers
+import AVFoundation
 
 enum APIError: LocalizedError {
     case invalidURL, unauthorized, server(String)
@@ -281,7 +282,18 @@ final class APIClient {
     func uploadRoomVideo(roomID: Int, fileURL: URL) async throws -> Room {
         guard let url = URL(string: "/api/rooms/\(roomID)/upload/", relativeTo: baseURL) else { throw APIError.invalidURL }
         let boundary = "PusheenUpload-\(UUID().uuidString)"
-        let bodyURL = try makeMultipartUpload(fileURL: fileURL, boundary: boundary)
+        let asset = AVURLAsset(url: fileURL)
+        let loadedDuration = try? await asset.load(.duration)
+        let duration = loadedDuration?.seconds ?? 0
+        let sourceTitle = fileURL.deletingPathExtension().lastPathComponent
+        let generatedTemporaryName = sourceTitle.hasPrefix("pusheen-movie-") || sourceTitle.hasPrefix("pusheen-file-")
+        let displayTitle = generatedTemporaryName ? "Видео из галереи" : sourceTitle
+        let bodyURL = try makeMultipartUpload(
+            fileURL: fileURL,
+            boundary: boundary,
+            title: displayTitle,
+            duration: duration.isFinite ? max(0, duration) : 0
+        )
         defer { try? FileManager.default.removeItem(at: bodyURL) }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -294,15 +306,15 @@ final class APIClient {
         }
         return try decoder.decode(Room.self, from: data)
     }
-    private func makeMultipartUpload(fileURL: URL, boundary: String) throws -> URL {
+    private func makeMultipartUpload(fileURL: URL, boundary: String, title: String, duration: Double) throws -> URL {
         let destination = FileManager.default.temporaryDirectory.appendingPathComponent("pusheen-upload-\(UUID().uuidString).body")
         FileManager.default.createFile(atPath: destination.path, contents: nil)
         let output = try FileHandle(forWritingTo: destination)
         defer { try? output.close() }
         let name = fileURL.lastPathComponent.replacingOccurrences(of: "\"", with: "")
         let mime = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "video/mp4"
-        let title = fileURL.deletingPathExtension().lastPathComponent
         output.write(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\(title)\r\n".utf8))
+        output.write(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"duration_seconds\"\r\n\r\n\(duration)\r\n".utf8))
         output.write(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"\(name)\"\r\nContent-Type: \(mime)\r\n\r\n".utf8))
         let input = try FileHandle(forReadingFrom: fileURL)
         defer { try? input.close() }
