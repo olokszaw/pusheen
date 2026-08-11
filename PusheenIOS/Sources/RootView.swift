@@ -370,7 +370,11 @@ struct HomeView: View {
             rooms = cached
         }
         guard let refreshed = try? await session.api.rooms() else { return }
-        rooms = refreshed
+        if rooms.map(\.id) == refreshed.map(\.id) {
+            rooms = refreshed
+        } else {
+            withAnimation(.easeInOut(duration: 0.22)) { rooms = refreshed }
+        }
         saveRoomsCache()
     }
     private func monitorRooms() async {
@@ -858,6 +862,9 @@ struct RoomView: View {
         .onChange(of: model.wasRemovedFromRoom) { _, removed in
             if removed { leaveRoom() }
         }
+        .onChange(of: session.liveRefreshRevision) { _, _ in
+            Task { await model.refreshAfterConnectivityRecovery() }
+        }
         .toolbar(.hidden, for: .navigationBar)
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .task { model.setCurrentUserID(session.profile?.userId); await model.start() }.onDisappear { model.stop() }
@@ -1318,6 +1325,7 @@ private struct MemberModerationOverlay: View {
 }
 
 private struct InviteFriendsPanel: View {
+    @EnvironmentObject private var deviceEnvironment: DeviceEnvironmentStore
     @EnvironmentObject private var session: SessionStore
     let room: Room
     let currentMembers: [RoomMember]
@@ -1363,7 +1371,7 @@ private struct InviteFriendsPanel: View {
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(friend.nickname).font(.subheadline.bold()).lineLimit(1)
-                                    Text("@\(friend.username) · \(presenceText(isOnline: friend.isOnline, lastSeen: friend.lastSeen, lastSeenAgeSeconds: friend.lastSeenAgeSeconds, ageAnchor: friend.presenceSnapshotReceivedAt, visible: friend.activityVisible))")
+                                    Text("@\(friend.username) · \(presenceText(isOnline: friend.isOnline, lastSeen: friend.lastSeen, lastSeenAgeSeconds: friend.lastSeenAgeSeconds, ageAnchor: friend.presenceSnapshotReceivedAt, visible: friend.activityVisible, now: deviceEnvironment.currentTime))")
                                         .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer()
@@ -1485,6 +1493,7 @@ struct PlaybackScrubber: View {
 
 struct NativeChatPane: View {
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var deviceEnvironment: DeviceEnvironmentStore
     let messages: [ChatMessage]
     let typingMembers: [RoomMember]
     let currentUserID: Int?
@@ -1534,7 +1543,7 @@ struct NativeChatPane: View {
                                 NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, previewProfile: previewProfile, openProfile: openProfile, reply: beginReply, jumpToMessage: { requestedMessageID = $0 }, showContext: { selected in
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.84)
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { contextMessage = selected }
-                                }, isHighlighted: highlightedMessageID == message.id)
+                                }, isHighlighted: highlightedMessageID == message.id, timePresentationRevision: deviceEnvironment.formattingRevision)
                                     .equatable()
                                     .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
                                     .id(message.id)
@@ -2812,11 +2821,12 @@ struct NativeMessageBubble: View, Equatable {
     let showContext: (ChatMessage) -> Void
     var reportsAnchor = true
     var isHighlighted = false
+    var timePresentationRevision = 0
     @GestureState private var replyDragOffset: CGFloat = 0
 
     static func == (lhs: NativeMessageBubble, rhs: NativeMessageBubble) -> Bool {
         // `react` is an action, not display data. Redraw only when this row's content changes.
-        lhs.message == rhs.message && lhs.isMine == rhs.isMine && lhs.quickReactions == rhs.quickReactions && lhs.reportsAnchor == rhs.reportsAnchor && lhs.isHighlighted == rhs.isHighlighted
+        lhs.message == rhs.message && lhs.isMine == rhs.isMine && lhs.quickReactions == rhs.quickReactions && lhs.reportsAnchor == rhs.reportsAnchor && lhs.isHighlighted == rhs.isHighlighted && lhs.timePresentationRevision == rhs.timePresentationRevision
     }
     private var containsEmoji: Bool {
         message.text.unicodeScalars.contains { scalar in
@@ -3297,6 +3307,7 @@ struct AvatarView: View {
 }
 
 private struct MessageAnchoredContextOverlay: View {
+    @EnvironmentObject private var deviceEnvironment: DeviceEnvironmentStore
     let message: ChatMessage
     let isMine: Bool
     let frame: CGRect
@@ -3334,7 +3345,8 @@ private struct MessageAnchoredContextOverlay: View {
                 reply: { _ in reply() },
                 jumpToMessage: { _ in },
                 showContext: { _ in },
-                reportsAnchor: false
+                reportsAnchor: false,
+                timePresentationRevision: deviceEnvironment.formattingRevision
             )
             .frame(width: frame.width, height: frame.height)
             .scaleEffect(1.035)
@@ -3700,6 +3712,7 @@ private struct CurrentWatchingPreview: View {
 
 private struct PublicProfileScreen: View {
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var deviceEnvironment: DeviceEnvironmentStore
     let user: UserProfileReference
     let close: () -> Void
     @State private var profile: PublicUserProfile?
@@ -3764,7 +3777,7 @@ private struct PublicProfileScreen: View {
                                 )
                                 .accessibilityHint("Нажмите, чтобы скопировать username")
                         }
-                        Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, lastSeenAgeSeconds: profile?.lastSeenAgeSeconds, ageAnchor: profile?.presenceSnapshotReceivedAt, visible: profile?.activityVisible))
+                        Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, lastSeenAgeSeconds: profile?.lastSeenAgeSeconds, ageAnchor: profile?.presenceSnapshotReceivedAt, visible: profile?.activityVisible, now: deviceEnvironment.currentTime))
                             .font(.caption).foregroundStyle(presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) ? Color.cyan.opacity(0.86) : Color.secondary).padding(.top, 2)
                     }
                     if let loaded = profile, loaded.userId != session.profile?.userId, !loaded.isFriend {
@@ -3941,13 +3954,14 @@ private func presenceIsOnline(isOnline: Bool?, lastSeen: String?, visible: Bool?
     PresenceTimestampFormatter.isOnline(isOnline: isOnline, visible: visible)
 }
 
-private func presenceText(isOnline: Bool?, lastSeen: String?, lastSeenAgeSeconds: Int? = nil, ageAnchor: Date? = nil, visible: Bool?) -> String {
+private func presenceText(isOnline: Bool?, lastSeen: String?, lastSeenAgeSeconds: Int? = nil, ageAnchor: Date? = nil, visible: Bool?, now: Date = Date()) -> String {
     PresenceTimestampFormatter.string(
         isOnline: isOnline,
         lastSeen: lastSeen,
         lastSeenAgeSeconds: lastSeenAgeSeconds,
         ageAnchor: ageAnchor,
-        visible: visible
+        visible: visible,
+        now: now
     )
 }
 
@@ -4112,10 +4126,13 @@ struct ProfileGlassView: View {
                 }.padding(20)
             }
         }
-        .onAppear {
-            Task {
+        .task {
+            while !Task.isCancelled {
                 await session.refreshViewingStats()
-                friends = (try? await session.api.friends()) ?? []
+                if let refreshedFriends = try? await session.api.friends() {
+                    friends = refreshedFriends
+                }
+                try? await Task.sleep(for: .seconds(5))
             }
         }
     }
@@ -5477,7 +5494,12 @@ struct FriendsGlassView: View {
         // expire a previously green presence snapshot if refreshing has failed
         // for longer than the backend TTL.
         do {
-            friends = try await session.api.friends()
+            let refreshed = try await session.api.friends()
+            if friends.map(\.id) == refreshed.map(\.id) {
+                friends = refreshed
+            } else {
+                withAnimation(.easeInOut(duration: 0.22)) { friends = refreshed }
+            }
             lastFriendsRefreshAt = Date()
             friendsPresenceSnapshotFresh = true
         } catch {
@@ -5517,6 +5539,7 @@ private struct RequestHeaderButton: View {
 }
 
 private struct FriendSwipeRow: View {
+    @EnvironmentObject private var deviceEnvironment: DeviceEnvironmentStore
     private enum SwipeGestureState: Equatable {
         case inactive
         case horizontal(CGFloat)
@@ -5623,7 +5646,7 @@ private struct FriendSwipeRow: View {
                     }
                     VStack(alignment: .leading, spacing: 3) {
                         Text(person.nickname).bold().lineLimit(1)
-                        Text("@\(person.username) · \(presenceText(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, lastSeenAgeSeconds: person.lastSeenAgeSeconds, ageAnchor: person.presenceSnapshotReceivedAt, visible: person.activityVisible))")
+                        Text("@\(person.username) · \(presenceText(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, lastSeenAgeSeconds: person.lastSeenAgeSeconds, ageAnchor: person.presenceSnapshotReceivedAt, visible: person.activityVisible, now: deviceEnvironment.currentTime))")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }

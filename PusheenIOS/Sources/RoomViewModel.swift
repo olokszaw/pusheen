@@ -541,6 +541,18 @@ final class RoomViewModel: ObservableObject {
         }
         await flushPendingMessages()
     }
+
+    /// Rehydrates an already-presented room when the API becomes reachable.
+    /// The current view and AVPlayer remain alive.
+    func refreshAfterConnectivityRecovery() async {
+        guard !isStopped else { return }
+        socket.reconnectNowIfNeeded()
+        await recoverMessagesImmediately()
+        if let refreshedMembers = try? await api.members(roomID: room.id) {
+            members = refreshedMembers
+            isMuted = refreshedMembers.first(where: { $0.userId == currentUserID })?.isMuted ?? false
+        }
+    }
     private func compensatedPosition(remote: Double, isPlaying: Bool, event: [String: Any]) -> Double {
         guard isPlaying,
               let date = playbackStateDate(from: event) else { return remote }

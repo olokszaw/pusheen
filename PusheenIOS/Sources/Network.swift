@@ -27,12 +27,16 @@ final class SessionStore: ObservableObject {
     @Published var acceptedInvitedRoom: Room?
     @Published var viewingStats: ViewingStats?
     @Published private(set) var isOffline = false
+    /// Increments after an authoritative recovery/foreground refresh. Views
+    /// can refresh in place without being recreated or navigating away.
+    @Published private(set) var liveRefreshRevision = 0
     let api = APIClient()
     private var friendRequestPollingTask: Task<Void, Never>?
     private var appActivityTask: Task<Void, Never>?
     private var presenceHeartbeatTask: Task<Void, Never>?
     private var restoreRetryTask: Task<Void, Never>?
     private var appIsActive = true
+    private var liveRefreshInFlight = false
     private var knownIncomingRequestIDs = Set<Int>()
     private var hasPrimedFriendRequests = false
     private let cachedProfileKey = "pusheen.cached-profile"
@@ -57,6 +61,7 @@ final class SessionStore: ObservableObject {
             saveCachedProfile()
             authenticationState = .signedIn
             isOffline = false
+            liveRefreshRevision &+= 1
             restoreRetryTask = nil
             if let stats = try? await api.viewingStats() { viewingStats = stats; saveCachedViewingStats() }
             startForegroundTasks()
@@ -82,12 +87,16 @@ final class SessionStore: ObservableObject {
 
     func setAppActive(_ active: Bool) {
         guard appIsActive != active else {
-            if active { startForegroundTasks() }
+            if active {
+                startForegroundTasks()
+                Task { [weak self] in await self?.refreshLiveState() }
+            }
             return
         }
         appIsActive = active
         if active {
             startForegroundTasks()
+            Task { [weak self] in await self?.refreshLiveState() }
         } else {
             friendRequestPollingTask?.cancel(); friendRequestPollingTask = nil
             appActivityTask?.cancel(); appActivityTask = nil
@@ -128,11 +137,42 @@ final class SessionStore: ObservableObject {
         guard restoreRetryTask == nil else { return }
         restoreRetryTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(8))
+                try? await Task.sleep(for: .seconds(3))
                 guard let self, self.token != nil else { return }
-                await self.restore()
-                if !self.isOffline { return }
+                await self.refreshLiveState()
+                if !self.isOffline {
+                    self.restoreRetryTask = nil
+                    self.startForegroundTasks()
+                    return
+                }
             }
+        }
+    }
+
+    /// Refreshes all app-wide live resources while preserving cached UI on a
+    /// transient failure. This is used by foregrounding and network recovery.
+    func refreshLiveState() async {
+        guard authenticationState == .signedIn, token != nil, !liveRefreshInFlight else { return }
+        liveRefreshInFlight = true
+        defer { liveRefreshInFlight = false }
+        do {
+            let refreshedProfile = try await api.profile()
+            profile = refreshedProfile
+            saveCachedProfile()
+            authenticationState = .signedIn
+            isOffline = false
+            if let stats = try? await api.viewingStats() {
+                viewingStats = stats
+                saveCachedViewingStats()
+            }
+            await refreshFriendRequests()
+            await refreshRoomInvitations()
+            liveRefreshRevision &+= 1
+        } catch APIError.unauthorized {
+            logout()
+        } catch {
+            isOffline = true
+            startOfflineRetry()
         }
     }
 
@@ -215,8 +255,17 @@ final class SessionStore: ObservableObject {
         presenceHeartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.appIsActive, self.token != nil else { return }
-                try? await self.api.setPresence(active: true)
-                try? await Task.sleep(for: .seconds(6))
+                do {
+                    try await self.api.setPresence(active: true)
+                    if self.isOffline { await self.refreshLiveState() }
+                } catch APIError.unauthorized {
+                    self.logout()
+                    return
+                } catch {
+                    self.isOffline = true
+                    self.startOfflineRetry()
+                }
+                try? await Task.sleep(for: .seconds(self.isOffline ? 3 : 6))
             }
         }
     }

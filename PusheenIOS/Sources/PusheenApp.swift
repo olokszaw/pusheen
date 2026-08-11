@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct PusheenApp: App {
     @StateObject private var session = SessionStore()
+    @StateObject private var deviceEnvironment = DeviceEnvironmentStore()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -15,9 +16,11 @@ struct PusheenApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .environmentObject(deviceEnvironment)
                 .tint(.purple)
                 .onChange(of: scenePhase) { _, phase in
                     session.setAppActive(phase == .active)
+                    if phase == .active { deviceEnvironment.refresh() }
                 }
         }
     }

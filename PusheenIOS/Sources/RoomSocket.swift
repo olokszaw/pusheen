@@ -72,6 +72,13 @@ final class RoomSocket: ObservableObject {
         connected = false
     }
 
+    func reconnectNowIfNeeded() {
+        guard !connected, !wasClosedByView, endpoint != nil else { return }
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        open()
+    }
+
     private func open() {
         guard !wasClosedByView, let endpoint else { return }
         heartbeatTask?.cancel()
