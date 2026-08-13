@@ -1094,7 +1094,15 @@ class RoomSocketTests(TransactionTestCase):
         await first_guest.disconnect()
         await asyncio.sleep(0.25)
         self.assertTrue(await self._member_online())
-        self.assertTrue(await owner_socket.receive_nothing(timeout=0.05))
+        # Closing the superseded transport legitimately clears its ephemeral
+        # typing indicator.  What must not be emitted here is a fake offline
+        # presence event for the still-connected replacement socket.
+        while not await owner_socket.receive_nothing(timeout=0.05):
+            transient = await owner_socket.receive_json_from(timeout=0.05)
+            self.assertFalse(
+                transient.get("type") == "presence"
+                and transient.get("is_online") is False
+            )
 
         await replacement_guest.disconnect()
         leave = await self._next_event(owner_socket, "presence")
