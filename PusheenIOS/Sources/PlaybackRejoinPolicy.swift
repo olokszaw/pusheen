@@ -15,4 +15,11 @@ enum PlaybackRejoinPolicy {
     ) -> Bool {
         authoritativeConnectionSnapshot || latestSequence.map { incomingSequence >= $0 } ?? true
     }
+
+    /// AVPlayer keeps an item in its terminal state after the final frame. A
+    /// seek sufficiently behind the end is an explicit recovery from it.
+    static func recoversFromEnd(target: Double, duration: Double) -> Bool {
+        guard target.isFinite, duration.isFinite, duration > 0 else { return false }
+        return target < duration - 0.25
+    }
 }

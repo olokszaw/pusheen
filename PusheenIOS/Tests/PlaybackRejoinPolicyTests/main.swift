@@ -15,5 +15,7 @@ precondition(!PlaybackRejoinPolicy.accepts(
 precondition(PlaybackRejoinPolicy.accepts(
     incomingSequence: 6, latestSequence: 7, authoritativeConnectionSnapshot: true
 ))
+precondition(PlaybackRejoinPolicy.recoversFromEnd(target: 20, duration: 100))
+precondition(!PlaybackRejoinPolicy.recoversFromEnd(target: 99.9, duration: 100))
 
 print("Playback rejoin policy tests passed")

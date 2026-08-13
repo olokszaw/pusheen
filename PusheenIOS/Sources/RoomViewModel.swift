@@ -77,6 +77,8 @@ final class RoomViewModel: ObservableObject {
     // frame back to the room.
     private var pendingSeekPosition: Double?
     private var seekGeneration = 0
+    // AVPlayerItem remains terminal after DidPlayToEnd until an explicit seek.
+    private var hasReachedPlaybackEnd = false
     // Quick Tunnel reconnects can repeat the same presence transition several
     // times. Keep genuine join/leave notices while suppressing identical noise.
     private var lastPresenceNoticeAt: [String: Date] = [:]
@@ -104,6 +106,7 @@ final class RoomViewModel: ObservableObject {
         awaitingConnectionPlaybackState = true
         initialPlaybackPosition = nil
         pendingSeekPosition = nil
+        hasReachedPlaybackEnd = false
         seekGeneration &+= 1
         do {
             configureAudioSession()
@@ -164,6 +167,7 @@ final class RoomViewModel: ObservableObject {
             roomPlayer.isMuted = false
             roomPlayer.volume = 1
             player = roomPlayer
+            hasReachedPlaybackEnd = false
             // WebSocket is the live authority. `/stream/` may finish after its
             // first event, so never overwrite that newer state with the stale
             // room list snapshot used to open this screen.
@@ -180,7 +184,17 @@ final class RoomViewModel: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     guard let self, !self.isStopped else { return }
+                    // The notification can already be queued when a backward
+                    // drag begins. The explicit user seek wins that race.
+                    guard self.pendingSeekPosition == nil else { return }
                     let finalPosition = self.player?.currentTime().seconds ?? self.duration
+                    // Ignore a queued end notification if the user has already
+                    // recovered the item by scrubbing backwards.
+                    if PlaybackRejoinPolicy.recoversFromEnd(
+                        target: finalPosition,
+                        duration: self.duration
+                    ) { return }
+                    self.hasReachedPlaybackEnd = true
                     self.isPlaying = false
                     // A guest reaches the end locally too. Previously this
                     // state was cleared only for the owner, so a guest kept
@@ -268,6 +282,7 @@ final class RoomViewModel: ObservableObject {
         pendingMessages.removeAll()
         realtimeMessageInFlightID = nil
         pendingSeekPosition = nil
+        hasReachedPlaybackEnd = false
         player?.pause()
         socket.onEvent = nil
         socket.onReady = nil
@@ -371,8 +386,24 @@ final class RoomViewModel: ObservableObject {
     func toggle() {
         guard isOwner else { return }
         let next = !isPlaying
-        let commandPosition = pendingSeekPosition ?? position
-        if next { player?.play() } else { player?.pause() }
+        var commandPosition = pendingSeekPosition ?? position
+        // Play on an item that already ended should replay from the beginning,
+        // not publish "playing at duration" while AVPlayer stays frozen.
+        if next, hasReachedPlaybackEnd {
+            commandPosition = 0
+            hasReachedPlaybackEnd = false
+            position = 0
+            player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isPlaying else { return }
+                    self.player?.play()
+                }
+            }
+        } else if next {
+            player?.play()
+        } else {
+            player?.pause()
+        }
         isPlaying = next
         position = commandPosition
         sendPlaybackCommand(action: next ? "play" : "pause", isPlaying: next, position: commandPosition)
@@ -385,6 +416,11 @@ final class RoomViewModel: ObservableObject {
         let target = min(nonnegativeValue, upperBound)
         seekGeneration &+= 1
         let generation = seekGeneration
+        if hasReachedPlaybackEnd,
+           PlaybackRejoinPolicy.recoversFromEnd(target: target, duration: duration) {
+            hasReachedPlaybackEnd = false
+            player?.pause()
+        }
         pendingSeekPosition = target
         position = target
         player?.seek(
@@ -396,6 +432,9 @@ final class RoomViewModel: ObservableObject {
                 guard let self, self.seekGeneration == generation else { return }
                 self.pendingSeekPosition = nil
                 self.position = target
+                // Seeking out of the terminal state restores the player. Keep
+                // paused rooms paused and resume only when playback is active.
+                if self.isPlaying { self.player?.play() }
             }
         }
         sendPlaybackCommand(action: "seek", isPlaying: isPlaying, position: target)
@@ -596,6 +635,9 @@ final class RoomViewModel: ObservableObject {
                 seekGeneration &+= 1
                 let generation = seekGeneration
                 pendingSeekPosition = authoritative
+                if PlaybackRejoinPolicy.recoversFromEnd(target: authoritative, duration: duration) {
+                    hasReachedPlaybackEnd = false
+                }
                 player?.seek(to: CMTime(seconds: authoritative, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                     Task { @MainActor [weak self] in
                         guard let self, self.seekGeneration == generation else { return }
