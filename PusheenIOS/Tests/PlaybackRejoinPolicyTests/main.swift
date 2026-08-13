@@ -17,5 +17,15 @@ precondition(PlaybackRejoinPolicy.accepts(
 ))
 precondition(PlaybackRejoinPolicy.recoversFromEnd(target: 20, duration: 100))
 precondition(!PlaybackRejoinPolicy.recoversFromEnd(target: 99.9, duration: 100))
+// Buffering is not a user pause: a late participant must still receive Play.
+precondition(PlaybackRejoinPolicy.snapshotIsPlaying(
+    isOwner: true, desiredIsPlaying: true, isActuallyAdvancing: false
+))
+precondition(!PlaybackRejoinPolicy.snapshotIsPlaying(
+    isOwner: false, desiredIsPlaying: true, isActuallyAdvancing: false
+))
+precondition(!PlaybackRejoinPolicy.snapshotIsPlaying(
+    isOwner: true, desiredIsPlaying: false, isActuallyAdvancing: true
+))
 
 print("Playback rejoin policy tests passed")

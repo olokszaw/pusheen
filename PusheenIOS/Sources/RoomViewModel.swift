@@ -342,12 +342,17 @@ final class RoomViewModel: ObservableObject {
                         let hasDuration = itemDuration.isFinite && itemDuration > 0
                         let isActuallyAdvancing = player.timeControlStatus == .playing
                             && (!hasDuration || actual < itemDuration - 0.1)
+                        let reportedIsPlaying = PlaybackRejoinPolicy.snapshotIsPlaying(
+                            isOwner: self.isOwner,
+                            desiredIsPlaying: self.isPlaying,
+                            isActuallyAdvancing: isActuallyAdvancing
+                        )
                         // Every participant reports the frame their AVPlayer is
                         // truly showing. The server uses this only for that
                         // user's muted profile preview; owner-only room control
                         // remains unchanged.
                         self.socket.playbackSnapshot(
-                            isPlaying: isActuallyAdvancing,
+                            isPlaying: reportedIsPlaying,
                             position: max(0, actual),
                             duration: hasDuration ? itemDuration : 0,
                             sequence: self.outboundPlaybackSequence ?? self.latestPlaybackSequence

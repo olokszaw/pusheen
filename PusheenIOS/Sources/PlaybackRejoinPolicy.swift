@@ -22,4 +22,17 @@ enum PlaybackRejoinPolicy {
         guard target.isFinite, duration.isFinite, duration > 0 else { return false }
         return target < duration - 0.25
     }
+
+    /// The owner's logical play/pause intent is the shared room state. AVPlayer
+    /// may temporarily report `waitingToPlayAtSpecifiedRate` while buffering;
+    /// publishing that transient condition as Pause freezes late joiners until
+    /// the next manual seek. Guests still report their real advancing state for
+    /// their own muted profile preview.
+    static func snapshotIsPlaying(
+        isOwner: Bool,
+        desiredIsPlaying: Bool,
+        isActuallyAdvancing: Bool
+    ) -> Bool {
+        isOwner ? desiredIsPlaying : isActuallyAdvancing
+    }
 }
