@@ -109,6 +109,30 @@ class RoomApiTests(APITestCase):
         self.assertEqual(retry.status_code, 201, retry.data)
         self.assertEqual(ChatMessage.objects.filter(room=room).count(), len(burst))
 
+    def test_newer_single_message_cannot_overtake_older_fallback_batch(self):
+        room = Room.objects.create(owner=self.owner, title="Ordered recovery")
+        RoomMember.objects.create(room=room, user=self.owner)
+        self.authenticate(self.owner_token)
+        older = [
+            {"text": f"old-{index}", "client_message_id": f"ordered-{index}"}
+            for index in range(4)
+        ]
+        batch = self.client.post(
+            f"/api/rooms/{room.id}/messages/batch/", {"messages": older}, format="json"
+        )
+        self.assertEqual(batch.status_code, 201, batch.data)
+        newer = self.client.post(
+            f"/api/rooms/{room.id}/messages/",
+            {"text": "newer", "client_message_id": "ordered-newer"},
+            format="json",
+        )
+        self.assertEqual(newer.status_code, 201, newer.data)
+        history = self.client.get(f"/api/rooms/{room.id}/messages/")
+        self.assertEqual(
+            [item["text"] for item in history.data],
+            ["old-0", "old-1", "old-2", "old-3", "newer"],
+        )
+
     def test_reply_is_persisted_and_visible_to_every_member(self):
         room = Room.objects.create(owner=self.owner, title="Reply chat")
         RoomMember.objects.create(room=room, user=self.owner)

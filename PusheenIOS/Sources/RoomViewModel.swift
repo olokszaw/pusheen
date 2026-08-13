@@ -43,6 +43,13 @@ final class RoomViewModel: ObservableObject {
     private var isStopped = false
     private var pendingMessages: [PendingChatMessage] = []
     private var isFlushingMessages = false
+    /// WebSocket frames are ordered, but the old implementation launched one
+    /// realtime send per tap while an HTTP fallback could persist the same
+    /// outbox concurrently. A later frame could therefore reach the database
+    /// before the older fallback batch. Keep exactly one unacknowledged socket
+    /// message in flight; the remaining outbox is strict FIFO.
+    private var realtimeMessageInFlightID: String?
+    private var nextLocalMessageID = -1
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
     private var latestPlaybackSequence: Int64?
@@ -259,6 +266,7 @@ final class RoomViewModel: ObservableObject {
         messageFallbackTasks.values.forEach { $0.cancel() }
         messageFallbackTasks.removeAll()
         pendingMessages.removeAll()
+        realtimeMessageInFlightID = nil
         pendingSeekPosition = nil
         player?.pause()
         socket.onEvent = nil
@@ -291,7 +299,11 @@ final class RoomViewModel: ObservableObject {
         messageSyncTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, !self.isStopped else { return }
-                await self.flushPendingMessages()
+                if self.socket.connected {
+                    self.sendNextPendingRealtimeIfPossible()
+                } else {
+                    await self.flushPendingMessages()
+                }
                 if let serverMessages = try? await self.api.messages(roomID: self.room.id) {
                     self.mergeServerMessages(serverMessages)
                 }
@@ -425,7 +437,8 @@ final class RoomViewModel: ObservableObject {
         stopTyping()
         // Render immediately; the server confirmation replaces this temporary
         // message with its permanent id a moment later.
-        let localID = -Int(Date().timeIntervalSince1970 * 1_000_000)
+        let localID = nextLocalMessageID
+        nextLocalMessageID &-= 1
         if let profile {
             messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], replyTo: replyTo, createdAt: ISO8601DateFormatter().string(from: Date()), createdAtAgeSeconds: 0))
         }
@@ -434,21 +447,41 @@ final class RoomViewModel: ObservableObject {
         // The WebSocket is the low-latency path: every participant receives a
         // persisted message as soon as the server handles it. The FIFO HTTP
         // outbox remains the reliable fallback for a tunnel/socket interruption.
-        let sentRealtime = socket.chat(text: text, image: image, clientMessageID: pendingID, replyToID: replyTo?.id)
+        sendNextPendingRealtimeIfPossible()
         let fallbackTask = Task { [weak self] in
             guard let self else { return }
             defer { self.messageFallbackTasks[pendingID] = nil }
-            // Give the realtime path a short head start. If the acknowledgement
-            // never arrives, the same client id makes the HTTP retry idempotent.
-            // If the handshake is not actually ready, fall back immediately;
-            // waiting here was the visible delay during rapid sends.
-            try? await Task.sleep(for: .milliseconds(sentRealtime ? 180 : 40))
+            // Never persist the same outbox concurrently over WebSocket and
+            // HTTP: their arrival order is independent. HTTP is used only once
+            // the socket is actually down; while it is connected, the strict
+            // single-flight realtime queue owns delivery order.
+            try? await Task.sleep(for: .milliseconds(self.socket.connected ? 450 : 40))
             guard !Task.isCancelled,
                   !self.isStopped,
                   self.pendingMessages.contains(where: { $0.id == pendingID }) else { return }
-            await self.flushPendingMessages()
+            if !self.socket.connected { await self.flushPendingMessages() }
         }
         messageFallbackTasks[pendingID] = fallbackTask
+    }
+
+    private func sendNextPendingRealtimeIfPossible() {
+        guard realtimeMessageInFlightID == nil,
+              let pending = pendingMessages.first else { return }
+        let sent = socket.chat(
+            text: pending.text,
+            image: pending.image,
+            clientMessageID: pending.id,
+            replyToID: pending.replyTo?.id
+        )
+        if sent { realtimeMessageInFlightID = pending.id }
+    }
+
+    private func finishPendingDelivery(_ clientID: String) {
+        messageFallbackTasks[clientID]?.cancel()
+        messageFallbackTasks[clientID] = nil
+        pendingMessages.removeAll { $0.id == clientID }
+        if realtimeMessageInFlightID == clientID { realtimeMessageInFlightID = nil }
+        sendNextPendingRealtimeIfPossible()
     }
     var typingMembers: [RoomMember] {
         members.filter { typingUserIDs.contains($0.userId) && $0.userId != currentUserID }
@@ -589,9 +622,7 @@ final class RoomViewModel: ObservableObject {
                 let clientMessageID = event["client_message_id"] as? String
                 if let clientMessageID,
                    let pending = pendingMessages.first(where: { $0.id == clientMessageID }) {
-                    messageFallbackTasks[clientMessageID]?.cancel()
-                    messageFallbackTasks[clientMessageID] = nil
-                    pendingMessages.removeAll { $0.id == clientMessageID }
+                    finishPendingDelivery(clientMessageID)
                     confirmPersistedMessage(message, for: pending)
                 } else {
                     mergeServerMessages([message])
@@ -689,9 +720,7 @@ final class RoomViewModel: ObservableObject {
             // used to discard legitimate rapid messages such as "a, a, a".
             if let clientID = message.clientMessageID,
                let pending = pendingMessages.first(where: { $0.id == clientID }) {
-                messageFallbackTasks[clientID]?.cancel()
-                messageFallbackTasks[clientID] = nil
-                pendingMessages.removeAll { $0.id == clientID }
+                finishPendingDelivery(clientID)
                 confirmPersistedMessage(message, for: pending)
                 continue
             }
@@ -727,9 +756,7 @@ final class RoomViewModel: ObservableObject {
                     guard let clientID = message.clientMessageID,
                           let pending = pendingByID[clientID] else { continue }
                     confirmedIDs.insert(clientID)
-                    messageFallbackTasks[clientID]?.cancel()
-                    messageFallbackTasks[clientID] = nil
-                    pendingMessages.removeAll { $0.id == clientID }
+                    finishPendingDelivery(clientID)
                     confirmPersistedMessage(message, for: pending)
                 }
                 // A malformed/old server response must not spin forever.
@@ -755,7 +782,11 @@ final class RoomViewModel: ObservableObject {
         if let serverMessages = try? await api.messages(roomID: room.id) {
             mergeServerMessages(serverMessages)
         }
-        await flushPendingMessages()
+        if socket.connected {
+            sendNextPendingRealtimeIfPossible()
+        } else {
+            await flushPendingMessages()
+        }
     }
 
     /// Rehydrates an already-presented room when the API becomes reachable.

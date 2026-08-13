@@ -39,6 +39,7 @@ jobs:
             watchparty.tests.RoomApiTests.test_message_post_is_persisted_and_visible_to_another_member \
             watchparty.tests.RoomApiTests.test_retrying_client_message_id_does_not_duplicate_chat \
             watchparty.tests.RoomApiTests.test_batch_fallback_persists_a_spam_burst_in_client_order \
+            watchparty.tests.RoomApiTests.test_newer_single_message_cannot_overtake_older_fallback_batch \
             watchparty.tests.RoomApiTests.test_reply_is_persisted_and_visible_to_every_member \
             watchparty.tests.RoomApiTests.test_reply_cannot_reference_another_room \
             watchparty.tests.RoomApiTests.test_room_presence_expires_even_if_connection_counter_is_stale \
