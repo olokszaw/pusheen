@@ -68,6 +68,15 @@ final class RoomViewModel: ObservableObject {
 
     func start() async {
         isStopped = false
+        // A RoomViewModel can be kept alive while the app recovers from a
+        // background/reconnect transition. Reset only the per-entry playback
+        // handshake so a state from an earlier socket cannot win later.
+        hasAppliedInitialPlaybackState = false
+        latestPlaybackStateAt = nil
+        initialPlaybackPosition = nil
+        initialPlaybackShouldPlay = false
+        pendingSeekPosition = nil
+        seekGeneration &+= 1
         do {
             configureAudioSession()
             async let history = api.messages(roomID: room.id)
@@ -105,7 +114,14 @@ final class RoomViewModel: ObservableObject {
             roomPlayer.isMuted = false
             roomPlayer.volume = 1
             player = roomPlayer
-            isPlaying = room.playback?.isPlaying ?? false
+            // WebSocket is the live authority. `/stream/` may finish after its
+            // first event, so never overwrite that newer state with the stale
+            // room list snapshot used to open this screen.
+            if !hasAppliedInitialPlaybackState {
+                isPlaying = room.playback?.isPlaying ?? false
+                initialPlaybackPosition = room.playback?.positionSeconds ?? 0
+                initialPlaybackShouldPlay = isPlaying
+            }
             if let playbackEndObserver {
                 NotificationCenter.default.removeObserver(playbackEndObserver)
             }
@@ -329,7 +345,9 @@ final class RoomViewModel: ObservableObject {
                 guard let self, self.seekGeneration == generation, !self.isStopped else { return }
                 self.pendingSeekPosition = nil
                 self.position = target
-                if self.initialPlaybackShouldPlay { self.player?.play() }
+                // The server can send pause/play while this initial seek is
+                // pending. Use the latest state rather than the old snapshot.
+                if self.isPlaying { self.player?.play() } else { self.player?.pause() }
             }
         }
     }
@@ -435,7 +453,20 @@ final class RoomViewModel: ObservableObject {
             // owner commands and the very first room snapshot remain authoritative.
             let shouldApplyPosition = !hasAppliedInitialPlaybackState || command != "state" || !nextIsPlaying
             if !isOwner && shouldApplyPosition && abs(position - authoritative) > 0.85 {
-                player?.seek(to: CMTime(seconds: authoritative, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                // Invalidate an older initial seek before applying a newer
+                // command. Without this, the old completion could rewind a
+                // freshly joined viewer back to a stale time.
+                seekGeneration &+= 1
+                let generation = seekGeneration
+                pendingSeekPosition = authoritative
+                player?.seek(to: CMTime(seconds: authoritative, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.seekGeneration == generation else { return }
+                        self.pendingSeekPosition = nil
+                        self.position = authoritative
+                        if self.isPlaying { self.player?.play() } else { self.player?.pause() }
+                    }
+                }
                 position = authoritative
             }
             hasAppliedInitialPlaybackState = true
