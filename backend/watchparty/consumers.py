@@ -29,6 +29,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         # heartbeat watchdog makes presence change within seconds instead of
         # waiting for an OS-level socket timeout.
         self.last_heartbeat = time.monotonic()
+        self.explicit_leave_handled = False
         self.heartbeat_watchdog = asyncio.create_task(self.watch_heartbeat())
         await self.send_json({"type": "playback_state", **await self.current_state()})
         presence = await self.mark_connected()
@@ -39,7 +40,11 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, _code):
         if hasattr(self, "heartbeat_watchdog"):
             self.heartbeat_watchdog.cancel()
-        if hasattr(self, "room_id") and self.scope["user"].is_authenticated:
+        if (
+            hasattr(self, "room_id")
+            and self.scope["user"].is_authenticated
+            and not getattr(self, "explicit_leave_handled", False)
+        ):
             await self.channel_layer.group_send(
                 self.group_name,
                 {
@@ -106,6 +111,29 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                     },
                 },
             )
+        elif event == "leave_room":
+            await self.handle_explicit_leave()
+
+    async def handle_explicit_leave(self):
+        """Publish a real user-initiated leave without reconnect grace."""
+        if self.explicit_leave_handled:
+            return
+        self.explicit_leave_handled = True
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "room.typing",
+                "payload": {"user_id": self.scope["user"].id, "is_typing": False},
+            },
+        )
+        disconnected_at = await self.mark_disconnected_pending()
+        if disconnected_at:
+            presence = await self.finalize_disconnected(disconnected_at)
+            if presence:
+                await self.channel_layer.group_send(
+                    self.group_name, {"type": "room.presence", "payload": presence}
+                )
+        await self.close(code=1000)
 
     async def watch_heartbeat(self):
         try:

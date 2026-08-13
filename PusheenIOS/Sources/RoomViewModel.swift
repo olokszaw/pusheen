@@ -221,6 +221,15 @@ final class RoomViewModel: ObservableObject {
         } catch let caughtError { error = caughtError.localizedDescription }
     }
     func stop() {
+        if lifecycleActive, !isStopped {
+            stopTyping()
+            socket.leaveAndClose()
+        } else {
+            // `stop()` is intentionally idempotent. If startup failed before
+            // the lifecycle became active there is no leave to publish, but a
+            // partially-created transport still has to be torn down.
+            socket.close()
+        }
         isStopped = true
         lifecycleActive = false
         lifecycleGeneration &+= 1
@@ -255,7 +264,8 @@ final class RoomViewModel: ObservableObject {
         socket.onEvent = nil
         socket.onReady = nil
         socket.onConnectionGenerationReady = nil
-        socket.close()
+        // `leaveAndClose()` above keeps the final explicit-leave frame alive
+        // until URLSession has sent it. Do not cancel that transport here.
     }
     private func startActivityReporting() {
         activityTask?.cancel()

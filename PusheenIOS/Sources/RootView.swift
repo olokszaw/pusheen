@@ -1422,7 +1422,14 @@ private struct InviteFriendsPanel: View {
         .padding(.top, 18)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task { friends = (try? await session.api.friends()) ?? [] }
+        .task {
+            while !Task.isCancelled {
+                if let refreshed = try? await session.api.friends() {
+                    withAnimation(.easeInOut(duration: 0.18)) { friends = refreshed }
+                }
+                try? await Task.sleep(for: .milliseconds(1200))
+            }
+        }
     }
 
     private func sendInvitations() async {
@@ -2150,12 +2157,24 @@ private struct TelegramStickerKeyboard: View {
             packs = (try? await session.api.stickerPacks()) ?? []
             if selectedPackID == nil { selectedPackID = packs.first?.id }
             if packs.isEmpty && !recentStickers.isEmpty { showsRecents = true }
+            // Lazy grids only request visible cells. Warm every preview after
+            // the pack manifest arrives so reopening the keyboard (or the app)
+            // is entirely disk-backed. StickerAssetCache single-flights these
+            // requests with any thumbnail already loading on screen.
+            await warmStickerPreviews(packs)
         }
     }
 
     private func choose(_ sticker: TelegramSticker) {
         recentStickers = StickerRecentsStore.record(sticker, userID: session.profile?.userId)
         select(sticker)
+    }
+
+    private func warmStickerPreviews(_ loadedPacks: [TelegramStickerPack]) async {
+        for sticker in loadedPacks.flatMap(\.stickers) {
+            guard !Task.isCancelled else { return }
+            _ = try? await session.api.stickerData(id: sticker.id, preview: true)
+        }
     }
 }
 
@@ -3532,7 +3551,9 @@ private struct UserProfilePreviewCard: View {
                 if let refreshed = try? await session.api.publicProfile(userID: user.id) {
                     withAnimation(.easeInOut(duration: 0.22)) { profile = refreshed }
                 }
-                try? await Task.sleep(for: .seconds(3))
+                // Update online/offline labels in place while this screen is
+                // open; no navigation or manual refresh is required.
+                try? await Task.sleep(for: .milliseconds(1200))
             }
         }
     }
@@ -3848,7 +3869,7 @@ private struct PublicProfileScreen: View {
         .task(id: user.id) {
             while !Task.isCancelled {
                 await load()
-                try? await Task.sleep(for: .seconds(6))
+                try? await Task.sleep(for: .milliseconds(1200))
             }
         }
     }
@@ -5615,7 +5636,7 @@ private struct FriendSwipeRow: View {
                             // Material remains visible through the destructive tint:
                             // this keeps the action a glass control rather than a
                             // solid red banner.
-                            .overlay { Capsule().fill(Color.red.opacity(0.38)) }
+                            .overlay { Capsule().fill(Color(red: 0.88, green: 0.14, blue: 0.20).opacity(0.58)) }
                             .overlay {
                                 Capsule().stroke(
                                     LinearGradient(colors: [.white.opacity(0.48), .white.opacity(0.08)], startPoint: .top, endPoint: .bottom),
@@ -5631,9 +5652,9 @@ private struct FriendSwipeRow: View {
                                     .frame(width: 42, height: 42)
                             }
                         }
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.74))
                         .padding(.leading, min(27, max(18, deleteWidth * 0.18)))
-                        .scaleEffect(0.84 + 0.16 * deleteReveal)
+                        .scaleEffect(x: 0.72 + 0.28 * deleteReveal, y: 0.84 + 0.16 * deleteReveal, anchor: .leading)
                         .opacity(min(1, deleteReveal * 2.6))
                     }
                     .frame(width: deleteWidth, height: 56)

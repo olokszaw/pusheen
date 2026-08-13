@@ -31,7 +31,11 @@ actor StickerAssetCache {
         if let directoryURL {
             self.directoryURL = directoryURL
         } else {
-            let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            // Imported sticker packs are user content, not a disposable HTTP
+            // cache. `Caches` may be purged by iOS between launches, which made
+            // a fully loaded pack unexpectedly download again. Application
+            // Support survives relaunches and storage-pressure cache cleanup.
+            let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
                 ?? FileManager.default.temporaryDirectory
             self.directoryURL = root.appendingPathComponent("PusheenStickerAssets-v1", isDirectory: true)
         }

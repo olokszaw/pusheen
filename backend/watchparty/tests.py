@@ -1025,6 +1025,9 @@ class RoomSocketTests(TransactionTestCase):
     def test_typing_status_is_realtime_and_clears_on_disconnect(self):
         async_to_sync(self._assert_typing_status)()
 
+    def test_explicit_leave_is_broadcast_immediately(self):
+        async_to_sync(self._assert_explicit_leave)()
+
     def test_transient_reconnect_does_not_emit_fake_leave_or_join(self):
         with patch("watchparty.consumers.ROOM_DISCONNECT_GRACE_SECONDS", 0.2):
             async_to_sync(self._assert_reconnect_presence_grace)()
@@ -1107,6 +1110,27 @@ class RoomSocketTests(TransactionTestCase):
         await replacement_guest.disconnect()
         leave = await self._next_event(owner_socket, "presence")
         self.assertFalse(leave["is_online"])
+        await owner_socket.disconnect()
+
+    async def _assert_explicit_leave(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        guest_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+        await self._next_event(owner_socket, "presence")
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(guest_socket, "playback_state")
+        await self._next_event(owner_socket, "presence")
+
+        await guest_socket.send_json_to({"type": "leave_room"})
+        leave = await self._next_event(owner_socket, "presence")
+        self.assertFalse(leave["is_online"])
+        self.assertTrue(leave["changed"])
+        self.assertFalse(await self._member_online())
         await owner_socket.disconnect()
 
     async def _assert_reconnect_presence_grace(self):

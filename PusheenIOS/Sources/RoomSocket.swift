@@ -82,11 +82,42 @@ final class RoomSocket: ObservableObject {
     }
     func reaction(messageID: Int, emoji: String) { send(["type": "message_reaction", "message_id": messageID, "emoji": emoji]) }
     func typing(_ isTyping: Bool) { send(["type": "typing", "is_typing": isTyping]) }
+    /// A deliberate navigation out of the room is different from a broken
+    /// transport. Keep the WebSocket alive until the leave frame has actually
+    /// been handed to URLSession; immediately cancelling after `send` could
+    /// randomly discard that frame on a slower connection.
+    func leaveAndClose() {
+        guard !wasClosedByView else { return }
+        wasClosedByView = true
+        reconnectTask?.cancel(); reconnectTask = nil
+        heartbeatTask?.cancel(); heartbeatTask = nil
+        guard connected, let socket = task,
+              let data = try? JSONSerialization.data(withJSONObject: ["type": "leave_room"]),
+              let text = String(data: data, encoding: .utf8) else {
+            closeTransport()
+            return
+        }
+        socket.send(.string(text)) { [weak self, weak socket] _ in
+            Task { @MainActor in
+                guard let self, let socket, self.task === socket else { return }
+                self.closeTransport()
+            }
+        }
+        Task { [weak self, weak socket] in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard let self, let socket, self.task === socket else { return }
+            self.closeTransport()
+        }
+    }
 
     func close() {
         wasClosedByView = true
         reconnectTask?.cancel(); reconnectTask = nil
         heartbeatTask?.cancel(); heartbeatTask = nil
+        closeTransport()
+    }
+
+    private func closeTransport() {
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         connected = false
