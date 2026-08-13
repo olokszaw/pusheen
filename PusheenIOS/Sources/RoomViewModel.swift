@@ -43,6 +43,12 @@ final class RoomViewModel: ObservableObject {
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
     private var hasAppliedInitialPlaybackState = false
+    // The socket state normally arrives while /stream/ is still resolving.
+    // Keep that first authoritative target until AVPlayerItem is ready; merely
+    // assigning `position` is not enough because a fresh AVPlayer always starts
+    // at 0 unless it is explicitly seeked.
+    private var initialPlaybackPosition: Double?
+    private var initialPlaybackShouldPlay = false
     // AVPlayer seek is asynchronous. Until its completion, the periodic clock
     // still reports the pre-seek frame (often the end of the movie). Keep the
     // user's requested position authoritative so Play cannot send that stale
@@ -134,7 +140,7 @@ final class RoomViewModel: ObservableObject {
                     guard let self else { return }
                     switch observedItem.status {
                     case .readyToPlay:
-                        if self.isPlaying || self.room.playback?.isPlaying == true { self.player?.play() }
+                        self.applyInitialPlaybackStateIfNeeded()
                     case .failed:
                         self.error = observedItem.error?.localizedDescription ?? "Не удалось открыть видео"
                     default:
@@ -300,6 +306,33 @@ final class RoomViewModel: ObservableObject {
         }
         socket.playback(action: "seek", isPlaying: isPlaying, position: target)
     }
+
+    /// Applies the state received before the media item existed.  This runs only
+    /// once for a newly entered room, so later heartbeat snapshots cannot keep
+    /// dragging an already playing guest backwards.
+    private func applyInitialPlaybackStateIfNeeded() {
+        guard let target = initialPlaybackPosition,
+              let player,
+              player.currentItem?.status == .readyToPlay else { return }
+
+        initialPlaybackPosition = nil
+        pendingSeekPosition = target
+        seekGeneration &+= 1
+        let generation = seekGeneration
+        player.pause()
+        player.seek(
+            to: CMTime(seconds: target, preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.seekGeneration == generation, !self.isStopped else { return }
+                self.pendingSeekPosition = nil
+                self.position = target
+                if self.initialPlaybackShouldPlay { self.player?.play() }
+            }
+        }
+    }
     func send(_ text: String, as profile: Profile?) { send(text: text, image: "", replyTo: nil, as: profile) }
     func send(text: String, image: String, replyTo: ChatReplyPreview? = nil, as profile: Profile?) {
         guard !isStopped else { return }
@@ -385,6 +418,15 @@ final class RoomViewModel: ObservableObject {
             // The creator receives their own broadcast too. Never seek it back to
             // an older server snapshot: that was the visible forward/back loop.
             let authoritative = compensatedPosition(remote: remote, isPlaying: isPlaying, event: event)
+            // The first state may arrive before AVPlayer has been constructed.
+            // Persist it and seek the actual player as soon as its item is ready
+            // instead of letting every re-entering participant begin at 0:00.
+            if !hasAppliedInitialPlaybackState {
+                position = authoritative
+                initialPlaybackPosition = authoritative
+                initialPlaybackShouldPlay = nextIsPlaying
+                applyInitialPlaybackStateIfNeeded()
+            }
             // Correct actual drift promptly, but do not chase normal network
             // jitter frame-by-frame. This keeps participants within ~1 sec.
             // A periodic/reconnect `state` snapshot must not seek an already
@@ -401,7 +443,11 @@ final class RoomViewModel: ObservableObject {
             // including the room creator on the initial socket snapshot.
             // Seeking is still skipped for the creator to avoid the old
             // forward/back loop caused by delayed server positions.
-            isPlaying ? player?.play() : player?.pause()
+            // Do not start a newly-created player at its default 0:00 frame
+            // while the initial room seek is still in flight.
+            if initialPlaybackPosition == nil && pendingSeekPosition == nil {
+                isPlaying ? player?.play() : player?.pause()
+            }
         case "chat_message":
             if let data = try? JSONSerialization.data(withJSONObject: event),
                let message = try? JSONDecoder().decode(ChatMessage.self, from: data) {
