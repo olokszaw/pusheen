@@ -97,10 +97,13 @@ enum PresenceTimestampFormatter {
         time.timeStyle = .short
         time.dateStyle = .none
 
-        if calendar.isDateInToday(date) {
+        // `isDateInToday` reads the process clock. Compare with the supplied
+        // device time so the label stays correct across phone/server timezones.
+        if calendar.isDate(date, inSameDayAs: now) {
             return "Был(а) сегодня в \(time.string(from: date))"
         }
-        if calendar.isDateInYesterday(date) {
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) {
             return "Был(а) вчера в \(time.string(from: date))"
         }
 
