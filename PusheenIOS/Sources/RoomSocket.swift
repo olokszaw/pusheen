@@ -20,6 +20,8 @@ final class RoomSocket: ObservableObject {
     private var heartbeatCount = 0
     private var receivedFirstEvent = false
     private var connectionGeneration = 0
+    private var openedUptime: TimeInterval = 0
+    private var lastInboundUptime: TimeInterval = 0
 
     func connect(baseURL: URL, roomID: Int, token: String) {
         close()
@@ -130,6 +132,17 @@ final class RoomSocket: ObservableObject {
         open()
     }
 
+    /// Foreground/network recovery must replace even a socket that still looks
+    /// connected locally. VPN and tunnel failures can leave URLSession in that
+    /// half-open state until the OS TCP timeout, losing realtime events meanwhile.
+    func reconnectAuthoritatively() {
+        guard !wasClosedByView, endpoint != nil else { return }
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        connected = false
+        open()
+    }
+
     private func open() {
         guard !wasClosedByView, let endpoint else { return }
         heartbeatTask?.cancel()
@@ -144,6 +157,8 @@ final class RoomSocket: ObservableObject {
         connected = false
         heartbeatCount = 0
         receivedFirstEvent = false
+        openedUptime = ProcessInfo.processInfo.systemUptime
+        lastInboundUptime = openedUptime
         receive(from: socket, generation: generation)
         startHeartbeat()
     }
@@ -151,15 +166,25 @@ final class RoomSocket: ObservableObject {
     private func startHeartbeat() {
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(8))
+                try? await Task.sleep(for: .seconds(4))
                 guard !Task.isCancelled else { return }
                 guard let self else { return }
+                let now = ProcessInfo.processInfo.systemUptime
+                // Application-level heartbeats provide a deterministic liveness
+                // deadline. A WebSocket send can appear successful for a while
+                // after a VPN/tunnel route has died, so send errors alone are not
+                // sufficient to trigger resync.
+                let reference = self.receivedFirstEvent ? self.lastInboundUptime : self.openedUptime
+                if now - reference > 14, let current = self.task {
+                    self.connectionFailed(for: current)
+                    return
+                }
                 self.heartbeatCount += 1
                 self.send(["type": "heartbeat"])
                 // A lightweight authoritative snapshot periodically removes
                 // the 1–2 second drift that can build up on another device
                 // without changing the owner's playback logic.
-                if self.heartbeatCount.isMultiple(of: 2) {
+                if self.heartbeatCount.isMultiple(of: 3) {
                     self.send(["type": "request_state"])
                 }
             }
@@ -175,6 +200,7 @@ final class RoomSocket: ObservableObject {
                 if let text, let data = text.data(using: .utf8), let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     Task { @MainActor in
                         guard self.task === socket else { return }
+                        self.lastInboundUptime = ProcessInfo.processInfo.systemUptime
                         if !self.receivedFirstEvent {
                             self.receivedFirstEvent = true
                             self.connected = true
