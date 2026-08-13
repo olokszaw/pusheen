@@ -5,6 +5,11 @@ final class RoomSocket: ObservableObject {
     @Published private(set) var connected = false
     var onEvent: (([String: Any]) -> Void)?
     var onReady: (() -> Void)?
+    /// Called once for every successfully opened socket, immediately before
+    /// its first event is delivered.  Consumers use this generation boundary
+    /// to treat the first server playback snapshot after a reconnect as
+    /// authoritative instead of carrying local state across connections.
+    var onConnectionGenerationReady: ((Int) -> Void)?
 
     private var task: URLSessionWebSocketTask?
     private var endpoint: URL?
@@ -14,6 +19,7 @@ final class RoomSocket: ObservableObject {
     private var reconnectDelay: UInt64 = 1
     private var heartbeatCount = 0
     private var receivedFirstEvent = false
+    private var connectionGeneration = 0
 
     func connect(baseURL: URL, roomID: Int, token: String) {
         close()
@@ -23,6 +29,7 @@ final class RoomSocket: ObservableObject {
         components.queryItems = [URLQueryItem(name: "token", value: token)]
         endpoint = components.url
         wasClosedByView = false
+        reconnectDelay = 1
         open()
     }
 
@@ -39,15 +46,28 @@ final class RoomSocket: ObservableObject {
         return true
     }
 
-    func playback(action: String, isPlaying: Bool, position: Double, videoURL: String? = nil) { var value: [String: Any] = ["type": "playback_command", "action": action, "is_playing": isPlaying, "position_seconds": position]; if let videoURL { value["vk_video_url"] = videoURL }; send(value) }
-    func playbackSnapshot(isPlaying: Bool, position: Double, duration: Double) {
+    @discardableResult
+    func playback(action: String, isPlaying: Bool, position: Double, videoURL: String? = nil, sequence: Int64? = nil) -> Bool {
+        var value: [String: Any] = [
+            "type": "playback_command",
+            "action": action,
+            "is_playing": isPlaying,
+            "position_seconds": position,
+        ]
+        if let videoURL { value["vk_video_url"] = videoURL }
+        if let sequence { value["sequence"] = sequence }
+        return send(value)
+    }
+    func playbackSnapshot(isPlaying: Bool, position: Double, duration: Double, sequence: Int64? = nil) {
         guard position.isFinite, duration.isFinite else { return }
-        send([
+        var payload: [String: Any] = [
             "type": "playback_snapshot",
             "is_playing": isPlaying,
             "position_seconds": max(0, position),
             "duration_seconds": max(0, duration),
-        ])
+        ]
+        if let sequence { payload["sequence"] = sequence }
+        send(payload)
     }
     @discardableResult
     func chat(text: String, image: String = "", clientMessageID: String, replyToID: Int? = nil) -> Bool {
@@ -83,16 +103,17 @@ final class RoomSocket: ObservableObject {
         guard !wasClosedByView, let endpoint else { return }
         heartbeatTask?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         let socket = URLSession.shared.webSocketTask(with: endpoint)
         task = socket
         socket.resume()
         // `resume()` only starts the handshake. Do not advertise a usable
         // socket until the server has accepted it and sent its first event.
         connected = false
-        reconnectDelay = 1
         heartbeatCount = 0
         receivedFirstEvent = false
-        receive(from: socket)
+        receive(from: socket, generation: generation)
         startHeartbeat()
     }
 
@@ -114,7 +135,7 @@ final class RoomSocket: ObservableObject {
         }
     }
 
-    private func receive(from socket: URLSessionWebSocketTask) {
+    private func receive(from socket: URLSessionWebSocketTask, generation: Int) {
         socket.receive { [weak self, weak socket] result in
             guard let self, let socket else { return }
             switch result {
@@ -126,6 +147,8 @@ final class RoomSocket: ObservableObject {
                         if !self.receivedFirstEvent {
                             self.receivedFirstEvent = true
                             self.connected = true
+                            self.reconnectDelay = 1
+                            self.onConnectionGenerationReady?(generation)
                             self.onReady?()
                         }
                         self.onEvent?(event)
@@ -133,7 +156,7 @@ final class RoomSocket: ObservableObject {
                 }
                 Task { @MainActor in
                     guard self.task === socket else { return }
-                    self.receive(from: socket)
+                    self.receive(from: socket, generation: generation)
                 }
             case .failure:
                 Task { @MainActor in self.connectionFailed(for: socket) }

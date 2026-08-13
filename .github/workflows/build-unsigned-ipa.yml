@@ -52,6 +52,8 @@ jobs:
             watchparty.tests.RoomApiTests.test_stale_room_connection_is_not_shown_in_friend_profile \
             watchparty.tests.RoomApiTests.test_friend_can_range_stream_active_upload_without_joining_room \
             watchparty.tests.RoomApiTests.test_create_room_keeps_one_invite_code \
+            watchparty.tests.RoomApiTests.test_room_creation_request_is_idempotent \
+            watchparty.tests.RoomApiTests.test_room_snapshot_projects_playing_clock_for_rejoin \
             watchparty.tests.RoomApiTests.test_guest_joins_existing_room_without_new_code \
             watchparty.tests.RoomApiTests.test_gallery_room_upload_stream_and_delete_are_one_consistent_flow \
             watchparty.tests.RoomApiTests.test_room_invitation_full_flow_and_duplicate_protection \
@@ -59,6 +61,8 @@ jobs:
             watchparty.tests.RoomSocketTests.test_guest_receives_every_identical_message_from_rapid_socket_burst \
             watchparty.tests.RoomSocketTests.test_typing_status_is_realtime_and_clears_on_disconnect \
             watchparty.tests.RoomSocketTests.test_transient_reconnect_does_not_emit_fake_leave_or_join \
+            watchparty.tests.RoomSocketTests.test_overlapping_reconnect_does_not_make_new_socket_offline \
+            watchparty.tests.RoomSocketTests.test_stale_playback_sequence_cannot_overwrite_new_seek \
             watchparty.tests.RoomSocketTests.test_owner_playback_snapshot_refreshes_real_clock_and_duration \
             watchparty.tests.RoomSocketTests.test_guest_snapshot_updates_own_preview_without_controlling_room \
             --verbosity 2
@@ -77,6 +81,10 @@ jobs:
           /tmp/activity-calendar-tests
           swiftc Sources/Models.swift Sources/StickerRecentsStore.swift Tests/StickerRecentsStoreTests/main.swift -o /tmp/sticker-recents-tests
           /tmp/sticker-recents-tests
+          swiftc -parse-as-library Sources/StickerAssetCache.swift Tests/StickerAssetCacheTests/main.swift -o /tmp/sticker-asset-cache-tests
+          /tmp/sticker-asset-cache-tests
+          swiftc Sources/PlaybackRejoinPolicy.swift Tests/PlaybackRejoinPolicyTests/main.swift -o /tmp/playback-rejoin-policy-tests
+          /tmp/playback-rejoin-policy-tests
           swiftc Sources/Models.swift Tests/CurrentWatchingClockTests/main.swift -o /tmp/current-watching-clock-tests
           /tmp/current-watching-clock-tests
 

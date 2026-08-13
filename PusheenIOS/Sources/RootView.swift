@@ -654,6 +654,9 @@ struct CreateRoomSheet: View {
     @State private var isPrivate = false
     @State private var loading = false
     @State private var error = ""
+    // Stable across a transport retry for this sheet, different for the next
+    // user-initiated creation flow.
+    @State private var creationRequestID = UUID()
     var body: some View { ZStack { AcrylicBackground(); VStack(alignment: .leading, spacing: 16) {
         Text("Новая комната").font(.title2.bold())
         Text("Вставь ссылку VK Видео, сайта или выбери файл из галереи.").font(.subheadline).foregroundStyle(.secondary)
@@ -692,7 +695,13 @@ struct CreateRoomSheet: View {
         Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
         if !movieError.isEmpty { Text(movieError).font(.caption).foregroundStyle(.red) }
         if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
-        Button { Task { await create() } } label: { Label(loading ? "Загрузка…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading)
+        Button {
+            // Close the same-run-loop double-tap window before async work is
+            // scheduled. The backend key remains the second safety layer.
+            guard !loading else { return }
+            loading = true
+            Task { await create() }
+        } label: { Label(loading ? "Загрузка…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading)
     }.padding(22) }
         .presentationDetents([.medium, .large])
         .presentationBackground(.clear)
@@ -714,10 +723,14 @@ struct CreateRoomSheet: View {
         catch { movieError = "Не удалось получить видео из галереи" }
     }
     private func create() async {
-        loading = true; error = ""; defer { loading = false }
+        error = ""; defer { loading = false }
         var pendingRoom: Room?
         do {
-            pendingRoom = try await session.api.createRoom(videoURL: movieURL == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : "", isPrivate: isPrivate)
+            pendingRoom = try await session.api.createRoom(
+                videoURL: movieURL == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+                isPrivate: isPrivate,
+                requestID: creationRequestID
+            )
             let room: Room
             if let movieURL { room = try await session.api.uploadRoomVideo(roomID: pendingRoom!.id, fileURL: movieURL) }
             else { room = pendingRoom! }

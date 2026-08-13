@@ -4,6 +4,7 @@ import gzip
 import json
 import os
 import tempfile
+import uuid
 
 from django.contrib.auth import get_user_model
 from django.db import OperationalError
@@ -787,6 +788,55 @@ class RoomApiTests(APITestCase):
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(list_response.data[0]["invite_code"], room.invite_code)
 
+    @patch("watchparty.views.resolve_media_stream")
+    def test_room_creation_request_is_idempotent(self, resolver):
+        resolver.return_value = {}
+        self.authenticate(self.owner_token)
+        request_id = str(uuid.uuid4())
+        payload = {
+            "title": "One interaction",
+            "vk_video_url": "https://vkvideo.ru/video-185112119_456245562",
+            "creation_request_id": request_id,
+        }
+        first = self.client.post("/api/rooms/", payload, format="json")
+        retry = self.client.post("/api/rooms/", payload, format="json")
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(retry.status_code, 200, retry.data)
+        self.assertEqual(first.data["id"], retry.data["id"])
+        room = Room.objects.get(pk=first.data["id"])
+        self.assertEqual(Room.objects.filter(owner=self.owner).count(), 1)
+        self.assertEqual(RoomMember.objects.filter(room=room, user=self.owner).count(), 1)
+        self.assertEqual(PlaybackState.objects.filter(room=room).count(), 1)
+
+        second = dict(payload, creation_request_id=str(uuid.uuid4()))
+        another = self.client.post("/api/rooms/", second, format="json")
+        self.assertEqual(another.status_code, 201, another.data)
+        self.assertNotEqual(another.data["id"], first.data["id"])
+
+    def test_room_snapshot_projects_playing_clock_for_rejoin(self):
+        room = Room.objects.create(owner=self.owner, title="Rejoin", duration_seconds=1800)
+        RoomMember.objects.create(
+            room=room,
+            user=self.owner,
+            active_connections=1,
+            last_heartbeat_at=timezone.now(),
+        )
+        state = PlaybackState.objects.create(
+            room=room, is_playing=True, position_seconds=600, sequence=7
+        )
+        PlaybackState.objects.filter(pk=state.pk).update(
+            updated_at=timezone.now() - timedelta(seconds=10)
+        )
+        self.authenticate(self.owner_token)
+        response = self.client.get(f"/api/rooms/{room.id}/snapshot/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data["playback"]["is_playing"])
+        self.assertEqual(response.data["playback"]["sequence"], 7)
+        self.assertGreaterEqual(response.data["playback"]["position_seconds"], 609)
+        self.assertLess(response.data["playback"]["position_seconds"], 612)
+        self.assertEqual(len(response.data["members"]), 1)
+        self.assertTrue(response.data["members"][0]["is_online"])
+
     def test_guest_joins_existing_room_without_new_code(self):
         room = Room.objects.create(owner=self.owner, title="Общая комната")
         RoomMember.objects.create(room=room, user=self.owner)
@@ -978,6 +1028,78 @@ class RoomSocketTests(TransactionTestCase):
     def test_transient_reconnect_does_not_emit_fake_leave_or_join(self):
         with patch("watchparty.consumers.ROOM_DISCONNECT_GRACE_SECONDS", 0.2):
             async_to_sync(self._assert_reconnect_presence_grace)()
+
+    def test_overlapping_reconnect_does_not_make_new_socket_offline(self):
+        with patch("watchparty.consumers.ROOM_DISCONNECT_GRACE_SECONDS", 0.2):
+            async_to_sync(self._assert_overlapping_reconnect_presence)()
+
+    def test_stale_playback_sequence_cannot_overwrite_new_seek(self):
+        async_to_sync(self._assert_stale_playback_is_rejected)()
+
+    async def _assert_stale_playback_is_rejected(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        initial = await self._next_event(owner_socket, "playback_state")
+        self.assertEqual(initial["sequence"], 0)
+
+        await owner_socket.send_json_to({
+            "type": "playback_command", "action": "seek",
+            "is_playing": False, "position_seconds": 250,
+            "sequence": 0,
+        })
+        accepted = await self._next_event(owner_socket, "playback_state")
+        self.assertEqual(accepted["sequence"], 1)
+        self.assertEqual(accepted["position_seconds"], 250)
+
+        await owner_socket.send_json_to({
+            "type": "playback_command", "action": "seek",
+            "is_playing": False, "position_seconds": 5,
+            "sequence": 0,
+        })
+        stale = await self._next_event(owner_socket, "playback_state")
+        self.assertEqual(stale["command"], "stale")
+        self.assertEqual(stale["sequence"], 1)
+        self.assertEqual(stale["position_seconds"], 250)
+        database_state = await self._playback_state()
+        self.assertEqual(database_state["sequence"], 1)
+        self.assertEqual(database_state["position"], 250)
+        await owner_socket.disconnect()
+
+    async def _assert_overlapping_reconnect_presence(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        first_guest = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        replacement_guest = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+        await self._next_event(owner_socket, "presence")
+        self.assertTrue((await first_guest.connect())[0])
+        await self._next_event(first_guest, "playback_state")
+        await self._next_event(owner_socket, "presence")
+
+        # A VPN/tunnel handoff may establish the replacement before the old
+        # TCP connection has delivered its disconnect callback.
+        self.assertTrue((await replacement_guest.connect())[0])
+        await self._next_event(replacement_guest, "playback_state")
+        replacement_notice = await self._next_event(owner_socket, "presence")
+        self.assertTrue(replacement_notice["is_online"])
+        self.assertFalse(replacement_notice["changed"])
+        await first_guest.disconnect()
+        await asyncio.sleep(0.25)
+        self.assertTrue(await self._member_online())
+        self.assertTrue(await owner_socket.receive_nothing(timeout=0.05))
+
+        await replacement_guest.disconnect()
+        leave = await self._next_event(owner_socket, "presence")
+        self.assertFalse(leave["is_online"])
+        await owner_socket.disconnect()
 
     async def _assert_reconnect_presence_grace(self):
         owner_socket = WebsocketCommunicator(
@@ -1218,6 +1340,16 @@ class RoomSocketTests(TransactionTestCase):
     @database_sync_to_async
     def _room_duration(self):
         return Room.objects.get(pk=self.room.pk).duration_seconds
+
+    @database_sync_to_async
+    def _playback_state(self):
+        state = PlaybackState.objects.get(room=self.room)
+        return {"sequence": state.sequence, "position": state.position_seconds}
+
+    @database_sync_to_async
+    def _member_online(self):
+        member = RoomMember.objects.get(room=self.room, user=self.guest)
+        return member.active_connections > 0 and member.last_heartbeat_at >= timezone.now() - timedelta(seconds=24)
 
     @database_sync_to_async
     def _guest_viewer_clock(self):

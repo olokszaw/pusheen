@@ -18,7 +18,10 @@ final class RoomViewModel: ObservableObject {
     @Published var isMuted = false
     @Published var isPlaying = false
     @Published var position: Double = 0
-    @Published var duration: Double = 1
+    // Unknown until AVPlayer has loaded the item.  A fake value of one second
+    // used to clamp an authoritative rejoin position (for example 10:00) to
+    // 00:01 before the asset duration became available.
+    @Published var duration: Double = 0
     @Published var error = ""
     @Published var wasRemovedFromRoom = false
     private let room: Room
@@ -42,13 +45,25 @@ final class RoomViewModel: ObservableObject {
     private var isFlushingMessages = false
     private var streamGenres: [String] = []
     private var latestPlaybackStateAt: Date?
+    private var latestPlaybackSequence: Int64?
+    // Optimistically reserves sequence numbers for rapid owner commands. A
+    // play immediately following a seek must not be rejected just because the
+    // seek acknowledgement has not crossed the tunnel yet.
+    private var outboundPlaybackSequence: Int64?
+    private var awaitingConnectionPlaybackState = true
+    private var activeConnectionGeneration = 0
+    private var lifecycleGeneration = 0
+    private var lifecycleActive = false
+    private var memberResyncRevision = 0
+    private var memberResyncTask: Task<Void, Never>?
+    private var snapshotResyncRevision = 0
+    private var snapshotResyncTask: Task<Void, Never>?
     private var hasAppliedInitialPlaybackState = false
     // The socket state normally arrives while /stream/ is still resolving.
     // Keep that first authoritative target until AVPlayerItem is ready; merely
     // assigning `position` is not enough because a fresh AVPlayer always starts
     // at 0 unless it is explicitly seeked.
     private var initialPlaybackPosition: Double?
-    private var initialPlaybackShouldPlay = false
     // AVPlayer seek is asynchronous. Until its completion, the periodic clock
     // still reports the pre-seek frame (often the end of the movie). Keep the
     // user's requested position authoritative so Play cannot send that stale
@@ -67,24 +82,44 @@ final class RoomViewModel: ObservableObject {
     }
 
     func start() async {
+        guard !lifecycleActive else { return }
+        lifecycleActive = true
+        lifecycleGeneration &+= 1
+        let generation = lifecycleGeneration
         isStopped = false
         // A RoomViewModel can be kept alive while the app recovers from a
         // background/reconnect transition. Reset only the per-entry playback
         // handshake so a state from an earlier socket cannot win later.
         hasAppliedInitialPlaybackState = false
         latestPlaybackStateAt = nil
+        latestPlaybackSequence = nil
+        outboundPlaybackSequence = nil
+        awaitingConnectionPlaybackState = true
         initialPlaybackPosition = nil
-        initialPlaybackShouldPlay = false
         pendingSeekPosition = nil
         seekGeneration &+= 1
         do {
             configureAudioSession()
-            async let history = api.messages(roomID: room.id)
-            async let people = api.members(roomID: room.id)
+            async let history: [ChatMessage]? = {
+                try? await api.messages(roomID: room.id)
+            }()
+            async let bootstrapSnapshot: RoomSnapshot? = {
+                try? await api.roomSnapshot(roomID: room.id)
+            }()
+            async let fallbackPeople: [RoomMember]? = {
+                try? await api.members(roomID: room.id)
+            }()
             // Chat is independent from the player. A bad/slow video source
             // must never make a persisted conversation look empty.
-            if let loadedHistory = try? await history { messages = loadedHistory }
-            if let loadedPeople = try? await people {
+            if let loadedHistory = await history,
+               lifecycleActive, lifecycleGeneration == generation, !isStopped {
+                messages = loadedHistory
+            }
+            if let snapshot = await bootstrapSnapshot {
+                guard lifecycleActive, lifecycleGeneration == generation, !isStopped else { return }
+                applyBootstrapSnapshot(snapshot, authoritativeForConnection: true)
+            } else if let loadedPeople = await fallbackPeople {
+                guard lifecycleActive, lifecycleGeneration == generation, !isStopped else { return }
                 members = loadedPeople
                 isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
             }
@@ -97,9 +132,17 @@ final class RoomViewModel: ObservableObject {
             // so participants on a slow video source saw every message via the
             // three-second HTTP polling fallback instead of in real time.
             socket.onEvent = { [weak self] event in self?.apply(event) }
+            socket.onConnectionGenerationReady = { [weak self] connectionGeneration in
+                guard let self, self.lifecycleActive, !self.isStopped else { return }
+                self.activeConnectionGeneration = connectionGeneration
+                self.awaitingConnectionPlaybackState = true
+                self.scheduleMemberResync()
+            }
             socket.onReady = { [weak self] in
                 Task { @MainActor [weak self] in
-                    await self?.recoverMessagesImmediately()
+                    guard let self else { return }
+                    await self.recoverMessagesImmediately()
+                    self.scheduleSnapshotResync()
                 }
             }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
@@ -117,11 +160,9 @@ final class RoomViewModel: ObservableObject {
             // WebSocket is the live authority. `/stream/` may finish after its
             // first event, so never overwrite that newer state with the stale
             // room list snapshot used to open this screen.
-            if !hasAppliedInitialPlaybackState {
-                isPlaying = room.playback?.isPlaying ?? false
-                initialPlaybackPosition = room.playback?.positionSeconds ?? 0
-                initialPlaybackShouldPlay = isPlaying
-            }
+            // Loading the media and choosing the playback clock are separate.
+            // The first playback_state of this socket is the authority; never
+            // start a fresh AVPlayer from the stale room-list snapshot at 0:00.
             if let playbackEndObserver {
                 NotificationCenter.default.removeObserver(playbackEndObserver)
             }
@@ -141,10 +182,11 @@ final class RoomViewModel: ObservableObject {
                     self.socket.playbackSnapshot(
                         isPlaying: false,
                         position: finalPosition.isFinite ? finalPosition : self.duration,
-                        duration: self.duration
+                        duration: self.duration,
+                        sequence: self.outboundPlaybackSequence ?? self.latestPlaybackSequence
                     )
                     guard self.isOwner else { return }
-                    self.socket.playback(
+                    self.sendPlaybackCommand(
                         action: "pause",
                         isPlaying: false,
                         position: finalPosition.isFinite ? finalPosition : self.duration
@@ -180,6 +222,15 @@ final class RoomViewModel: ObservableObject {
     }
     func stop() {
         isStopped = true
+        lifecycleActive = false
+        lifecycleGeneration &+= 1
+        memberResyncRevision &+= 1
+        memberResyncTask?.cancel()
+        memberResyncTask = nil
+        snapshotResyncRevision &+= 1
+        snapshotResyncTask?.cancel()
+        snapshotResyncTask = nil
+        seekGeneration &+= 1
         if let timer { player?.removeTimeObserver(timer) }
         timer = nil
         itemStatusObservation?.invalidate()
@@ -200,6 +251,10 @@ final class RoomViewModel: ObservableObject {
         messageFallbackTasks.removeAll()
         pendingMessages.removeAll()
         pendingSeekPosition = nil
+        player?.pause()
+        socket.onEvent = nil
+        socket.onReady = nil
+        socket.onConnectionGenerationReady = nil
         socket.close()
     }
     private func startActivityReporting() {
@@ -257,7 +312,8 @@ final class RoomViewModel: ObservableObject {
                         self.socket.playbackSnapshot(
                             isPlaying: isActuallyAdvancing,
                             position: max(0, actual),
-                            duration: hasDuration ? itemDuration : 0
+                            duration: hasDuration ? itemDuration : 0,
+                            sequence: self.outboundPlaybackSequence ?? self.latestPlaybackSequence
                         )
                     }
                 }
@@ -297,7 +353,7 @@ final class RoomViewModel: ObservableObject {
         if next { player?.play() } else { player?.pause() }
         isPlaying = next
         position = commandPosition
-        socket.playback(action: next ? "play" : "pause", isPlaying: next, position: commandPosition)
+        sendPlaybackCommand(action: next ? "play" : "pause", isPlaying: next, position: commandPosition)
     }
 
     func seek(_ value: Double) {
@@ -320,7 +376,7 @@ final class RoomViewModel: ObservableObject {
                 self.position = target
             }
         }
-        socket.playback(action: "seek", isPlaying: isPlaying, position: target)
+        sendPlaybackCommand(action: "seek", isPlaying: isPlaying, position: target)
     }
 
     /// Applies the state received before the media item existed.  This runs only
@@ -418,16 +474,43 @@ final class RoomViewModel: ObservableObject {
         guard isOwner, !member.isOwner else { return }
         do {
             try await api.moderateMember(roomID: room.id, userID: member.userId, action: action)
-            members = try await api.members(roomID: room.id)
+            scheduleMemberResync()
         } catch { self.error = error.localizedDescription }
     }
     private func apply(_ event: [String: Any]) {
         switch event["type"] as? String {
         case "playback_state":
+            let firstStateForConnection = awaitingConnectionPlaybackState
+            let incomingSequence = playbackSequence(from: event)
             let stateDate = playbackStateDate(from: event)
-            if let stateDate, let latestPlaybackStateAt, stateDate < latestPlaybackStateAt { return }
-            if let stateDate { latestPlaybackStateAt = stateDate }
             let command = event["command"] as? String ?? "state"
+            if !firstStateForConnection {
+                if let incomingSequence,
+                   !PlaybackRejoinPolicy.accepts(
+                       incomingSequence: incomingSequence,
+                       latestSequence: latestPlaybackSequence,
+                       authoritativeConnectionSnapshot: false
+                   ) { return }
+                // Older servers do not include a sequence. Retain the timestamp
+                // guard as a compatibility fallback, but a monotonic server
+                // sequence is authoritative whenever it is available.
+                if incomingSequence == nil,
+                   let stateDate, let latestPlaybackStateAt,
+                   stateDate < latestPlaybackStateAt { return }
+            }
+            awaitingConnectionPlaybackState = false
+            if let incomingSequence {
+                latestPlaybackSequence = incomingSequence
+                if firstStateForConnection || command == "stale" {
+                    outboundPlaybackSequence = incomingSequence
+                } else {
+                    outboundPlaybackSequence = max(
+                        outboundPlaybackSequence ?? incomingSequence,
+                        incomingSequence
+                    )
+                }
+            }
+            if let stateDate { latestPlaybackStateAt = stateDate }
             let nextIsPlaying = event["is_playing"] as? Bool ?? false
             isOwner = event["is_owner"] as? Bool ?? false
             isPlaying = nextIsPlaying
@@ -436,14 +519,21 @@ final class RoomViewModel: ObservableObject {
             // The creator receives their own broadcast too. Never seek it back to
             // an older server snapshot: that was the visible forward/back loop.
             let authoritative = compensatedPosition(remote: remote, isPlaying: isPlaying, event: event)
+            let itemIsReady = player?.currentItem?.status == .readyToPlay
             // The first state may arrive before AVPlayer has been constructed.
             // Persist it and seek the actual player as soon as its item is ready
             // instead of letting every re-entering participant begin at 0:00.
-            if !hasAppliedInitialPlaybackState {
+            if !hasAppliedInitialPlaybackState || !itemIsReady {
+                // Do not preserve only the first deferred target. A newer seek,
+                // pause or play can arrive while AVPlayer is loading and must
+                // replace the older target before the item becomes ready.
+                seekGeneration &+= 1
+                pendingSeekPosition = nil
                 position = authoritative
                 initialPlaybackPosition = authoritative
-                initialPlaybackShouldPlay = nextIsPlaying
+                hasAppliedInitialPlaybackState = true
                 applyInitialPlaybackStateIfNeeded()
+                return
             }
             // Correct actual drift promptly, but do not chase normal network
             // jitter frame-by-frame. This keeps participants within ~1 sec.
@@ -451,8 +541,12 @@ final class RoomViewModel: ObservableObject {
             // playing participant. Quick tunnels can reconnect repeatedly,
             // which previously produced the 5–10 second rewind loop. Explicit
             // owner commands and the very first room snapshot remain authoritative.
-            let shouldApplyPosition = !hasAppliedInitialPlaybackState || command != "state" || !nextIsPlaying
-            if !isOwner && shouldApplyPosition && abs(position - authoritative) > 0.85 {
+            let actualPosition = player?.currentTime().seconds
+            let localPosition = (actualPosition?.isFinite == true) ? (actualPosition ?? position) : position
+            let drift = abs(localPosition - authoritative)
+            let shouldApplyPosition = firstStateForConnection
+                || (!isOwner && (command != "state" || !nextIsPlaying || drift > 2.5))
+            if shouldApplyPosition && drift > 0.85 {
                 // Invalidate an older initial seek before applying a newer
                 // command. Without this, the old completion could rewind a
                 // freshly joined viewer back to a stale time.
@@ -553,7 +647,7 @@ final class RoomViewModel: ObservableObject {
             }
             // The event updates the UI immediately; a lightweight fetch then
             // reconciles the list in case the client missed a prior event.
-            Task { self.members = (try? await self.api.members(roomID: self.room.id)) ?? self.members }
+            scheduleMemberResync()
         case "members_changed":
             // Owner transfer, mute, kick and ban arrive through the room socket
             // so every open client reflects the change without reopening room.
@@ -568,11 +662,7 @@ final class RoomViewModel: ObservableObject {
                 let timestamp = Int(Date().timeIntervalSince1970 * 1_000_000)
                 messages.append(ChatMessage(id: -timestamp, authorId: 0, nickname: "", text: systemText, imageDataURL: "", avatarDataURL: "", reactions: [], isSystem: true))
             }
-            Task {
-                let refreshed = (try? await self.api.members(roomID: self.room.id)) ?? self.members
-                self.members = refreshed
-                self.isMuted = refreshed.first(where: { $0.userId == self.currentUserID })?.isMuted ?? self.isMuted
-            }
+            scheduleMemberResync()
         case "room_removed":
             error = "Вас удалили из комнаты"
             wasRemovedFromRoom = true
@@ -664,10 +754,85 @@ final class RoomViewModel: ObservableObject {
         guard !isStopped else { return }
         socket.reconnectNowIfNeeded()
         await recoverMessagesImmediately()
-        if let refreshedMembers = try? await api.members(roomID: room.id) {
-            members = refreshedMembers
-            isMuted = refreshedMembers.first(where: { $0.userId == currentUserID })?.isMuted ?? false
+        scheduleSnapshotResync()
+    }
+
+    /// Coalesces all presence/moderation/reconnect refreshes.  A slower response
+    /// started before a newer one is never allowed to restore an obsolete list.
+    private func scheduleMemberResync() {
+        guard lifecycleActive, !isStopped else { return }
+        memberResyncRevision &+= 1
+        let revision = memberResyncRevision
+        let lifecycle = lifecycleGeneration
+        let connection = activeConnectionGeneration
+        memberResyncTask?.cancel()
+        memberResyncTask = Task { [weak self] in
+            guard let self else { return }
+            let refreshed = try? await self.api.members(roomID: self.room.id)
+            guard !Task.isCancelled,
+                  let refreshed,
+                  self.lifecycleActive,
+                  !self.isStopped,
+                  self.lifecycleGeneration == lifecycle,
+                  self.activeConnectionGeneration == connection,
+                  self.memberResyncRevision == revision else { return }
+            self.members = refreshed
+            self.isMuted = refreshed.first(where: { $0.userId == self.currentUserID })?.isMuted ?? false
+            self.memberResyncTask = nil
         }
+    }
+
+    /// Reconnect is a full server rehydrate, not only a WebSocket reopen. The
+    /// revision/lifecycle checks make a slow response from an older connection
+    /// unable to overwrite a newer playback generation or member list.
+    private func scheduleSnapshotResync() {
+        guard lifecycleActive, !isStopped else { return }
+        snapshotResyncRevision &+= 1
+        let revision = snapshotResyncRevision
+        let lifecycle = lifecycleGeneration
+        let connection = activeConnectionGeneration
+        snapshotResyncTask?.cancel()
+        snapshotResyncTask = Task { [weak self] in
+            guard let self else { return }
+            let snapshot = try? await self.api.roomSnapshot(roomID: self.room.id)
+            guard !Task.isCancelled,
+                  let snapshot,
+                  self.lifecycleActive,
+                  !self.isStopped,
+                  self.lifecycleGeneration == lifecycle,
+                  self.activeConnectionGeneration == connection,
+                  self.snapshotResyncRevision == revision else { return }
+            self.applyBootstrapSnapshot(snapshot, authoritativeForConnection: false)
+            self.snapshotResyncTask = nil
+        }
+    }
+
+    private func applyBootstrapSnapshot(_ snapshot: RoomSnapshot, authoritativeForConnection: Bool) {
+        members = snapshot.members
+        isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
+        // The top-level playback object is projected by the server at the
+        // exact snapshot instant. `room.playback` is retained only for older
+        // list payload compatibility and must not drive reconnect.
+        let playback = snapshot.playback
+        if let latestPlaybackSequence,
+           playback.sequence < latestPlaybackSequence { return }
+
+        var event: [String: Any] = [
+            "type": "playback_state",
+            "command": "state",
+            "is_playing": playback.isPlaying,
+            "position_seconds": playback.positionSeconds,
+            "sequence": playback.sequence,
+            "is_owner": snapshot.room.owner == currentUserID,
+            "is_muted": isMuted,
+        ]
+        if let serverUpdatedAt = playback.serverUpdatedAt {
+            event["server_updated_at"] = serverUpdatedAt
+        }
+        if authoritativeForConnection {
+            awaitingConnectionPlaybackState = true
+        }
+        apply(event)
     }
     private func compensatedPosition(remote: Double, isPlaying: Bool, event: [String: Any]) -> Double {
         guard isPlaying,
@@ -677,9 +842,10 @@ final class RoomViewModel: ObservableObject {
         // an hours-long offset that clamps playback to the end of the video.
         let transitSeconds = Date().timeIntervalSince(date)
         guard transitSeconds >= 0, transitSeconds <= 5 else { return remote }
-        let livePosition = max(0, remote + transitSeconds)
-        if duration.isFinite, duration > 0 { return min(livePosition, duration) }
-        return livePosition
+        return PlaybackRejoinPolicy.clampedPosition(
+            remote + transitSeconds,
+            knownDuration: duration
+        )
     }
 
     private func playbackStateDate(from event: [String: Any]) -> Date? {
@@ -690,5 +856,26 @@ final class RoomViewModel: ObservableObject {
         let standard = ISO8601DateFormatter()
         standard.formatOptions = [.withInternetDateTime]
         return standard.date(from: value)
+    }
+
+    private func playbackSequence(from event: [String: Any]) -> Int64? {
+        if let number = event["sequence"] as? NSNumber { return number.int64Value }
+        if let value = event["sequence"] as? String { return Int64(value) }
+        if let number = event["version"] as? NSNumber { return number.int64Value }
+        if let value = event["version"] as? String { return Int64(value) }
+        return nil
+    }
+
+    private func sendPlaybackCommand(action: String, isPlaying: Bool, position: Double) {
+        let baseSequence = outboundPlaybackSequence ?? latestPlaybackSequence
+        let sent = socket.playback(
+            action: action,
+            isPlaying: isPlaying,
+            position: position,
+            sequence: baseSequence
+        )
+        if sent, let baseSequence {
+            outboundPlaybackSequence = baseSequence + 1
+        }
     }
 }

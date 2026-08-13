@@ -18,7 +18,7 @@ from channels.layers import get_channel_layer
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.conf import settings
@@ -51,6 +51,7 @@ from .models import (
 )
 from .permissions import IsRoomOwner
 from .presence import mark_presence_offline, touch_presence
+from .playback import projected_playback_payload
 from .serializers import (
     ChatMessageSerializer,
     JoinSerializer,
@@ -904,48 +905,79 @@ class RoomListCreateView(generics.ListCreateAPIView):
             "owner", "owner__watch_profile", "playback"
         ).distinct()
 
-    @transaction.atomic
-    def perform_create(self, serializer):
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        request_id = serializer.validated_data.get("creation_request_id")
+        if request_id:
+            existing = Room.objects.filter(
+                owner=request.user, creation_request_id=request_id
+            ).select_related("owner", "owner__watch_profile", "playback").first()
+            if existing:
+                return Response(self.get_serializer(existing).data, status=status.HTTP_200_OK)
+        return self._create_room_once(serializer, request, request_id)
+
+    def _create_room_once(self, serializer, request, request_id):
         media_url = serializer.validated_data.get("vk_video_url", "")
-        fallback_title = "Совместный просмотр"
-        room = serializer.save(
-            owner=self.request.user,
-            title=serializer.validated_data.get("title") or fallback_title,
-            description="",
-            theme="movie",
-            allow_guests_control=False,
-        )
-        RoomMember.objects.create(room=room, user=self.request.user)
-        PlaybackState.objects.create(room=room)
+        metadata = None
         if media_url:
             try:
-                metadata = resolve_media_stream(
-                    media_url, detect_media_source(media_url)
-                )
-                resolved_title = str(metadata.get("title") or "").strip()[:80]
-                thumbnail = str(metadata.get("thumbnail") or "").strip()
-                duration = float(metadata.get("duration_seconds") or 0)
-                genres = metadata.get("genres") or []
-                changed = []
-                if resolved_title:
-                    room.title = resolved_title
-                    changed.append("title")
-                if thumbnail:
-                    room.thumbnail_url = thumbnail
-                    changed.append("thumbnail_url")
-                if duration:
-                    room.duration_seconds = duration
-                    changed.append("duration_seconds")
-                if genres:
-                    room.genres = genres
-                    changed.append("genres")
-                if changed:
-                    room.save(update_fields=changed)
+                # External extraction must not hold an owner/room database lock.
+                metadata = resolve_media_stream(media_url, detect_media_source(media_url))
             except Exception:
-                # Room creation must still succeed if a provider temporarily
-                # refuses metadata; room_stream will retry later.
-                pass
-
+                metadata = None
+        created = True
+        try:
+            with transaction.atomic():
+                get_user_model().objects.select_for_update().get(pk=request.user.pk)
+                room = (
+                    Room.objects.filter(owner=request.user, creation_request_id=request_id).first()
+                    if request_id else None
+                )
+                if room is None:
+                    room = serializer.save(
+                        owner=request.user,
+                        title=serializer.validated_data.get("title") or "Watch together",
+                        description="",
+                        theme="movie",
+                        allow_guests_control=False,
+                    )
+                else:
+                    serializer.instance = room
+                    created = False
+                RoomMember.objects.get_or_create(room=room, user=request.user)
+                PlaybackState.objects.get_or_create(room=room)
+        except IntegrityError:
+            if not request_id:
+                raise
+            room = Room.objects.select_related("playback").get(
+                owner=request.user, creation_request_id=request_id
+            )
+            serializer.instance = room
+            created = False
+        if metadata and created:
+            changed = []
+            resolved_title = str(metadata.get("title") or "").strip()[:80]
+            thumbnail = str(metadata.get("thumbnail") or "").strip()
+            duration = float(metadata.get("duration_seconds") or 0)
+            genres = metadata.get("genres") or []
+            for field, value in (
+                ("title", resolved_title),
+                ("thumbnail_url", thumbnail),
+                ("duration_seconds", duration),
+                ("genres", genres),
+            ):
+                if value:
+                    setattr(room, field, value)
+                    changed.append(field)
+            if changed:
+                room.save(update_fields=changed)
+        output = self.get_serializer(room)
+        return Response(
+            output.data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            headers=self.get_success_headers(output.data),
+        )
 
 class RoomDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = RoomSerializer
@@ -981,6 +1013,33 @@ def room_members(request, room_id):
         "user", "user__watch_profile", "user__client_identity", "room__owner"
     ).order_by("joined_at")
     return Response(RoomMemberSerializer(members, many=True).data)
+
+
+@api_view(["GET"])
+def room_snapshot(request, room_id):
+    """Atomic-shaped authoritative bootstrap for entry and reconnect."""
+    now = timezone.now()
+    room = get_object_or_404(
+        Room.objects.select_related("owner", "owner__watch_profile", "playback"),
+        id=room_id,
+    )
+    if not RoomMember.objects.filter(room=room, user=request.user).exists():
+        return Response({"detail": "Not a room member"}, status=403)
+    members = list(room.members.select_related(
+        "user", "user__watch_profile", "user__client_identity", "room__owner"
+    ).order_by("joined_at"))
+    playback = projected_playback_payload(room, room.playback, now=now)
+    playback.update({
+        "is_owner": room.owner_id == request.user.id,
+        "is_muted": RoomMute.objects.filter(room=room, user=request.user).exists(),
+    })
+    context = {"request": request, "snapshot_now": now}
+    return Response({
+        "snapshot_at": now.isoformat(),
+        "room": RoomSerializer(room, context=context).data,
+        "playback": playback,
+        "members": RoomMemberSerializer(members, many=True, context=context).data,
+    })
 
 
 @api_view(["POST"])

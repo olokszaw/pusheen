@@ -1,12 +1,13 @@
 import asyncio
 import math
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.db import transaction
 from django.utils import timezone as django_timezone
 from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute
+from .playback import projected_playback_payload
 
 ROOM_DISCONNECT_GRACE_SECONDS = 5.0
 
@@ -124,12 +125,18 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         action = content.get("action")
         if action not in {"play", "pause", "seek", "sync", "change_video"}:
             return
-        state = await self.save_playback(
+        state, accepted = await self.save_playback(
             action=action,
             is_playing=bool(content.get("is_playing", action == "play")),
             position=max(0.0, float(content.get("position_seconds", 0))),
             video_url=content.get("vk_video_url") if action == "change_video" else None,
+            base_sequence=content.get("sequence"),
         )
+        if not accepted:
+            # Optimistic-concurrency failure: correct only the stale sender.
+            # Broadcasting it would make every healthy client process noise.
+            await self.send_json({"type": "playback_state", **state, "is_owner": True})
+            return
         await self.channel_layer.group_send(self.group_name, {"type": "room.playback", "payload": state})
 
     async def apply_playback_snapshot(self, content):
@@ -157,11 +164,16 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         )
         if not await self.is_owner():
             return
-        await self.save_playback_snapshot(
+        state = await self.save_playback_snapshot(
             is_playing=is_playing,
             position=position,
             duration=duration,
+            base_sequence=content.get("sequence"),
         )
+        if state is not None:
+            # A stale snapshot gets an authoritative correction, but must not
+            # disturb other participants.
+            await self.send_json({"type": "playback_state", **state, "is_owner": True})
 
     async def room_playback(self, event):
         # `is_owner` is connection-specific. Never broadcast the creator's
@@ -251,27 +263,37 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def current_state(self):
         room = Room.objects.select_related("playback").get(id=self.room_id)
-        state = room.playback
-        now = datetime.now(timezone.utc)
-        position = state.position_seconds
-        if state.is_playing:
-            # PlaybackState stores the position at the last play/seek command.
-            # A heartbeat snapshot must advance it to "now"; otherwise every
-            # client periodically seeks back to that old value (often zero).
-            position = max(0.0, position + max(0.0, (now - state.updated_at).total_seconds()))
-        return {"room_id": room.id, "command": "state", "is_owner": room.owner_id == self.scope["user"].id, "is_muted": RoomMute.objects.filter(room=room, user=self.scope["user"]).exists(), "is_playing": state.is_playing, "position_seconds": position, "server_updated_at": now.isoformat(), "server_sent_at": now.isoformat(), "vk_video_url": room.vk_video_url}
+        payload = projected_playback_payload(room, room.playback)
+        payload.update({
+            "is_owner": room.owner_id == self.scope["user"].id,
+            "is_muted": RoomMute.objects.filter(room=room, user=self.scope["user"]).exists(),
+        })
+        return payload
 
     @database_sync_to_async
-    def save_playback(self, action, is_playing, position, video_url):
-        room = Room.objects.select_related("playback").get(id=self.room_id)
-        if video_url is not None:
-            room.vk_video_url = video_url
-            room.save(update_fields=["vk_video_url"])
-        state = room.playback
-        state.is_playing = is_playing
-        state.position_seconds = position
-        state.save(update_fields=["is_playing", "position_seconds", "updated_at"])
-        return {"room_id": room.id, "command": action, "is_playing": state.is_playing, "position_seconds": state.position_seconds, "server_updated_at": state.updated_at.isoformat(), "server_sent_at": datetime.now(timezone.utc).isoformat(), "vk_video_url": room.vk_video_url}
+    def save_playback(self, action, is_playing, position, video_url, base_sequence):
+        with transaction.atomic():
+            room = Room.objects.select_for_update().get(id=self.room_id)
+            state = PlaybackState.objects.select_for_update().get(room=room)
+            try:
+                incoming_sequence = int(base_sequence) if base_sequence is not None else None
+            except (TypeError, ValueError, OverflowError):
+                incoming_sequence = -1
+            if incoming_sequence is not None and incoming_sequence != state.sequence:
+                return projected_playback_payload(room, state, command="stale"), False
+            if video_url is not None:
+                room.vk_video_url = video_url
+                room.save(update_fields=["vk_video_url"])
+            state.is_playing = is_playing
+            state.position_seconds = position
+            state.sequence += 1
+            state.save(update_fields=["is_playing", "position_seconds", "sequence", "updated_at"])
+            # Commands carry the exact seek/play anchor. Clients compensate
+            # transport time from state.updated_at; projecting here as well
+            # would add the same elapsed time twice.
+            return projected_playback_payload(
+                room, state, command=action, project=False
+            ), True
 
     @database_sync_to_async
     def save_member_playback_snapshot(self, is_playing, position, duration):
@@ -288,21 +310,31 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def save_playback_snapshot(self, is_playing, position, duration):
-        room = Room.objects.select_related("playback").get(id=self.room_id)
-        if room.owner_id != self.scope["user"].id:
-            return
-        if duration > 0:
-            position = min(position, duration)
-            # Local gallery uploads often arrived before the client knew the
-            # asset duration.  The playing device is the most reliable source.
-            if abs(float(room.duration_seconds or 0) - duration) > 0.25:
-                room.duration_seconds = duration
-                room.save(update_fields=["duration_seconds"])
-        state = room.playback
-        state.is_playing = is_playing
-        state.position_seconds = position
-        state.save(update_fields=["is_playing", "position_seconds", "updated_at"])
+    def save_playback_snapshot(self, is_playing, position, duration, base_sequence):
+        with transaction.atomic():
+            room = Room.objects.select_for_update().get(id=self.room_id)
+            state = PlaybackState.objects.select_for_update().get(room=room)
+            if room.owner_id != self.scope["user"].id:
+                return None
+            try:
+                incoming_sequence = int(base_sequence) if base_sequence is not None else None
+            except (TypeError, ValueError, OverflowError):
+                incoming_sequence = -1
+            # Legacy clients without sequence remain functional. Sequence-aware
+            # clients get strict protection from delayed pre-seek snapshots.
+            if incoming_sequence is not None and incoming_sequence != state.sequence:
+                return projected_playback_payload(room, state, command="stale")
+            if duration > 0:
+                position = min(position, duration)
+                if abs(float(room.duration_seconds or 0) - duration) > 0.25:
+                    room.duration_seconds = duration
+                    room.save(update_fields=["duration_seconds"])
+            state.is_playing = is_playing
+            state.position_seconds = position
+            # Snapshot refreshes the anchor inside the current generation; it
+            # intentionally does not advance sequence.
+            state.save(update_fields=["is_playing", "position_seconds", "updated_at"])
+            return None
 
     @database_sync_to_async
     def save_chat(self, text, image_data_url, client_message_id, reply_to_id):

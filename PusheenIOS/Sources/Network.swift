@@ -331,9 +331,23 @@ final class APIClient {
         return try decoder.decode([ChatMessage].self, from: data)
     }
     func members(roomID: Int) async throws -> [RoomMember] { let data = try await request("/api/rooms/\(roomID)/members/"); return try decoder.decode([RoomMember].self, from: data) }
+    func roomSnapshot(roomID: Int) async throws -> RoomSnapshot { let data = try await request("/api/rooms/\(roomID)/snapshot/"); return try decoder.decode(RoomSnapshot.self, from: data) }
     func moderateMember(roomID: Int, userID: Int, action: String) async throws { _ = try await request("/api/rooms/\(roomID)/members/\(userID)/moderate/", method: "POST", body: ["action": action]) }
     func stream(roomID: Int) async throws -> VideoStream { let data = try await request("/api/rooms/\(roomID)/stream/"); return try decoder.decode(VideoStream.self, from: data) }
-    func createRoom(videoURL: String, isPrivate: Bool) async throws -> Room { let data = try await request("/api/rooms/", method: "POST", body: ["title": "", "vk_video_url": videoURL, "media_url": videoURL, "is_private": isPrivate]); return try decoder.decode(Room.self, from: data) }
+    func createRoom(videoURL: String, isPrivate: Bool, requestID: UUID = UUID()) async throws -> Room {
+        let data = try await request(
+            "/api/rooms/",
+            method: "POST",
+            body: [
+                "title": "",
+                "vk_video_url": videoURL,
+                "media_url": videoURL,
+                "is_private": isPrivate,
+                "creation_request_id": requestID.uuidString.lowercased(),
+            ]
+        )
+        return try decoder.decode(Room.self, from: data)
+    }
     func uploadRoomVideo(roomID: Int, fileURL: URL) async throws -> Room {
         guard let url = URL(string: "/api/rooms/\(roomID)/upload/", relativeTo: baseURL) else { throw APIError.invalidURL }
         let boundary = "PusheenUpload-\(UUID().uuidString)"
@@ -408,6 +422,16 @@ final class APIClient {
     func cancelFriendRequest(id: Int) async throws { _ = try await request("/api/friends/requests/", method: "POST", body: ["request_id": id, "action": "cancel"]) }
     func stickerPacks() async throws -> [TelegramStickerPack] { let data = try await request("/api/sticker-packs/"); return try decoder.decode([TelegramStickerPack].self, from: data) }
     func importStickerPack(url: String) async throws -> TelegramStickerPack { let data = try await request("/api/sticker-packs/", method: "POST", body: ["url": url], timeout: 180); return try decoder.decode(TelegramStickerPack.self, from: data) }
-    func stickerData(id: Int, preview: Bool = true) async throws -> Data { try await request("/api/stickers/\(id)/\(preview ? "preview" : "file")/") }
+    func stickerData(id: Int, preview: Bool = true) async throws -> Data {
+        let variant: StickerAssetCache.Variant = preview ? .preview : .file
+        let key = StickerAssetCache.Key(
+            serverNamespace: baseURL.absoluteString.lowercased(),
+            stickerID: id,
+            variant: variant
+        )
+        return try await StickerAssetCache.shared.data(for: key) { [self] in
+            try await request("/api/stickers/\(id)/\(preview ? "preview" : "file")/")
+        }
+    }
     func updateProfile(nickname: String? = nil, username: String? = nil, avatar: String? = nil) async throws -> Profile { var body: [String: Any] = [:]; if let nickname { body["nickname"] = nickname }; if let username { body["username"] = username }; if let avatar { body["avatar_data_url"] = avatar }; let data = try await request("/api/profile/", method: "PATCH", body: body); return try decoder.decode(Profile.self, from: data) }
 }

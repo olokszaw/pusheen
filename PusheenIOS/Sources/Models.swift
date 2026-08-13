@@ -33,8 +33,33 @@ struct AuthPayload: Codable { let token: String; let userId: Int; let username: 
     var profile: Profile { Profile(userId: userId, username: username, nickname: nickname, avatarDataUrl: avatarDataUrl) }
 }
 
-struct Playback: Codable, Hashable { var isPlaying: Bool; var positionSeconds: Double
-    enum CodingKeys: String, CodingKey { case isPlaying = "is_playing", positionSeconds = "position_seconds" }
+struct Playback: Codable, Hashable {
+    var isPlaying: Bool
+    var positionSeconds: Double
+    var serverUpdatedAt: String?
+    var sequence: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case isPlaying = "is_playing"
+        case positionSeconds = "position_seconds"
+        case serverUpdatedAt = "server_updated_at"
+        case sequence
+    }
+
+    init(isPlaying: Bool, positionSeconds: Double, serverUpdatedAt: String? = nil, sequence: Int64 = 0) {
+        self.isPlaying = isPlaying
+        self.positionSeconds = positionSeconds
+        self.serverUpdatedAt = serverUpdatedAt
+        self.sequence = sequence
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        isPlaying = try values.decodeIfPresent(Bool.self, forKey: .isPlaying) ?? false
+        positionSeconds = try values.decodeIfPresent(Double.self, forKey: .positionSeconds) ?? 0
+        serverUpdatedAt = try values.decodeIfPresent(String.self, forKey: .serverUpdatedAt)
+        sequence = try values.decodeIfPresent(Int64.self, forKey: .sequence) ?? 0
+    }
 }
 
 struct Room: Codable, Identifiable, Hashable {
@@ -160,6 +185,21 @@ struct FriendProfile: Codable, Identifiable, Hashable {
     let presenceSnapshotReceivedAt = Date()
     var id: Int { userId }
     enum CodingKeys: String, CodingKey { case username, nickname; case userId = "user_id"; case avatarDataURL = "avatar_data_url"; case isFriend = "is_friend"; case isOnline = "is_online"; case lastSeen = "last_seen"; case lastSeenAgeSeconds = "last_seen_age_seconds"; case activityVisible = "activity_visible" }
+}
+
+/// One causally-consistent room bootstrap response. The player consumes this
+/// before realtime listeners start, so a rejoining device never constructs an
+/// authoritative timeline at 00:00 while its member list is still stale.
+struct RoomSnapshot: Codable, Hashable {
+    let room: Room
+    let playback: Playback
+    let members: [RoomMember]
+    let snapshotAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case room, playback, members
+        case snapshotAt = "snapshot_at"
+    }
 }
 
 struct CurrentWatching: Codable, Hashable {

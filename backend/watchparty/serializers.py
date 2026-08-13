@@ -26,10 +26,11 @@ class PlaybackSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PlaybackState
-        fields = ("is_playing", "position_seconds", "server_updated_at")
+        fields = ("is_playing", "position_seconds", "sequence", "server_updated_at")
 
 
 class RoomSerializer(serializers.ModelSerializer):
+    creation_request_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
     owner_name = serializers.SerializerMethodField()
     members_count = serializers.SerializerMethodField()
     playback = PlaybackSerializer(read_only=True)
@@ -42,7 +43,7 @@ class RoomSerializer(serializers.ModelSerializer):
             "id", "owner", "owner_name", "title", "description", "theme",
             "is_private", "invite_code", "max_members", "allow_guests_control",
             "vk_video_url", "media_url", "source_type", "members_count",
-            "thumbnail_url", "playback", "created_at",
+            "thumbnail_url", "playback", "creation_request_id", "created_at",
         )
         read_only_fields = ("owner", "invite_code")
         extra_kwargs = {
@@ -118,9 +119,12 @@ class RoomMemberSerializer(serializers.ModelSerializer):
         return member.room.owner_id == member.user_id
 
     def get_is_online(self, member):
+        now = self.context.get("snapshot_now") or timezone.now()
         return bool(
+            member.active_connections > 0
+            and
             member.last_heartbeat_at
-            and member.last_heartbeat_at >= timezone.now() - timedelta(seconds=24)
+            and member.last_heartbeat_at >= now - timedelta(seconds=24)
         )
 
     def get_is_muted(self, member):

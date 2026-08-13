@@ -26,7 +26,19 @@ class Room(models.Model):
     thumbnail_url = models.TextField(blank=True, default="")
     duration_seconds = models.FloatField(default=0)
     genres = models.JSONField(default=list, blank=True)
+    # Stable client-generated key. A retry of the same create interaction must
+    # return this room instead of inserting a second one.
+    creation_request_id = models.UUIDField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("owner", "creation_request_id"),
+                condition=models.Q(creation_request_id__isnull=False),
+                name="unique_owner_room_creation_request",
+            )
+        ]
 
 
 @receiver(post_delete, sender=Room)
@@ -94,6 +106,10 @@ class PlaybackState(models.Model):
     room = models.OneToOneField(Room, on_delete=models.CASCADE, related_name="playback")
     is_playing = models.BooleanField(default=False)
     position_seconds = models.FloatField(default=0)
+    # Commands advance this generation monotonically. Periodic clock snapshots
+    # retain it, so a delayed snapshot from an older seek/play generation can
+    # never overwrite newer authoritative state.
+    sequence = models.PositiveBigIntegerField(default=0)
     # UTC time when position_seconds was authoritative; clients compensate for transport delay.
     updated_at = models.DateTimeField(auto_now=True)
 
