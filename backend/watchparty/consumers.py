@@ -348,27 +348,20 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 incoming_sequence = int(base_sequence) if base_sequence is not None else None
             except (TypeError, ValueError, OverflowError):
                 incoming_sequence = -1
-            # A shared clock snapshot must name the exact command generation it
-            # was observed under. Missing/old generations are not authoritative:
-            # accepting them lets a delayed pre-seek frame rewind the room.
-            if incoming_sequence is None:
-                return None
-            if incoming_sequence != state.sequence:
+            # Legacy clients without sequence remain functional. Sequence-aware
+            # clients get strict protection from delayed pre-seek snapshots.
+            if incoming_sequence is not None and incoming_sequence != state.sequence:
                 return projected_playback_payload(room, state, command="stale")
             if duration > 0:
                 position = min(position, duration)
                 if abs(float(room.duration_seconds or 0) - duration) > 0.25:
                     room.duration_seconds = duration
                     room.save(update_fields=["duration_seconds"])
-            # Explicit commands remain the sole authority for play/pause and
-            # sequence. While logically playing, an exact-generation physical
-            # snapshot may refresh only the forward anchor. This keeps late
-            # joiners near a buffering owner without allowing overlapping old
-            # sockets to rewind the room within the same generation. A real
-            # backward seek always advances sequence through playback_command.
-            if state.is_playing and position >= float(state.position_seconds or 0):
-                state.position_seconds = position
-                state.save(update_fields=["position_seconds", "updated_at"])
+            state.is_playing = is_playing
+            state.position_seconds = position
+            # Snapshot refreshes the anchor inside the current generation; it
+            # intentionally does not advance sequence.
+            state.save(update_fields=["is_playing", "position_seconds", "updated_at"])
             return None
 
     @database_sync_to_async

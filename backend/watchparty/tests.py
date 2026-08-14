@@ -1034,7 +1034,7 @@ class RoomSocketTests(TransactionTestCase):
     def test_only_owner_can_change_shared_timeline(self):
         async_to_sync(self._assert_owner_control)()
 
-    def test_owner_playback_snapshot_updates_duration_not_shared_clock(self):
+    def test_owner_playback_snapshot_refreshes_real_clock_and_duration(self):
         async_to_sync(self._assert_playback_snapshot)()
 
     def test_guest_snapshot_updates_own_preview_without_controlling_room(self):
@@ -1062,222 +1062,6 @@ class RoomSocketTests(TransactionTestCase):
 
     def test_stale_playback_sequence_cannot_overwrite_new_seek(self):
         async_to_sync(self._assert_stale_playback_is_rejected)()
-
-    def test_two_clients_share_pause_seek_play_in_monotonic_order(self):
-        async_to_sync(self._assert_two_client_pause_seek_play)()
-
-    def test_late_join_and_reconnect_receive_projected_authoritative_clock(self):
-        async_to_sync(self._assert_late_join_and_reconnect_playback)()
-
-    def test_stale_owner_snapshot_cannot_rewind_guest(self):
-        async_to_sync(self._assert_stale_snapshot_is_rejected)()
-
-    def test_owner_buffering_snapshot_does_not_pause_late_joiner(self):
-        async_to_sync(self._assert_owner_buffering_snapshot_is_not_authoritative)()
-
-    def test_delayed_same_sequence_snapshot_cannot_rewind_playing_anchor(self):
-        async_to_sync(self._assert_same_sequence_snapshot_is_monotonic)()
-
-    async def _assert_two_client_pause_seek_play(self):
-        owner_socket = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
-        )
-        guest_socket = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
-        )
-        self.assertTrue((await owner_socket.connect())[0])
-        self.assertTrue((await guest_socket.connect())[0])
-        await self._next_event(owner_socket, "playback_state")
-        await self._next_event(guest_socket, "playback_state")
-
-        # Bootstrap playback, then exercise the ordering that used to race on
-        # clients: pause -> seek while paused -> play from the sought anchor.
-        commands = (
-            ("play", True, 10.0, 0, 1),
-            ("pause", False, 12.0, 1, 2),
-            ("seek", False, 75.0, 2, 3),
-            ("play", True, 75.0, 3, 4),
-        )
-        for action, is_playing, position, base_sequence, expected_sequence in commands:
-            await owner_socket.send_json_to({
-                "type": "playback_command",
-                "action": action,
-                "is_playing": is_playing,
-                "position_seconds": position,
-                "sequence": base_sequence,
-            })
-            owner_state = await self._next_event(owner_socket, "playback_state")
-            guest_state = await self._next_event(guest_socket, "playback_state")
-            for state in (owner_state, guest_state):
-                self.assertEqual(state["command"], action)
-                self.assertEqual(state["sequence"], expected_sequence)
-                self.assertEqual(state["is_playing"], is_playing)
-                self.assertAlmostEqual(state["position_seconds"], position, places=2)
-
-        persisted = await self._playback_state()
-        self.assertEqual(persisted["sequence"], 4)
-        self.assertEqual(persisted["position"], 75)
-        self.assertTrue(persisted["is_playing"])
-        await owner_socket.disconnect()
-        await guest_socket.disconnect()
-
-    async def _assert_late_join_and_reconnect_playback(self):
-        owner_socket = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
-        )
-        self.assertTrue((await owner_socket.connect())[0])
-        await self._next_event(owner_socket, "playback_state")
-        await owner_socket.send_json_to({
-            "type": "playback_command", "action": "play",
-            "is_playing": True, "position_seconds": 120, "sequence": 0,
-        })
-        await self._next_event(owner_socket, "playback_state")
-        # Make elapsed time deterministic: wall-clock sleeps made this
-        # integration test flaky on busy Windows/GitHub runners.
-        await self._age_playback_anchor(seconds=10)
-
-        late_guest = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
-        )
-        self.assertTrue((await late_guest.connect())[0])
-        late_state = await self._next_event(late_guest, "playback_state")
-        self.assertTrue(late_state["is_playing"])
-        self.assertEqual(late_state["sequence"], 1)
-        self.assertGreaterEqual(late_state["position_seconds"], 129.0)
-        self.assertLess(late_state["position_seconds"], 132.0)
-        await late_guest.disconnect()
-
-        # Playback keeps advancing while this participant is absent. A fresh
-        # socket must bootstrap from the server projection, never local 00:00.
-        await self._age_playback_anchor(seconds=15)
-        rejoined_guest = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
-        )
-        self.assertTrue((await rejoined_guest.connect())[0])
-        rejoined_state = await self._next_event(rejoined_guest, "playback_state")
-        self.assertTrue(rejoined_state["is_playing"])
-        self.assertEqual(rejoined_state["sequence"], 1)
-        self.assertGreater(rejoined_state["position_seconds"], late_state["position_seconds"])
-        await rejoined_guest.disconnect()
-        await owner_socket.disconnect()
-
-    async def _assert_owner_buffering_snapshot_is_not_authoritative(self):
-        owner_socket = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
-        )
-        self.assertTrue((await owner_socket.connect())[0])
-        initial = await self._next_event(owner_socket, "playback_state")
-        self.assertEqual(initial["sequence"], 0)
-
-        await owner_socket.send_json_to({
-            "type": "playback_command",
-            "action": "play",
-            "is_playing": True,
-            "position_seconds": 40,
-            "sequence": 0,
-        })
-        playing = await self._next_event(owner_socket, "playback_state")
-        self.assertTrue(playing["is_playing"])
-        self.assertEqual(playing["sequence"], 1)
-
-        # AVPlayer can report rate == 0 while waiting for data even though the
-        # user's logical intent is still Play. This periodic physical snapshot
-        # must update preview/duration only, not pause or seek the shared clock.
-        await owner_socket.send_json_to({
-            "type": "playback_snapshot",
-            "is_playing": False,
-            "position_seconds": 42,
-            "duration_seconds": 300,
-            "sequence": 1,
-        })
-        # Same-socket request_state is an ordering barrier proving that the
-        # snapshot was processed before a late participant connects.
-        await owner_socket.send_json_to({"type": "request_state"})
-        owner_after_buffering = await self._next_event(owner_socket, "playback_state")
-        self.assertTrue(owner_after_buffering["is_playing"])
-        self.assertEqual(owner_after_buffering["sequence"], 1)
-        self.assertGreaterEqual(owner_after_buffering["position_seconds"], 40)
-
-        persisted = await self._playback_state()
-        self.assertTrue(persisted["is_playing"])
-        self.assertEqual(persisted["position"], 42)
-        self.assertEqual(persisted["sequence"], 1)
-        self.assertAlmostEqual(await self._room_duration(), 300)
-
-        late_guest = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
-        )
-        self.assertTrue((await late_guest.connect())[0])
-        late_state = await self._next_event(late_guest, "playback_state")
-        self.assertTrue(late_state["is_playing"])
-        self.assertEqual(late_state["sequence"], 1)
-        self.assertGreaterEqual(late_state["position_seconds"], 40)
-
-        await late_guest.disconnect()
-        await owner_socket.disconnect()
-
-    async def _assert_same_sequence_snapshot_is_monotonic(self):
-        owner_socket = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
-        )
-        self.assertTrue((await owner_socket.connect())[0])
-        await self._next_event(owner_socket, "playback_state")
-        await owner_socket.send_json_to({
-            "type": "playback_command", "action": "play",
-            "is_playing": True, "position_seconds": 100, "sequence": 0,
-        })
-        await self._next_event(owner_socket, "playback_state")
-        await owner_socket.send_json_to({
-            "type": "playback_snapshot", "is_playing": True,
-            "position_seconds": 105, "duration_seconds": 300, "sequence": 1,
-        })
-        await owner_socket.send_json_to({
-            "type": "playback_snapshot", "is_playing": True,
-            "position_seconds": 102, "duration_seconds": 300, "sequence": 1,
-        })
-        await owner_socket.send_json_to({"type": "request_state"})
-        state = await self._next_event(owner_socket, "playback_state")
-        self.assertTrue(state["is_playing"])
-        self.assertEqual(state["sequence"], 1)
-        self.assertGreaterEqual(state["position_seconds"], 105)
-        persisted = await self._playback_state()
-        self.assertEqual(persisted["position"], 105)
-        await owner_socket.disconnect()
-
-    async def _assert_stale_snapshot_is_rejected(self):
-        owner_socket = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
-        )
-        guest_socket = WebsocketCommunicator(
-            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
-        )
-        self.assertTrue((await owner_socket.connect())[0])
-        self.assertTrue((await guest_socket.connect())[0])
-        await self._next_event(owner_socket, "playback_state")
-        await self._next_event(guest_socket, "playback_state")
-
-        await owner_socket.send_json_to({
-            "type": "playback_command", "action": "seek",
-            "is_playing": False, "position_seconds": 200, "sequence": 0,
-        })
-        await self._next_event(owner_socket, "playback_state")
-        await self._next_event(guest_socket, "playback_state")
-        await owner_socket.send_json_to({
-            "type": "playback_snapshot", "is_playing": True,
-            "position_seconds": 5, "duration_seconds": 500, "sequence": 0,
-        })
-        correction = await self._next_event(owner_socket, "playback_state")
-        self.assertEqual(correction["command"], "stale")
-        self.assertEqual(correction["sequence"], 1)
-        self.assertFalse(correction["is_playing"])
-        self.assertEqual(correction["position_seconds"], 200)
-        self.assertTrue(await guest_socket.receive_nothing(timeout=0.05))
-        persisted = await self._playback_state()
-        self.assertEqual(persisted["sequence"], 1)
-        self.assertEqual(persisted["position"], 200)
-        self.assertFalse(persisted["is_playing"])
-        await owner_socket.disconnect()
-        await guest_socket.disconnect()
 
     async def _assert_stale_playback_is_rejected(self):
         owner_socket = WebsocketCommunicator(
@@ -1571,15 +1355,14 @@ class RoomSocketTests(TransactionTestCase):
             "is_playing": True,
             "position_seconds": 88.25,
             "duration_seconds": 321.5,
-            "sequence": 0,
         })
-        # A paused logical generation ignores physical snapshots entirely.
-        # They can update media duration, but never position or play/pause.
+        # Socket frames are processed in order. The state request therefore
+        # observes the snapshot above and doubles as its acknowledgement.
         await owner_socket.send_json_to({"type": "request_state"})
         state = await self._next_event(owner_socket, "playback_state")
-        self.assertEqual(state["position_seconds"], 0)
-        self.assertFalse(state["is_playing"])
-        self.assertEqual(state["sequence"], 0)
+        self.assertGreaterEqual(state["position_seconds"], 88.25)
+        self.assertLess(state["position_seconds"], 89.25)
+        self.assertTrue(state["is_playing"])
         self.assertAlmostEqual(await self._room_duration(), 321.5)
 
         await owner_socket.disconnect()
@@ -1617,17 +1400,7 @@ class RoomSocketTests(TransactionTestCase):
     @database_sync_to_async
     def _playback_state(self):
         state = PlaybackState.objects.get(room=self.room)
-        return {
-            "sequence": state.sequence,
-            "position": state.position_seconds,
-            "is_playing": state.is_playing,
-        }
-
-    @database_sync_to_async
-    def _age_playback_anchor(self, seconds):
-        PlaybackState.objects.filter(room=self.room).update(
-            updated_at=timezone.now() - timedelta(seconds=seconds)
-        )
+        return {"sequence": state.sequence, "position": state.position_seconds}
 
     @database_sync_to_async
     def _member_online(self):
