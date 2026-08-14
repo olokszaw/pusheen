@@ -1034,7 +1034,7 @@ class RoomSocketTests(TransactionTestCase):
     def test_only_owner_can_change_shared_timeline(self):
         async_to_sync(self._assert_owner_control)()
 
-    def test_owner_playback_snapshot_refreshes_real_clock_and_duration(self):
+    def test_owner_snapshot_cannot_pause_or_rewind_shared_clock(self):
         async_to_sync(self._assert_playback_snapshot)()
 
     def test_guest_snapshot_updates_own_preview_without_controlling_room(self):
@@ -1351,18 +1351,41 @@ class RoomSocketTests(TransactionTestCase):
         await self._next_event(owner_socket, "playback_state")
 
         await owner_socket.send_json_to({
+            "type": "playback_command",
+            "action": "play",
+            "is_playing": True,
+            "position_seconds": 40,
+            "sequence": 0,
+        })
+        playing = await self._next_event(owner_socket, "playback_state")
+        self.assertTrue(playing["is_playing"])
+        self.assertEqual(playing["sequence"], 1)
+
+        # AVPlayer can temporarily report not-playing while buffering. That
+        # physical sample may refresh the forward anchor and media duration,
+        # but it must never turn the shared room into Pause.
+        await owner_socket.send_json_to({
+            "type": "playback_snapshot",
+            "is_playing": False,
+            "position_seconds": 42.0,
+            "duration_seconds": 321.5,
+            "sequence": 1,
+        })
+        # A delayed frame from the same generation must not rewind the newer
+        # 42-second anchor and cause visible back/forward oscillation.
+        await owner_socket.send_json_to({
             "type": "playback_snapshot",
             "is_playing": True,
-            "position_seconds": 88.25,
+            "position_seconds": 39.0,
             "duration_seconds": 321.5,
+            "sequence": 1,
         })
-        # Socket frames are processed in order. The state request therefore
-        # observes the snapshot above and doubles as its acknowledgement.
         await owner_socket.send_json_to({"type": "request_state"})
         state = await self._next_event(owner_socket, "playback_state")
-        self.assertGreaterEqual(state["position_seconds"], 88.25)
-        self.assertLess(state["position_seconds"], 89.25)
+        self.assertGreaterEqual(state["position_seconds"], 42.0)
+        self.assertLess(state["position_seconds"], 43.0)
         self.assertTrue(state["is_playing"])
+        self.assertEqual(state["sequence"], 1)
         self.assertAlmostEqual(await self._room_duration(), 321.5)
 
         await owner_socket.disconnect()

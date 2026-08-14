@@ -348,20 +348,27 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 incoming_sequence = int(base_sequence) if base_sequence is not None else None
             except (TypeError, ValueError, OverflowError):
                 incoming_sequence = -1
-            # Legacy clients without sequence remain functional. Sequence-aware
-            # clients get strict protection from delayed pre-seek snapshots.
-            if incoming_sequence is not None and incoming_sequence != state.sequence:
+            # A physical AVPlayer snapshot is authoritative only inside the
+            # exact playback-command generation in which it was captured.
+            # Accepting an unversioned or delayed pre-seek frame lets it rewind
+            # the shared room clock after a newer play/pause/seek command.
+            if incoming_sequence is None:
+                return None
+            if incoming_sequence != state.sequence:
                 return projected_playback_payload(room, state, command="stale")
             if duration > 0:
                 position = min(position, duration)
                 if abs(float(room.duration_seconds or 0) - duration) > 0.25:
                     room.duration_seconds = duration
                     room.save(update_fields=["duration_seconds"])
-            state.is_playing = is_playing
-            state.position_seconds = position
-            # Snapshot refreshes the anchor inside the current generation; it
-            # intentionally does not advance sequence.
-            state.save(update_fields=["is_playing", "position_seconds", "updated_at"])
+            # Explicit owner commands are the only source of play/pause state.
+            # While logically playing, a same-generation physical frame may
+            # refresh only a forward-moving anchor. This handles buffering but
+            # prevents overlapping/late snapshots from pulling every viewer
+            # backward and forward. A real backward seek has a new sequence.
+            if state.is_playing and position >= float(state.position_seconds or 0):
+                state.position_seconds = position
+                state.save(update_fields=["position_seconds", "updated_at"])
             return None
 
     @database_sync_to_async
