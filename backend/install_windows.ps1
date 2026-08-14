@@ -22,6 +22,7 @@ $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 Invoke-Checked $venvPython @("--version")
 Invoke-Checked $venvPython @("-m", "pip", "install", "--upgrade", "pip")
 Invoke-Checked $venvPython @("-m", "pip", "install", "-r", "requirements.txt")
+& (Join-Path $PSScriptRoot "ensure_youtube_runtime_windows.ps1") -PythonExecutable $venvPython
 
 if (-not (Test-Path ".env")) {
     $secret = & $venvPython -c "import secrets; print(secrets.token_urlsafe(64))"

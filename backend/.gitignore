@@ -2,6 +2,7 @@
 .env.local
 .venv/
 .venv_verify/
+.tools/
 __pycache__/
 *.py[cod]
 db.sqlite3

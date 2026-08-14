@@ -67,6 +67,7 @@ jobs:
             watchparty.tests.RoomSocketTests.test_stale_playback_sequence_cannot_overwrite_new_seek \
             watchparty.tests.RoomSocketTests.test_owner_snapshot_cannot_pause_or_rewind_shared_clock \
             watchparty.tests.RoomSocketTests.test_guest_snapshot_updates_own_preview_without_controlling_room \
+            watchparty.tests.WebStreamSelectionTests \
             --verbosity 2
 
       - name: Install XcodeGen

@@ -9,7 +9,7 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.db import OperationalError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
@@ -22,6 +22,40 @@ from config.asgi import application
 from .models import ChatMessage, FriendLink, FriendRequest, MessageReaction, PlaybackState, Room, RoomBan, RoomInvitation, RoomMember, RoomMute, UserPresence, UserProfile, ViewingActivity
 from .views import _normalize_telegram_sticker_data
 from .presence import touch_presence
+from .video_stream import _select_web_format
+
+
+class WebStreamSelectionTests(SimpleTestCase):
+    def test_youtube_prefers_avplayer_codec_over_higher_resolution_av1(self):
+        selected = _select_web_format(
+            {
+                "formats": [
+                    {"url": "https://video/av1", "protocol": "https", "ext": "mp4", "vcodec": "av01.0.08M.08", "acodec": "opus", "height": 1080, "tbr": 2400},
+                    {"url": "https://video/h264", "protocol": "https", "ext": "mp4", "vcodec": "avc1.42001E", "acodec": "mp4a.40.2", "height": 720, "tbr": 1200},
+                ]
+            },
+            strict_avplayer=True,
+        )
+        self.assertEqual(selected["url"], "https://video/h264")
+
+    def test_h264_aac_hls_beats_incompatible_progressive_stream(self):
+        selected = _select_web_format(
+            {
+                "formats": [
+                    {"url": "https://video/vp9", "protocol": "https", "ext": "mp4", "vcodec": "vp09.00.31.08", "acodec": "opus", "height": 1080},
+                    {"url": "https://video/hls", "protocol": "m3u8_native", "ext": "mp4", "vcodec": "avc1.4d401f", "acodec": "mp4a.40.2", "height": 720},
+                ]
+            },
+            strict_avplayer=True,
+        )
+        self.assertEqual(selected["url"], "https://video/hls")
+
+    def test_youtube_rejects_incompatible_codecs_instead_of_black_screen(self):
+        with self.assertRaisesRegex(ValueError, "H.264/AAC"):
+            _select_web_format(
+                {"formats": [{"url": "https://video/vp9", "protocol": "https", "ext": "webm", "vcodec": "vp9", "acodec": "opus"}]},
+                strict_avplayer=True,
+            )
 
 
 class RoomApiTests(APITestCase):

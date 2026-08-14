@@ -1,3 +1,7 @@
+from pathlib import Path
+import shutil
+from urllib.parse import urlparse
+
 from yt_dlp import YoutubeDL
 
 from .media_sources import SOURCE_VK, SOURCE_WEB
@@ -18,6 +22,13 @@ def _extract(page_url, *, format_selector=None, inspect_playlist=False):
         "extract_flat": False,
         "socket_timeout": 20,
     }
+    bundled_deno = Path(__file__).resolve().parents[1] / ".tools" / "deno.exe"
+    if bundled_deno.exists():
+        options["js_runtimes"] = {"deno": {"path": str(bundled_deno)}}
+    elif shutil.which("deno"):
+        options["js_runtimes"] = {"deno": {}}
+    elif shutil.which("node"):
+        options["js_runtimes"] = {"node": {}}
     if format_selector:
         options["format"] = format_selector
     if inspect_playlist:
@@ -56,6 +67,58 @@ def _genres(info):
     return detect_genres(info.get("title"), info.get("description"), *(info.get("categories") or []), *(info.get("tags") or []))
 
 
+def _is_youtube_url(value):
+    host = (urlparse(str(value or "")).hostname or "").lower()
+    return host in {"youtu.be", "youtube.com"} or host.endswith((".youtu.be", ".youtube.com"))
+
+
+def _select_web_format(info, *, strict_avplayer=False):
+    """Select one muxed stream that iOS AVPlayer can decode."""
+    formats = list(info.get("formats") or [])
+    if info.get("url") and not formats:
+        formats = [info]
+
+    candidates = []
+    for item in formats:
+        protocol = str(item.get("protocol") or "").lower()
+        vcodec = str(item.get("vcodec") or "").lower()
+        acodec = str(item.get("acodec") or "").lower()
+        if not item.get("url") or not (protocol.startswith("http") or "m3u8" in protocol):
+            continue
+        if vcodec in {"", "none"} or acodec in {"", "none"}:
+            continue
+        candidates.append(item)
+
+    if not candidates:
+        raise ValueError("Сайт не отдал единый видео+аудио поток")
+
+    def is_h264(item):
+        return str(item.get("vcodec") or "").lower().startswith(("avc1", "avc3", "h264"))
+
+    def is_aac(item):
+        return str(item.get("acodec") or "").lower().startswith(("mp4a", "aac"))
+
+    compatible = [item for item in candidates if is_h264(item) and is_aac(item)]
+    if strict_avplayer and not compatible:
+        raise ValueError(
+            "YouTube не отдал совместимый H.264/AAC поток. "
+            "Обновите yt-dlp и установите Deno/EJS на сервере."
+        )
+    pool = compatible or candidates
+
+    def score(item):
+        protocol = str(item.get("protocol") or "").lower()
+        progressive = item.get("ext") == "mp4" and protocol.startswith("http") and "m3u8" not in protocol
+        hls = "m3u8" in protocol
+        return (
+            2 if progressive else (1 if hls else 0),
+            int(item.get("height") or 0),
+            float(item.get("tbr") or 0),
+        )
+
+    return max(pool, key=score)
+
+
 def resolve_vk_stream(page_url):
     info = _extract(page_url)
 
@@ -88,7 +151,11 @@ def resolve_web_stream(page_url):
         page_url,
         # AVPlayer requires a combined audio+video stream. Do not cap quality:
         # for YouTube and public sites choose the highest compatible stream.
-        format_selector="best[vcodec!=none][acodec!=none]",
+        format_selector=(
+            "best[ext=mp4][vcodec^=avc1][acodec^=mp4a]/"
+            "best[protocol*=m3u8][vcodec^=avc1][acodec^=mp4a]/"
+            "best[vcodec!=none][acodec!=none]"
+        ),
         inspect_playlist=True,
     )
     formats = [
@@ -113,7 +180,7 @@ def resolve_web_stream(page_url):
         height = int(item.get("height") or 0)
         return (1 if is_progressive_mp4 else 0, height, int(item.get("tbr") or 0))
 
-    selected = max(formats, key=score)
+    selected = _select_web_format(info, strict_avplayer=_is_youtube_url(page_url))
     return {
         "url": selected["url"],
         "title": info.get("title") or "Видео с сайта",
