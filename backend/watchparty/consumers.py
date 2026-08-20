@@ -30,12 +30,13 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         # waiting for an OS-level socket timeout.
         self.last_heartbeat = time.monotonic()
         self.explicit_leave_handled = False
+        self.room_open_announced = False
         self.heartbeat_watchdog = asyncio.create_task(self.watch_heartbeat())
         await self.send_json({"type": "playback_state", **await self.current_state()})
-        presence = await self.mark_connected()
-        await self.channel_layer.group_send(
-            self.group_name, {"type": "room.presence", "payload": presence}
-        )
+        # Transport establishment is not a semantic room entry: an automatic
+        # reconnect must update counters silently. The iOS view sends one
+        # explicit `room_opened` event only for its first connection.
+        await self.mark_connected()
 
     async def disconnect(self, _code):
         if hasattr(self, "heartbeat_watchdog"):
@@ -70,7 +71,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     async def finalize_disconnect_after_grace(self, disconnected_at):
         try:
             await asyncio.sleep(ROOM_DISCONNECT_GRACE_SECONDS)
-            presence = await self.finalize_disconnected(disconnected_at)
+            presence = await self.finalize_disconnected(disconnected_at, announce=False)
             if presence:
                 await self.channel_layer.group_send(
                     self.group_name,
@@ -87,6 +88,8 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({"type": "heartbeat_ack"})
         elif event == "request_state":
             await self.send_json({"type": "playback_state", **await self.current_state()})
+        elif event == "room_opened":
+            await self.handle_room_opened()
         elif event == "playback_command":
             await self.apply_playback_command(content)
         elif event == "playback_snapshot":
@@ -128,12 +131,25 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         )
         disconnected_at = await self.mark_disconnected_pending()
         if disconnected_at:
-            presence = await self.finalize_disconnected(disconnected_at)
+            presence = await self.finalize_disconnected(disconnected_at, announce=True)
             if presence:
                 await self.channel_layer.group_send(
                     self.group_name, {"type": "room.presence", "payload": presence}
                 )
         await self.close(code=1000)
+
+    async def handle_room_opened(self):
+        """Announce a real view entry exactly once, never a socket reconnect."""
+        if self.room_open_announced:
+            return
+        self.room_open_announced = True
+        presence = await self.mark_heartbeat()
+        if not presence:
+            return
+        presence["changed"] = True
+        await self.channel_layer.group_send(
+            self.group_name, {"type": "room.presence", "payload": presence}
+        )
 
     async def watch_heartbeat(self):
         try:
@@ -511,7 +527,7 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             return disconnected_at if member.active_connections == 0 else None
 
     @database_sync_to_async
-    def finalize_disconnected(self, disconnected_at):
+    def finalize_disconnected(self, disconnected_at, announce=False):
         with transaction.atomic():
             try:
                 member = RoomMember.objects.select_for_update(of=("self",)).select_related("user", "room").get(
@@ -537,7 +553,10 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 "avatar_data_url": profile.avatar_data_url if profile and profile.avatar_data_url else getattr(identity, "avatar_data_url", ""),
                 "is_owner": member.room.owner_id == member.user_id,
                 "is_online": False,
-                "changed": True,
+                # A timeout is a transport failure, not proof that the user
+                # closed the room. Keep the member list accurate but suppress
+                # false chat notices. Explicit leave passes announce=True.
+                "changed": bool(announce),
             }
 
     @database_sync_to_async

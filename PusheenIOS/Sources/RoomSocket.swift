@@ -22,6 +22,7 @@ final class RoomSocket: ObservableObject {
     private var receivedFirstEvent = false
     private var connectionGeneration = 0
     private var lastInboundUptime: TimeInterval = 0
+    private var shouldAnnounceRoomOpen = false
 
     func connect(baseURL: URL, roomID: Int, token: String) {
         close()
@@ -32,6 +33,7 @@ final class RoomSocket: ObservableObject {
         endpoint = components.url
         wasClosedByView = false
         reconnectDelay = 1
+        shouldAnnounceRoomOpen = true
         open()
     }
 
@@ -217,6 +219,10 @@ final class RoomSocket: ObservableObject {
                             self.reconnectDelay = 1
                             self.onConnectionGenerationReady?(generation)
                             self.onReady?()
+                            if self.shouldAnnounceRoomOpen {
+                                self.shouldAnnounceRoomOpen = false
+                                self.send(["type": "room_opened"])
+                            }
                         }
                         self.onEvent?(event)
                     }

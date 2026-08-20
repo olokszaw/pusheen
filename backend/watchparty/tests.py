@@ -1140,18 +1140,16 @@ class RoomSocketTests(TransactionTestCase):
         )
         self.assertTrue((await owner_socket.connect())[0])
         await self._next_event(owner_socket, "playback_state")
-        await self._next_event(owner_socket, "presence")
         self.assertTrue((await first_guest.connect())[0])
         await self._next_event(first_guest, "playback_state")
+        await first_guest.send_json_to({"type": "room_opened"})
         await self._next_event(owner_socket, "presence")
 
         # A VPN/tunnel handoff may establish the replacement before the old
         # TCP connection has delivered its disconnect callback.
         self.assertTrue((await replacement_guest.connect())[0])
         await self._next_event(replacement_guest, "playback_state")
-        replacement_notice = await self._next_event(owner_socket, "presence")
-        self.assertTrue(replacement_notice["is_online"])
-        self.assertFalse(replacement_notice["changed"])
+        self.assertTrue(await owner_socket.receive_nothing(timeout=0.05))
         await first_guest.disconnect()
         await asyncio.sleep(0.25)
         self.assertTrue(await self._member_online())
@@ -1168,6 +1166,7 @@ class RoomSocketTests(TransactionTestCase):
         await replacement_guest.disconnect()
         leave = await self._next_event(owner_socket, "presence")
         self.assertFalse(leave["is_online"])
+        self.assertFalse(leave["changed"])
         await owner_socket.disconnect()
 
     async def _assert_explicit_leave(self):
@@ -1179,9 +1178,9 @@ class RoomSocketTests(TransactionTestCase):
         )
         self.assertTrue((await owner_socket.connect())[0])
         await self._next_event(owner_socket, "playback_state")
-        await self._next_event(owner_socket, "presence")
         self.assertTrue((await guest_socket.connect())[0])
         await self._next_event(guest_socket, "playback_state")
+        await guest_socket.send_json_to({"type": "room_opened"})
         await self._next_event(owner_socket, "presence")
 
         await guest_socket.send_json_to({"type": "leave_room"})
@@ -1200,9 +1199,9 @@ class RoomSocketTests(TransactionTestCase):
         )
         self.assertTrue((await owner_socket.connect())[0])
         await self._next_event(owner_socket, "playback_state")
-        await self._next_event(owner_socket, "presence")
         self.assertTrue((await guest_socket.connect())[0])
         await self._next_event(guest_socket, "playback_state")
+        await guest_socket.send_json_to({"type": "room_opened"})
         initial_join = await self._next_event(owner_socket, "presence")
         self.assertTrue(initial_join["changed"])
         self.assertTrue(initial_join["is_online"])
@@ -1214,17 +1213,23 @@ class RoomSocketTests(TransactionTestCase):
         )
         self.assertTrue((await recovered_guest.connect())[0])
         await self._next_event(recovered_guest, "playback_state")
-        reconnect = await self._next_event(owner_socket, "presence")
-        self.assertTrue(reconnect["is_online"])
-        self.assertFalse(reconnect["changed"])
+        # The superseded transport may emit a typing=false cleanup. It is not
+        # a room leave and must never carry a semantic presence transition.
+        while not await owner_socket.receive_nothing(timeout=0.05):
+            transient = await owner_socket.receive_json_from(timeout=0.05)
+            self.assertFalse(
+                transient.get("type") == "presence"
+                and transient.get("changed") is True
+            )
         await asyncio.sleep(0.25)
         self.assertTrue(await owner_socket.receive_nothing(timeout=0.05))
 
-        # A real leave is still announced exactly once after the grace period.
+        # A transport timeout updates the online list but never pretends the
+        # user intentionally closed the room.
         await recovered_guest.disconnect()
         real_leave = await self._next_event(owner_socket, "presence")
         self.assertFalse(real_leave["is_online"])
-        self.assertTrue(real_leave["changed"])
+        self.assertFalse(real_leave["changed"])
         self.assertTrue(await owner_socket.receive_nothing(timeout=0.05))
         await owner_socket.disconnect()
 
