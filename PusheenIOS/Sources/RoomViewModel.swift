@@ -32,9 +32,11 @@ final class RoomViewModel: ObservableObject {
     private var timer: Any?
     private var itemStatusObservation: NSKeyValueObservation?
     private var playbackEndObserver: NSObjectProtocol?
+    private var playbackStalledObserver: NSObjectProtocol?
     private var audioObservers: [NSObjectProtocol] = []
     private var activityTask: Task<Void, Never>?
     private var playbackSnapshotTask: Task<Void, Never>?
+    private var playbackRecoveryTask: Task<Void, Never>?
     private var messageSyncTask: Task<Void, Never>?
     private var localTypingExpiryTask: Task<Void, Never>?
     private var remoteTypingExpiryTasks: [Int: Task<Void, Never>] = [:]
@@ -214,6 +216,28 @@ final class RoomViewModel: ObservableObject {
                     )
                 }
             }
+            if let playbackStalledObserver {
+                NotificationCenter.default.removeObserver(playbackStalledObserver)
+            }
+            playbackStalledObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemPlaybackStalled,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isStopped, self.isPlaying else { return }
+                    self.playbackRecoveryTask?.cancel()
+                    self.playbackRecoveryTask = Task { [weak self] in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        guard !Task.isCancelled, let self, !self.isStopped,
+                              self.isPlaying, self.pendingSeekPosition == nil else { return }
+                        self.player?.play()
+                        // Refresh the authoritative clock without making the
+                        // stalled participant publish its frozen local frame.
+                        self.scheduleSnapshotResync()
+                    }
+                }
+            }
             itemStatusObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] observedItem, _ in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
@@ -267,6 +291,10 @@ final class RoomViewModel: ObservableObject {
         itemStatusObservation = nil
         if let playbackEndObserver { NotificationCenter.default.removeObserver(playbackEndObserver) }
         playbackEndObserver = nil
+        if let playbackStalledObserver { NotificationCenter.default.removeObserver(playbackStalledObserver) }
+        playbackStalledObserver = nil
+        playbackRecoveryTask?.cancel()
+        playbackRecoveryTask = nil
         activityTask?.cancel()
         activityTask = nil
         playbackSnapshotTask?.cancel()
@@ -428,20 +456,7 @@ final class RoomViewModel: ObservableObject {
         }
         pendingSeekPosition = target
         position = target
-        player?.seek(
-            to: CMTime(seconds: target, preferredTimescale: 600),
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.seekGeneration == generation else { return }
-                self.pendingSeekPosition = nil
-                self.position = target
-                // Seeking out of the terminal state restores the player. Keep
-                // paused rooms paused and resume only when playback is active.
-                if self.isPlaying { self.player?.play() }
-            }
-        }
+        performAuthoritativeSeek(to: target, generation: generation)
         sendPlaybackCommand(action: "seek", isPlaying: isPlaying, position: target)
     }
 
@@ -458,17 +473,47 @@ final class RoomViewModel: ObservableObject {
         seekGeneration &+= 1
         let generation = seekGeneration
         player.pause()
+        performAuthoritativeSeek(to: target, generation: generation)
+    }
+
+    /// AVPlayer may cancel a seek while an HTTP asset is becoming playable.
+    /// Treating that cancellation as success was the late-join-at-00:00 bug.
+    /// Retry the same generation; a newer server command increments the
+    /// generation and invalidates every older completion/retry.
+    private func performAuthoritativeSeek(to target: Double, generation: Int, attempt: Int = 0) {
+        guard !isStopped, seekGeneration == generation,
+              let player, player.currentItem?.status == .readyToPlay else {
+            if seekGeneration == generation {
+                initialPlaybackPosition = target
+                pendingSeekPosition = nil
+            }
+            return
+        }
+        player.pause()
         player.seek(
             to: CMTime(seconds: target, preferredTimescale: 600),
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
-        ) { [weak self] _ in
+            toleranceBefore: CMTime(seconds: 0.12, preferredTimescale: 600),
+            toleranceAfter: CMTime(seconds: 0.12, preferredTimescale: 600)
+        ) { [weak self] finished in
             Task { @MainActor [weak self] in
                 guard let self, self.seekGeneration == generation, !self.isStopped else { return }
+                guard finished else {
+                    let delay = attempt < 7 ? 220 : 1_000
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .milliseconds(delay))
+                        guard !Task.isCancelled, let self,
+                              self.seekGeneration == generation, !self.isStopped else { return }
+                        self.performAuthoritativeSeek(
+                            to: target,
+                            generation: generation,
+                            attempt: attempt < 7 ? attempt + 1 : 0
+                        )
+                    }
+                    return
+                }
+                self.initialPlaybackPosition = nil
                 self.pendingSeekPosition = nil
                 self.position = target
-                // The server can send pause/play while this initial seek is
-                // pending. Use the latest state rather than the old snapshot.
                 if self.isPlaying { self.player?.play() } else { self.player?.pause() }
             }
         }
@@ -643,14 +688,8 @@ final class RoomViewModel: ObservableObject {
                 if PlaybackRejoinPolicy.recoversFromEnd(target: authoritative, duration: duration) {
                     hasReachedPlaybackEnd = false
                 }
-                player?.seek(to: CMTime(seconds: authoritative, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                    Task { @MainActor [weak self] in
-                        guard let self, self.seekGeneration == generation else { return }
-                        self.pendingSeekPosition = nil
-                        self.position = authoritative
-                        if self.isPlaying { self.player?.play() } else { self.player?.pause() }
-                    }
-                }
+                initialPlaybackPosition = nil
+                performAuthoritativeSeek(to: authoritative, generation: generation)
                 position = authoritative
             }
             hasAppliedInitialPlaybackState = true
@@ -840,7 +879,7 @@ final class RoomViewModel: ObservableObject {
     /// The current view and AVPlayer remain alive.
     func refreshAfterConnectivityRecovery() async {
         guard !isStopped else { return }
-        socket.reconnectNowIfNeeded()
+        socket.reconnectAuthoritatively()
         await recoverMessagesImmediately()
         scheduleSnapshotResync()
     }

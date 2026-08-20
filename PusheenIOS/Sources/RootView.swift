@@ -991,7 +991,10 @@ struct RoomView: View {
             ? 0
             : min(420, overlap.height)
         guard nextHeight > 0 else {
-            resetKeyboardLayout(animatedWith: notification)
+            // Candidate-bar, dictation and floating-keyboard transitions can
+            // briefly report an off-screen frame while the text view remains
+            // first responder. Only real will/did-hide notifications may clear
+            // focus; otherwise the keyboard appears and immediately vanishes.
             return
         }
         // Ignore keyboards presented by a profile/settings sheet above the
@@ -2779,14 +2782,23 @@ private struct PersistentChatTextField: UIViewRepresentable {
                 context.coordinator.parent.height = measured
             }
         }
-        if isFocused && isEnabled && !field.isFirstResponder { field.becomeFirstResponder() }
-        if !isFocused && field.isFirstResponder { field.resignFirstResponder() }
+        if isFocused && isEnabled {
+            context.coordinator.acceptingUIKitFocus = false
+            if !field.isFirstResponder { field.becomeFirstResponder() }
+        }
+        // UIKit becomes first responder before the SwiftUI binding propagates.
+        // A realtime room update in that tiny window used to run this branch
+        // with stale `false` and instantly kill the participant's keyboard.
+        if !isFocused && field.isFirstResponder && !context.coordinator.acceptingUIKitFocus {
+            field.resignFirstResponder()
+        }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ChatTextView, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? max(1, uiView.bounds.width), height: height)
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: PersistentChatTextField
+        var acceptingUIKitFocus = false
         init(parent: PersistentChatTextField) { self.parent = parent }
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
@@ -2796,8 +2808,18 @@ private struct PersistentChatTextField: UIViewRepresentable {
                 if abs(parent.height - measured) > 0.5 { parent.height = measured }
             }
         }
-        func textViewDidBeginEditing(_ textView: UITextView) { parent.isFocused = true }
-        func textViewDidEndEditing(_ textView: UITextView) { parent.isFocused = false }
+        func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+            acceptingUIKitFocus = true
+            return parent.isEnabled
+        }
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            acceptingUIKitFocus = true
+            parent.isFocused = true
+        }
+        func textViewDidEndEditing(_ textView: UITextView) {
+            acceptingUIKitFocus = false
+            parent.isFocused = false
+        }
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
             guard replacement == "\n" else { return true }
             parent.isFocused = true

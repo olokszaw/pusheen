@@ -15,11 +15,13 @@ final class RoomSocket: ObservableObject {
     private var endpoint: URL?
     private var reconnectTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
+    private var inboundWatchdogTask: Task<Void, Never>?
     private var wasClosedByView = false
     private var reconnectDelay: UInt64 = 1
     private var heartbeatCount = 0
     private var receivedFirstEvent = false
     private var connectionGeneration = 0
+    private var lastInboundUptime: TimeInterval = 0
 
     func connect(baseURL: URL, roomID: Int, token: String) {
         close()
@@ -91,6 +93,7 @@ final class RoomSocket: ObservableObject {
         wasClosedByView = true
         reconnectTask?.cancel(); reconnectTask = nil
         heartbeatTask?.cancel(); heartbeatTask = nil
+        inboundWatchdogTask?.cancel(); inboundWatchdogTask = nil
         guard connected, let socket = task,
               let data = try? JSONSerialization.data(withJSONObject: ["type": "leave_room"]),
               let text = String(data: data, encoding: .utf8) else {
@@ -114,10 +117,12 @@ final class RoomSocket: ObservableObject {
         wasClosedByView = true
         reconnectTask?.cancel(); reconnectTask = nil
         heartbeatTask?.cancel(); heartbeatTask = nil
+        inboundWatchdogTask?.cancel(); inboundWatchdogTask = nil
         closeTransport()
     }
 
     private func closeTransport() {
+        inboundWatchdogTask?.cancel(); inboundWatchdogTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         connected = false
@@ -130,9 +135,20 @@ final class RoomSocket: ObservableObject {
         open()
     }
 
+    /// Replaces even a socket that URLSession still labels as connected. VPN
+    /// changes and quick tunnels can leave a half-open transport which accepts
+    /// local sends but never receives another server event.
+    func reconnectAuthoritatively() {
+        guard !wasClosedByView, endpoint != nil else { return }
+        reconnectTask?.cancel(); reconnectTask = nil
+        connected = false
+        open()
+    }
+
     private func open() {
         guard !wasClosedByView, let endpoint else { return }
         heartbeatTask?.cancel()
+        inboundWatchdogTask?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
         connectionGeneration &+= 1
         let generation = connectionGeneration
@@ -144,8 +160,27 @@ final class RoomSocket: ObservableObject {
         connected = false
         heartbeatCount = 0
         receivedFirstEvent = false
+        lastInboundUptime = ProcessInfo.processInfo.systemUptime
         receive(from: socket, generation: generation)
         startHeartbeat()
+        startInboundWatchdog(for: socket)
+    }
+
+    private func startInboundWatchdog(for socket: URLSessionWebSocketTask) {
+        inboundWatchdogTask = Task { [weak self, weak socket] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                guard !Task.isCancelled, let self, let socket,
+                      self.task === socket else { return }
+                // The backend acknowledges every eight-second heartbeat. No
+                // inbound frame for 18 seconds means this transport is dead,
+                // even if URLSession has not surfaced an error yet.
+                if ProcessInfo.processInfo.systemUptime - self.lastInboundUptime > 18 {
+                    self.connectionFailed(for: socket)
+                    return
+                }
+            }
+        }
     }
 
     private func startHeartbeat() {
@@ -175,6 +210,7 @@ final class RoomSocket: ObservableObject {
                 if let text, let data = text.data(using: .utf8), let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     Task { @MainActor in
                         guard self.task === socket else { return }
+                        self.lastInboundUptime = ProcessInfo.processInfo.systemUptime
                         if !self.receivedFirstEvent {
                             self.receivedFirstEvent = true
                             self.connected = true
@@ -202,6 +238,7 @@ final class RoomSocket: ObservableObject {
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         heartbeatTask?.cancel(); heartbeatTask = nil
+        inboundWatchdogTask?.cancel(); inboundWatchdogTask = nil
         scheduleReconnect()
     }
 
