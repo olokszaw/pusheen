@@ -51,18 +51,9 @@ DATABASE_URL=postgresql://pulse:password@127.0.0.1:5432/pulse
 
 и запустите `migrate_sqlite_to_postgresql_windows.ps1`.
 
-For the public Cloudflare quick tunnel, leave the backend running and open a
-second PowerShell window:
-
-```powershell
-cd C:\Users\luiin\OneDrive\Desktop\rave\backend
-.\run_tunnel_windows.ps1
-```
-
-The app is configured for `try-believe-portable-prostate.trycloudflare.com`.
-Quick Tunnel URLs change after a restart; rebuild the Flutter app with
-`--dart-define=API_BASE_URL=https://NEW-URL.trycloudflare.com` when Cloudflare
-prints a different address.
+The production app uses `https://pulse.izanagi.online`. The existing Caddy
+process proxies that hostname to Daphne at `127.0.0.1:8000`; Cloudflare Tunnel
+is not required.
 
 For multi-user WebSockets start Redis locally (Docker is easiest):
 

@@ -272,7 +272,7 @@ final class SessionStore: ObservableObject {
 }
 
 final class APIClient {
-    static let fallbackBaseURLString = "https://try-believe-portable-prostate.trycloudflare.com"
+    static let fallbackBaseURLString = "https://pulse.izanagi.online"
     // The workflow writes this setting into Info.plist, so it remains available
     // after installation (unlike an environment variable available only at build time).
     let baseURL = URL(string: (Bundle.main.object(forInfoDictionaryKey: "PusheenAPIBaseURL") as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackBaseURLString)!

@@ -1,0 +1,7 @@
+app.izanagi.online {
+	reverse_proxy 127.0.0.1:8001
+}
+
+pulse.izanagi.online {
+	reverse_proxy 127.0.0.1:8000
+}

@@ -17,10 +17,7 @@ class ApiClient {
   static const _usernameKey = 'pulse_username';
   static const _nicknameKey = 'pulse_nickname';
   static const _avatarKey = 'pulse_avatar';
-  // Temporary Cloudflare tunnel. If it changes, rebuild with
-  // --dart-define=API_BASE_URL=https://new-address.trycloudflare.com
-  static const _defaultBaseUrl =
-      'https://bradford-advice-convinced-manager.trycloudflare.com';
+  static const _defaultBaseUrl = 'https://pulse.izanagi.online';
   static const _configuredBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: _defaultBaseUrl,
