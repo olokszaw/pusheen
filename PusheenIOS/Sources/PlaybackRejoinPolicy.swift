@@ -35,4 +35,28 @@ enum PlaybackRejoinPolicy {
     ) -> Bool {
         isOwner ? desiredIsPlaying : isActuallyAdvancing
     }
+
+    /// Periodic `state` heartbeats describe the clock but are not playback
+    /// commands. Seeking a buffering guest on every heartbeat discards the
+    /// buffer it has just accumulated and can keep that device frozen forever.
+    /// Entry/reconnect and explicit owner commands remain authoritative.
+    static func shouldSeekForRemoteState(
+        firstStateForConnection: Bool,
+        command: String,
+        isPlaying: Bool
+    ) -> Bool {
+        firstStateForConnection || command != "state" || !isPlaying
+    }
+
+    /// A participant that has made no progress for several seconds may use the
+    /// latest projected server clock as a one-off recovery target. Normal
+    /// buffering never reaches this path, so it is not disrupted by polling.
+    static func projectedRecoveryPosition(
+        anchor: Double,
+        elapsed: Double,
+        isPlaying: Bool,
+        knownDuration: Double
+    ) -> Double {
+        clampedPosition(anchor + (isPlaying ? max(0, elapsed) : 0), knownDuration: knownDuration)
+    }
 }

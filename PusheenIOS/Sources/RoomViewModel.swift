@@ -37,6 +37,7 @@ final class RoomViewModel: ObservableObject {
     private var activityTask: Task<Void, Never>?
     private var playbackSnapshotTask: Task<Void, Never>?
     private var playbackRecoveryTask: Task<Void, Never>?
+    private var playbackHealthTask: Task<Void, Never>?
     private var messageSyncTask: Task<Void, Never>?
     private var localTypingExpiryTask: Task<Void, Never>?
     private var remoteTypingExpiryTasks: [Int: Task<Void, Never>] = [:]
@@ -81,6 +82,12 @@ final class RoomViewModel: ObservableObject {
     private var seekGeneration = 0
     // AVPlayerItem remains terminal after DidPlayToEnd until an explicit seek.
     private var hasReachedPlaybackEnd = false
+    private var latestAuthoritativeAnchor: Double = 0
+    private var latestAuthoritativeAnchorUptime: TimeInterval = 0
+    private var latestAuthoritativeIsPlaying = false
+    private var lastHealthyPlaybackPosition: Double = 0
+    private var lastHealthyPlaybackUptime: TimeInterval = 0
+    private var lastStallRecoveryUptime: TimeInterval = 0
     // Quick Tunnel reconnects can repeat the same presence transition several
     // times. Keep genuine join/leave notices while suppressing identical noise.
     private var lastPresenceNoticeAt: [String: Date] = [:]
@@ -109,6 +116,12 @@ final class RoomViewModel: ObservableObject {
         initialPlaybackPosition = nil
         pendingSeekPosition = nil
         hasReachedPlaybackEnd = false
+        latestAuthoritativeAnchor = 0
+        latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
+        latestAuthoritativeIsPlaying = false
+        lastHealthyPlaybackPosition = 0
+        lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
+        lastStallRecoveryUptime = 0
         seekGeneration &+= 1
         do {
             configureAudioSession()
@@ -158,12 +171,14 @@ final class RoomViewModel: ObservableObject {
                 }
             }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
-            let stream = try await api.stream(roomID: room.id)
+            guard let stream = await loadStreamUntilAvailable(generation: generation) else { return }
             guard !isStopped, !Task.isCancelled else { return }
+            error = ""
             streamGenres = stream.genres
             guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
             let assetOptions: [String: Any] = stream.headers.isEmpty ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": stream.headers]
             let item = AVPlayerItem(asset: AVURLAsset(url: streamURL, options: assetOptions))
+            item.preferredForwardBufferDuration = 8
             let roomPlayer = AVPlayer(playerItem: item)
             roomPlayer.automaticallyWaitsToMinimizeStalling = true
             roomPlayer.isMuted = false
@@ -262,6 +277,7 @@ final class RoomViewModel: ObservableObject {
                 if value.isFinite && value > 0 && abs(self.duration - value) >= 0.1 { self.duration = value }
             }
             startPlaybackSnapshotReporting()
+            startPlaybackHealthMonitoring()
             startActivityReporting()
         } catch let caughtError { error = caughtError.localizedDescription }
     }
@@ -295,6 +311,8 @@ final class RoomViewModel: ObservableObject {
         playbackStalledObserver = nil
         playbackRecoveryTask?.cancel()
         playbackRecoveryTask = nil
+        playbackHealthTask?.cancel()
+        playbackHealthTask = nil
         activityTask?.cancel()
         activityTask = nil
         playbackSnapshotTask?.cancel()
@@ -476,6 +494,74 @@ final class RoomViewModel: ObservableObject {
         performAuthoritativeSeek(to: target, generation: generation)
     }
 
+    /// `/stream/` can transiently fail while Caddy/Daphne is reconnecting or
+    /// while an external source is being resolved. Keep the room, chat and
+    /// socket alive and retry instead of leaving a permanent spinner until the
+    /// user exits the room again.
+    private func loadStreamUntilAvailable(generation: Int) async -> VideoStream? {
+        var attempt = 0
+        while lifecycleActive, lifecycleGeneration == generation, !isStopped, !Task.isCancelled {
+            do {
+                return try await api.stream(roomID: room.id)
+            } catch {
+                self.error = "Видео временно недоступно, переподключаемся…"
+                attempt += 1
+                let delay = min(6.0, 0.6 * pow(1.7, Double(min(attempt, 6))))
+                try? await Task.sleep(for: .seconds(delay))
+            }
+        }
+        return nil
+    }
+
+    /// AVPlayer does not always emit `AVPlayerItemPlaybackStalled`; on some
+    /// HTTP range responses it simply remains in waiting state. Detect actual
+    /// lack of clock progress. First ask AVPlayer to resume, then (only after a
+    /// sustained stall) seek once to the projected authoritative room clock.
+    private func startPlaybackHealthMonitoring() {
+        playbackHealthTask?.cancel()
+        lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
+        lastHealthyPlaybackPosition = player?.currentTime().seconds ?? position
+        playbackHealthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let self, !self.isStopped else { return }
+                guard self.isPlaying else {
+                    self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
+                    self.lastHealthyPlaybackPosition = self.player?.currentTime().seconds ?? self.position
+                    continue
+                }
+                guard self.pendingSeekPosition == nil,
+                      let player = self.player,
+                      player.currentItem?.status == .readyToPlay else { continue }
+                let now = ProcessInfo.processInfo.systemUptime
+                let actual = player.currentTime().seconds
+                guard actual.isFinite else { continue }
+                if actual > self.lastHealthyPlaybackPosition + 0.3 {
+                    self.lastHealthyPlaybackPosition = actual
+                    self.lastHealthyPlaybackUptime = now
+                    continue
+                }
+                let stalledFor = now - self.lastHealthyPlaybackUptime
+                if stalledFor >= 3 {
+                    player.playImmediately(atRate: 1)
+                }
+                guard stalledFor >= 7, now - self.lastStallRecoveryUptime >= 7 else { continue }
+                self.lastStallRecoveryUptime = now
+                let target = PlaybackRejoinPolicy.projectedRecoveryPosition(
+                    anchor: self.latestAuthoritativeAnchor,
+                    elapsed: now - self.latestAuthoritativeAnchorUptime,
+                    isPlaying: self.latestAuthoritativeIsPlaying,
+                    knownDuration: self.duration
+                )
+                self.seekGeneration &+= 1
+                let generation = self.seekGeneration
+                self.pendingSeekPosition = target
+                self.performAuthoritativeSeek(to: target, generation: generation)
+                self.scheduleSnapshotResync()
+            }
+        }
+    }
+
     /// AVPlayer may cancel a seek while an HTTP asset is becoming playable.
     /// Treating that cancellation as success was the late-join-at-00:00 bug.
     /// Retry the same generation; a newer server command increments the
@@ -651,6 +737,9 @@ final class RoomViewModel: ObservableObject {
             // The creator receives their own broadcast too. Never seek it back to
             // an older server snapshot: that was the visible forward/back loop.
             let authoritative = compensatedPosition(remote: remote, isPlaying: isPlaying, event: event)
+            latestAuthoritativeAnchor = authoritative
+            latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
+            latestAuthoritativeIsPlaying = nextIsPlaying
             let itemIsReady = player?.currentItem?.status == .readyToPlay
             // The first state may arrive before AVPlayer has been constructed.
             // Persist it and seek the actual player as soon as its item is ready
@@ -676,8 +765,13 @@ final class RoomViewModel: ObservableObject {
             let actualPosition = player?.currentTime().seconds
             let localPosition = (actualPosition?.isFinite == true) ? (actualPosition ?? position) : position
             let drift = abs(localPosition - authoritative)
-            let shouldApplyPosition = firstStateForConnection
-                || (!isOwner && (command != "state" || !nextIsPlaying || drift > 2.5))
+            let shouldApplyPosition = firstStateForConnection || (
+                !isOwner && PlaybackRejoinPolicy.shouldSeekForRemoteState(
+                    firstStateForConnection: false,
+                    command: command,
+                    isPlaying: nextIsPlaying
+                )
+            )
             if shouldApplyPosition && drift > 0.85 {
                 // Invalidate an older initial seek before applying a newer
                 // command. Without this, the old completion could rewind a

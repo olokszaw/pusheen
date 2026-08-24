@@ -791,7 +791,7 @@ struct RoomView: View {
             // frame before the keyboard had actually finished closing.
             let roomHeight = max(playerHeight + 180, geometry.size.height - keyboardHeight - 14)
             let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
-            ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { chatFocused = false }
+            ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { dismissChatKeyboard() }
                 VStack(spacing: 0) {
                     Group {
                         if let player = model.player {
@@ -863,14 +863,17 @@ struct RoomView: View {
             if focused && controlsVisible {
                 withAnimation(.easeOut(duration: 0.18)) { controlsVisible = false }
             }
-            if !focused && keyboardHeight > 0 {
-                withAnimation(.easeOut(duration: 0.25)) { keyboardHeight = 0 }
+            if !focused {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             }
         }
         .onChange(of: scenePhase) { _, phase in
             // iOS can dismiss the software keyboard while the app is inactive
             // without delivering the complete will-hide notification sequence.
-            if phase != .active { resetKeyboardLayout() }
+            if phase != .active {
+                chatFocused = false
+                resetKeyboardLayout()
+            }
         }
         .onChange(of: model.wasRemovedFromRoom) { _, removed in
             if removed { leaveRoom() }
@@ -885,7 +888,12 @@ struct RoomView: View {
             .sheet(isPresented: $showMembers) { MembersSheet(room: room, members: model.activeMembers, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
     }
     private func leaveRoom() {
+        dismissChatKeyboard()
         dismiss()
+    }
+    private func dismissChatKeyboard() {
+        chatFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
     private var playerControls: some View {
@@ -2783,13 +2791,13 @@ private struct PersistentChatTextField: UIViewRepresentable {
             }
         }
         if isFocused && isEnabled {
-            context.coordinator.acceptingUIKitFocus = false
             if !field.isFirstResponder { field.becomeFirstResponder() }
         }
-        // UIKit becomes first responder before the SwiftUI binding propagates.
-        // A realtime room update in that tiny window used to run this branch
-        // with stale `false` and instantly kill the participant's keyboard.
-        if !isFocused && field.isFirstResponder && !context.coordinator.acceptingUIKitFocus {
+        // Binding updates can briefly lag UIKit during room/chat redraws. Do
+        // not resign for a stale `false`; explicit room/accessory dismissal
+        // sends resignFirstResponder. A disabled composer is the only state
+        // that must force editing to end here.
+        if !isEnabled && field.isFirstResponder {
             field.resignFirstResponder()
         }
     }
@@ -2798,7 +2806,6 @@ private struct PersistentChatTextField: UIViewRepresentable {
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: PersistentChatTextField
-        var acceptingUIKitFocus = false
         init(parent: PersistentChatTextField) { self.parent = parent }
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
@@ -2809,15 +2816,12 @@ private struct PersistentChatTextField: UIViewRepresentable {
             }
         }
         func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
-            acceptingUIKitFocus = true
             return parent.isEnabled
         }
         func textViewDidBeginEditing(_ textView: UITextView) {
-            acceptingUIKitFocus = true
             parent.isFocused = true
         }
         func textViewDidEndEditing(_ textView: UITextView) {
-            acceptingUIKitFocus = false
             parent.isFocused = false
         }
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {

@@ -24,6 +24,22 @@ precondition(PlaybackRejoinPolicy.snapshotIsPlaying(
 precondition(!PlaybackRejoinPolicy.snapshotIsPlaying(
     isOwner: false, desiredIsPlaying: true, isActuallyAdvancing: false
 ))
+
+precondition(!PlaybackRejoinPolicy.shouldSeekForRemoteState(
+    firstStateForConnection: false, command: "state", isPlaying: true
+))
+precondition(PlaybackRejoinPolicy.shouldSeekForRemoteState(
+    firstStateForConnection: true, command: "state", isPlaying: true
+))
+precondition(PlaybackRejoinPolicy.shouldSeekForRemoteState(
+    firstStateForConnection: false, command: "seek", isPlaying: true
+))
+precondition(PlaybackRejoinPolicy.projectedRecoveryPosition(
+    anchor: 100, elapsed: 7, isPlaying: true, knownDuration: 500
+) == 107)
+precondition(PlaybackRejoinPolicy.projectedRecoveryPosition(
+    anchor: 498, elapsed: 7, isPlaying: true, knownDuration: 500
+) == 500)
 precondition(!PlaybackRejoinPolicy.snapshotIsPlaying(
     isOwner: true, desiredIsPlaying: false, isActuallyAdvancing: true
 ))
