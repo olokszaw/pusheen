@@ -4219,7 +4219,9 @@ private struct ViewingInsightsPager: View {
     }
 
     private var pageHeight: CGFloat {
-        page == 1 ? 360 : 278
+        if page == 1 { return 360 }
+        if page == 0 { return stats?.genres.count == 1 ? 164 : 228 }
+        return 238
     }
 
     var body: some View {
@@ -4388,16 +4390,21 @@ private struct GenreOnlyCard: View {
 
     var body: some View {
         let genres = stats?.genres ?? []
-        VStack(alignment: .leading, spacing: 12) {
+        let hasSingleGenre = genres.count == 1
+        VStack(alignment: .leading, spacing: hasSingleGenre ? 6 : 10) {
             Text("Жанры").font(.headline)
             if genres.isEmpty {
                 ContentUnavailableView("Жанров пока нет", systemImage: "film", description: Text("После первого фильма здесь появятся твои предпочтения."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
-                    .frame(width: 158, height: 158)
+                    .frame(width: hasSingleGenre ? 126 : 146, height: hasSingleGenre ? 126 : 146)
                     .frame(maxWidth: .infinity)
-                GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
+                // The donut centre already shows the only genre and its
+                // percentage. Do not duplicate "Другое 100%" below it.
+                if !hasSingleGenre {
+                    GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -4978,8 +4985,10 @@ private struct GenrePreferenceOrb: View {
     @Binding var selectedGenreID: String?
     var body: some View {
         let total = max(1, genres.reduce(0) { $0 + $1.seconds })
-        let selected = genres.first(where: { $0.id == selectedGenreID })
+        let selected = genres.first(where: { $0.id == selectedGenreID }) ?? (genres.count == 1 ? genres.first : nil)
         GeometryReader { proxy in
+            let diameter = min(proxy.size.width, proxy.size.height)
+            let centreDiameter = min(86, diameter * 0.50)
             ZStack {
                 ForEach(Array(genres.enumerated()), id: \.element.id) { index, genre in
                     let before = genres.prefix(index).reduce(0) { $0 + $1.seconds }
@@ -4992,7 +5001,7 @@ private struct GenrePreferenceOrb: View {
                         .shadow(color: color.opacity(genre.id == selected?.id ? 0.42 : 0.16), radius: genre.id == selected?.id ? 10 : 4)
                         .scaleEffect(genre.id == selected?.id ? 1.045 : 1)
                 }
-                Circle().fill(.white.opacity(0.045)).frame(width: 86, height: 86).liquidCard(Circle())
+                Circle().fill(.white.opacity(0.045)).frame(width: centreDiameter, height: centreDiameter).liquidCard(Circle())
                 VStack(spacing: 2) {
                     Text(selected?.name ?? "Жанры").font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
                     if let selected {
@@ -5000,7 +5009,7 @@ private struct GenrePreferenceOrb: View {
                     } else {
                         Text("Зажми и проведи").font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
                     }
-                }.frame(width: 74)
+                }.frame(width: centreDiameter * 0.84)
             }
             .contentShape(Circle())
             .highPriorityGesture(
