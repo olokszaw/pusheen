@@ -4220,12 +4220,16 @@ private struct ViewingInsightsPager: View {
 
     private var pageHeight: CGFloat {
         if page == 1 { return 360 }
-        if page == 0 { return stats?.genres.count == 1 ? 164 : 228 }
+        if page == 0 { return stats?.genres.count == 1 ? 92 : 228 }
         return 238
     }
 
+    private var indicatorHeight: CGFloat {
+        page == 0 && stats?.genres.count == 1 ? 18 : 30
+    }
+
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: page == 0 && stats?.genres.count == 1 ? 4 : 10) {
             GeometryReader { proxy in
                 let width = max(1, proxy.size.width)
                 let isHorizontalDrag = abs(dragTranslation) > 0
@@ -4293,7 +4297,7 @@ private struct ViewingInsightsPager: View {
                     }
                 )
             }
-            .frame(width: 58, height: 30)
+            .frame(width: 58, height: indicatorHeight)
             .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.76), value: indicatorPressed)
             .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.80), value: page)
         }
@@ -4391,18 +4395,37 @@ private struct GenreOnlyCard: View {
     var body: some View {
         let genres = stats?.genres ?? []
         let hasSingleGenre = genres.count == 1
-        VStack(alignment: .leading, spacing: hasSingleGenre ? 6 : 10) {
-            Text("Жанры").font(.headline)
-            if genres.isEmpty {
+        Group {
+            if let genre = genres.first, hasSingleGenre {
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Жанры").font(.headline)
+                        Text(genre.name)
+                            .font(.title3.bold())
+                            .lineLimit(1)
+                        Text("\(genre.percent)%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 10)
+                    ZStack {
+                        Circle().stroke(.white.opacity(0.10), lineWidth: 18)
+                        Circle().stroke(GenrePalette.color(for: genre.name).opacity(0.58), lineWidth: 18)
+                        Circle().stroke(.white.opacity(0.28), lineWidth: 0.8)
+                    }
+                    .frame(width: 72, height: 72)
+                    .shadow(color: GenrePalette.color(for: genre.name).opacity(0.22), radius: 8)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if genres.isEmpty {
                 ContentUnavailableView("Жанров пока нет", systemImage: "film", description: Text("После первого фильма здесь появятся твои предпочтения."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
-                    .frame(width: hasSingleGenre ? 126 : 146, height: hasSingleGenre ? 126 : 146)
-                    .frame(maxWidth: .infinity)
-                // The donut centre already shows the only genre and its
-                // percentage. Do not duplicate "Другое 100%" below it.
-                if !hasSingleGenre {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Жанры").font(.headline)
+                    GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
+                        .frame(width: 146, height: 146)
+                        .frame(maxWidth: .infinity)
                     GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
                 }
             }
@@ -5001,7 +5024,10 @@ private struct GenrePreferenceOrb: View {
                         .shadow(color: color.opacity(genre.id == selected?.id ? 0.42 : 0.16), radius: genre.id == selected?.id ? 10 : 4)
                         .scaleEffect(genre.id == selected?.id ? 1.045 : 1)
                 }
-                Circle().fill(.white.opacity(0.045)).frame(width: centreDiameter, height: centreDiameter).liquidCard(Circle())
+                Circle()
+                    .fill(Color.black.opacity(0.22))
+                    .frame(width: centreDiameter, height: centreDiameter)
+                    .overlay(Circle().stroke(.white.opacity(0.14), lineWidth: 0.8))
                 VStack(spacing: 2) {
                     Text(selected?.name ?? "Жанры").font(.caption.weight(.bold)).lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.70)
                     if let selected {
