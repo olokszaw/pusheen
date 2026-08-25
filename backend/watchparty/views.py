@@ -297,7 +297,7 @@ def _current_watching_payload(request, target):
             except Exception:
                 stream = {}
             else:
-                cache.set(cache_key, stream, timeout=20 * 60)
+                cache.set(cache_key, stream, timeout=90)
         preview_url = str(stream.get("url") or "")
         preview_headers = dict(stream.get("headers") or {})
         title = str(stream.get("title") or title)
@@ -524,8 +524,16 @@ def register(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def account_login(request):
+    submitted_username = request.data.get("username", "").strip()
+    # Registration and availability checks are case-insensitive, so login must
+    # resolve the same canonical account instead of rejecting @Alice as @alice.
+    canonical_username = (
+        get_user_model().objects.filter(username__iexact=submitted_username)
+        .values_list("username", flat=True)
+        .first()
+    )
     user = authenticate(
-        username=request.data.get("username", "").strip(),
+        username=canonical_username or submitted_username,
         password=request.data.get("password", ""),
     )
     if not user:
@@ -1147,6 +1155,8 @@ def room_stream(request, room_id):
     source_type = detect_media_source(room.vk_video_url)
     # v4 invalidates streams resolved before AVPlayer codec-aware selection.
     cache_key = f"room-stream:v4:{source_type}:{room.id}:{room.vk_video_url}"
+    if request.query_params.get("refresh") == "1":
+        cache.delete(cache_key)
     stream = cache.get(cache_key)
     if stream is None:
         try:
@@ -1156,7 +1166,9 @@ def room_stream(request, room_id):
                 {"detail": f"Не удалось получить поток {source_type.upper()}: {error}", "source_type": source_type, "fallback": "embedded_page" if source_type == "web" else None},
                 status=502,
             )
-        cache.set(cache_key, stream, timeout=20 * 60)
+        # Extracted CDN URLs are often signed and short-lived. Keeping one for
+        # twenty minutes made re-entering a room reuse an already expired URL.
+        cache.set(cache_key, stream, timeout=90)
     changed = []
     resolved_title = str(stream.get("title") or "").strip()[:80]
     thumbnail = str(stream.get("thumbnail") or "").strip()

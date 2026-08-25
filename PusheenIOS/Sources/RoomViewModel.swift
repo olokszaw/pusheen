@@ -87,7 +87,7 @@ final class RoomViewModel: ObservableObject {
     private var latestAuthoritativeIsPlaying = false
     private var lastHealthyPlaybackPosition: Double = 0
     private var lastHealthyPlaybackUptime: TimeInterval = 0
-    private var lastStallRecoveryUptime: TimeInterval = 0
+    private var hasAttemptedStallSeek = false
     // Quick Tunnel reconnects can repeat the same presence transition several
     // times. Keep genuine join/leave notices while suppressing identical noise.
     private var lastPresenceNoticeAt: [String: Date] = [:]
@@ -121,41 +121,14 @@ final class RoomViewModel: ObservableObject {
         latestAuthoritativeIsPlaying = false
         lastHealthyPlaybackPosition = 0
         lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
-        lastStallRecoveryUptime = 0
+        hasAttemptedStallSeek = false
         seekGeneration &+= 1
         do {
             configureAudioSession()
-            async let history: [ChatMessage]? = {
-                try? await api.messages(roomID: room.id)
-            }()
-            async let bootstrapSnapshot: RoomSnapshot? = {
-                try? await api.roomSnapshot(roomID: room.id)
-            }()
-            async let fallbackPeople: [RoomMember]? = {
-                try? await api.members(roomID: room.id)
-            }()
-            // Chat is independent from the player. A bad/slow video source
-            // must never make a persisted conversation look empty.
-            if let loadedHistory = await history,
-               lifecycleActive, lifecycleGeneration == generation, !isStopped {
-                messages = loadedHistory
-            }
-            if let snapshot = await bootstrapSnapshot {
-                guard lifecycleActive, lifecycleGeneration == generation, !isStopped else { return }
-                applyBootstrapSnapshot(snapshot, authoritativeForConnection: true)
-            } else if let loadedPeople = await fallbackPeople {
-                guard lifecycleActive, lifecycleGeneration == generation, !isStopped else { return }
-                members = loadedPeople
-                isMuted = members.first(where: { $0.userId == currentUserID })?.isMuted ?? false
-            }
-            guard !isStopped, !Task.isCancelled else { return }
-            // Keep retrying history even if the video endpoint is unavailable.
-            // When internet returns, messages appear without reopening the room.
+            // Chat, membership and playback bootstrap must never block media
+            // construction. Previously a slow /messages/ request delayed the
+            // WebSocket and /stream/, leaving a permanent-looking spinner.
             startMessageSync()
-            // Chat must not wait for media resolving or AVPlayer buffering.
-            // Previously this socket was opened only after /stream/ finished,
-            // so participants on a slow video source saw every message via the
-            // three-second HTTP polling fallback instead of in real time.
             socket.onEvent = { [weak self] event in self?.apply(event) }
             socket.onConnectionGenerationReady = { [weak self] connectionGeneration in
                 guard let self, self.lifecycleActive, !self.isStopped else { return }
@@ -171,6 +144,25 @@ final class RoomViewModel: ObservableObject {
                 }
             }
             socket.connect(baseURL: api.baseURL, roomID: room.id, token: token)
+            Task { [weak self] in
+                guard let self else { return }
+                if let snapshot = try? await self.api.roomSnapshot(roomID: self.room.id) {
+                    guard self.lifecycleActive, self.lifecycleGeneration == generation,
+                          !self.isStopped else { return }
+                    // If WebSocket state already won the race, this slower
+                    // HTTP bootstrap is only supplemental. Marking it as a new
+                    // connection authority would seek the owner backwards.
+                    self.applyBootstrapSnapshot(
+                        snapshot,
+                        authoritativeForConnection: self.awaitingConnectionPlaybackState
+                    )
+                } else if let loadedPeople = try? await self.api.members(roomID: self.room.id) {
+                    guard self.lifecycleActive, self.lifecycleGeneration == generation,
+                          !self.isStopped else { return }
+                    self.members = loadedPeople
+                    self.isMuted = loadedPeople.first(where: { $0.userId == self.currentUserID })?.isMuted ?? false
+                }
+            }
             guard let stream = await loadStreamUntilAvailable(generation: generation) else { return }
             guard !isStopped, !Task.isCancelled else { return }
             error = ""
@@ -502,7 +494,15 @@ final class RoomViewModel: ObservableObject {
         var attempt = 0
         while lifecycleActive, lifecycleGeneration == generation, !isStopped, !Task.isCancelled {
             do {
-                return try await api.stream(roomID: room.id)
+                return try await api.stream(roomID: room.id, refresh: attempt > 0)
+            } catch APIError.http(let status, let detail) where (400..<500).contains(status) {
+                // Membership/ban/bad-room failures are permanent for this
+                // screen. Retrying them forever leaves an unexplained spinner.
+                self.error = detail
+                return nil
+            } catch APIError.unauthorized {
+                self.error = "Сессия закончилась"
+                return nil
             } catch {
                 self.error = "Видео временно недоступно, переподключаемся…"
                 attempt += 1
@@ -528,6 +528,7 @@ final class RoomViewModel: ObservableObject {
                 guard self.isPlaying else {
                     self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
                     self.lastHealthyPlaybackPosition = self.player?.currentTime().seconds ?? self.position
+                    self.hasAttemptedStallSeek = false
                     continue
                 }
                 guard self.pendingSeekPosition == nil,
@@ -539,14 +540,21 @@ final class RoomViewModel: ObservableObject {
                 if actual > self.lastHealthyPlaybackPosition + 0.3 {
                     self.lastHealthyPlaybackPosition = actual
                     self.lastHealthyPlaybackUptime = now
+                    self.hasAttemptedStallSeek = false
                     continue
                 }
                 let stalledFor = now - self.lastHealthyPlaybackUptime
                 if stalledFor >= 3 {
                     player.playImmediately(atRate: 1)
                 }
-                guard stalledFor >= 7, now - self.lastStallRecoveryUptime >= 7 else { continue }
-                self.lastStallRecoveryUptime = now
+                // Exactly one recovery seek per continuous stall. Repeating
+                // this every few seconds makes AVPlayer jump to an earlier
+                // keyframe over and over, which was the visible 6–7 rewind bug.
+                guard PlaybackRejoinPolicy.shouldAttemptStallSeek(
+                    stalledFor: stalledFor,
+                    alreadyAttempted: self.hasAttemptedStallSeek
+                ) else { continue }
+                self.hasAttemptedStallSeek = true
                 let target = PlaybackRejoinPolicy.projectedRecoveryPosition(
                     anchor: self.latestAuthoritativeAnchor,
                     elapsed: now - self.latestAuthoritativeAnchorUptime,

@@ -1025,6 +1025,27 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.data["url"], "https://cdn.example/video.mp4")
         resolver.assert_called_once_with(room.vk_video_url, "vk")
 
+        cached = self.client.get(f"/api/rooms/{room.id}/stream/")
+        self.assertEqual(cached.status_code, 200)
+        self.assertEqual(resolver.call_count, 1)
+
+        refreshed = self.client.get(f"/api/rooms/{room.id}/stream/?refresh=1")
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertEqual(resolver.call_count, 2)
+
+    def test_login_username_is_case_insensitive(self):
+        users = get_user_model()
+        users.objects.create_user(username="MixedCaseUser", password="correct-password")
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"username": "mixedcaseuser", "password": "correct-password"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["username"], "MixedCaseUser")
+
     @patch("watchparty.views.resolve_media_stream")
     def test_web_room_dispatches_to_web_resolver(self, resolver):
         resolver.return_value = {

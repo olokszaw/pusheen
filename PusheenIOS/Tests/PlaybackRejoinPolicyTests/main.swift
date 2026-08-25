@@ -40,6 +40,15 @@ precondition(PlaybackRejoinPolicy.projectedRecoveryPosition(
 precondition(PlaybackRejoinPolicy.projectedRecoveryPosition(
     anchor: 498, elapsed: 7, isPlaying: true, knownDuration: 500
 ) == 500)
+precondition(!PlaybackRejoinPolicy.shouldAttemptStallSeek(
+    stalledFor: 6.9, alreadyAttempted: false
+))
+precondition(PlaybackRejoinPolicy.shouldAttemptStallSeek(
+    stalledFor: 7, alreadyAttempted: false
+))
+precondition(!PlaybackRejoinPolicy.shouldAttemptStallSeek(
+    stalledFor: 30, alreadyAttempted: true
+))
 precondition(!PlaybackRejoinPolicy.snapshotIsPlaying(
     isOwner: true, desiredIsPlaying: false, isActuallyAdvancing: true
 ))

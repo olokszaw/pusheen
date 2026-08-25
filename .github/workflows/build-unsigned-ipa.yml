@@ -55,6 +55,8 @@ jobs:
             watchparty.tests.RoomApiTests.test_create_room_keeps_one_invite_code \
             watchparty.tests.RoomApiTests.test_room_creation_request_is_idempotent \
             watchparty.tests.RoomApiTests.test_room_snapshot_projects_playing_clock_for_rejoin \
+            watchparty.tests.RoomApiTests.test_member_can_resolve_managed_stream \
+            watchparty.tests.RoomApiTests.test_login_username_is_case_insensitive \
             watchparty.tests.RoomApiTests.test_guest_joins_existing_room_without_new_code \
             watchparty.tests.RoomApiTests.test_gallery_room_upload_stream_and_delete_are_one_consistent_flow \
             watchparty.tests.RoomApiTests.test_room_invitation_full_flow_and_duplicate_protection \

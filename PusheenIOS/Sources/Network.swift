@@ -3,11 +3,12 @@ import UniformTypeIdentifiers
 import AVFoundation
 
 enum APIError: LocalizedError {
-    case invalidURL, unauthorized, server(String)
+    case invalidURL, unauthorized, http(Int, String), server(String)
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "Неверный адрес сервера"
         case .unauthorized: return "Сессия закончилась"
+        case .http(_, let text): return text
         case .server(let text): return text
         }
     }
@@ -297,10 +298,16 @@ final class APIClient {
             throw APIError.server("Unexpected server response")
         }
         guard 200..<300 ~= http.statusCode else {
-            if authenticated, http.statusCode == 401 || http.statusCode == 403 {
+            // 401 means the token is no longer valid. 403 is an ordinary
+            // resource-level denial (private room, ban, owner-only action) and
+            // must not log the whole account out.
+            if authenticated, http.statusCode == 401 {
                 throw APIError.unauthorized
             }
             let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String ?? "Ошибка сервера"
+            if 400..<500 ~= http.statusCode {
+                throw APIError.http(http.statusCode, detail)
+            }
             throw APIError.server(detail)
         }
         return data
@@ -333,7 +340,11 @@ final class APIClient {
     func members(roomID: Int) async throws -> [RoomMember] { let data = try await request("/api/rooms/\(roomID)/members/"); return try decoder.decode([RoomMember].self, from: data) }
     func roomSnapshot(roomID: Int) async throws -> RoomSnapshot { let data = try await request("/api/rooms/\(roomID)/snapshot/"); return try decoder.decode(RoomSnapshot.self, from: data) }
     func moderateMember(roomID: Int, userID: Int, action: String) async throws { _ = try await request("/api/rooms/\(roomID)/members/\(userID)/moderate/", method: "POST", body: ["action": action]) }
-    func stream(roomID: Int) async throws -> VideoStream { let data = try await request("/api/rooms/\(roomID)/stream/"); return try decoder.decode(VideoStream.self, from: data) }
+    func stream(roomID: Int, refresh: Bool = false) async throws -> VideoStream {
+        let suffix = refresh ? "?refresh=1" : ""
+        let data = try await request("/api/rooms/\(roomID)/stream/\(suffix)")
+        return try decoder.decode(VideoStream.self, from: data)
+    }
     func createRoom(videoURL: String, isPrivate: Bool, requestID: UUID = UUID()) async throws -> Room {
         let data = try await request(
             "/api/rooms/",

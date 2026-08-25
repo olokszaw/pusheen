@@ -59,4 +59,8 @@ enum PlaybackRejoinPolicy {
     ) -> Double {
         clampedPosition(anchor + (isPlaying ? max(0, elapsed) : 0), knownDuration: knownDuration)
     }
+
+    static func shouldAttemptStallSeek(stalledFor: Double, alreadyAttempted: Bool) -> Bool {
+        stalledFor >= 7 && !alreadyAttempted
+    }
 }
