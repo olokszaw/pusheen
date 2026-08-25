@@ -4220,16 +4220,16 @@ private struct ViewingInsightsPager: View {
 
     private var pageHeight: CGFloat {
         if page == 1 { return 360 }
-        if page == 0 { return stats?.genres.count == 1 ? 92 : 228 }
+        if page == 0 { return stats?.genres.count == 1 ? 154 : 228 }
         return 238
     }
 
     private var indicatorHeight: CGFloat {
-        page == 0 && stats?.genres.count == 1 ? 18 : 30
+        page == 0 && stats?.genres.count == 1 ? 22 : 30
     }
 
     var body: some View {
-        VStack(spacing: page == 0 && stats?.genres.count == 1 ? 4 : 10) {
+        VStack(spacing: page == 0 && stats?.genres.count == 1 ? 6 : 10) {
             GeometryReader { proxy in
                 let width = max(1, proxy.size.width)
                 let isHorizontalDrag = abs(dragTranslation) > 0
@@ -4395,39 +4395,16 @@ private struct GenreOnlyCard: View {
     var body: some View {
         let genres = stats?.genres ?? []
         let hasSingleGenre = genres.count == 1
-        Group {
-            if let genre = genres.first, hasSingleGenre {
-                HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Жанры").font(.headline)
-                        Text(genre.name)
-                            .font(.title3.bold())
-                            .lineLimit(1)
-                        Text("\(genre.percent)%")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 10)
-                    ZStack {
-                        Circle().stroke(.white.opacity(0.10), lineWidth: 18)
-                        Circle().stroke(GenrePalette.color(for: genre.name).opacity(0.58), lineWidth: 18)
-                        Circle().stroke(.white.opacity(0.28), lineWidth: 0.8)
-                    }
-                    .frame(width: 72, height: 72)
-                    .shadow(color: GenrePalette.color(for: genre.name).opacity(0.22), radius: 8)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if genres.isEmpty {
+        VStack(alignment: .leading, spacing: hasSingleGenre ? 5 : 10) {
+            Text("Жанры").font(.headline)
+            if genres.isEmpty {
                 ContentUnavailableView("Жанров пока нет", systemImage: "film", description: Text("После первого фильма здесь появятся твои предпочтения."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Жанры").font(.headline)
-                    GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
-                        .frame(width: 146, height: 146)
-                        .frame(maxWidth: .infinity)
-                    GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
-                }
+                GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
+                    .frame(width: hasSingleGenre ? 100 : 146, height: hasSingleGenre ? 100 : 146)
+                    .frame(maxWidth: .infinity)
+                GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -5081,9 +5058,10 @@ private struct DonutSlice: Shape {
     func path(in rect: CGRect) -> Path {
         let center = CGPoint(x: rect.midX, y: rect.midY)
         let radius = min(rect.width, rect.height) / 2 - 3
+        let thickness = min(28, radius * 0.42)
         var path = Path()
         path.addArc(center: center, radius: radius, startAngle: .degrees(start * 360 - 90), endAngle: .degrees(end * 360 - 90), clockwise: false)
-        path.addArc(center: center, radius: radius - 28, startAngle: .degrees(end * 360 - 90), endAngle: .degrees(start * 360 - 90), clockwise: true)
+        path.addArc(center: center, radius: radius - thickness, startAngle: .degrees(end * 360 - 90), endAngle: .degrees(start * 360 - 90), clockwise: true)
         path.closeSubpath()
         return path
     }
