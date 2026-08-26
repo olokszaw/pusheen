@@ -90,6 +90,8 @@ jobs:
           /tmp/sticker-asset-cache-tests
           swiftc Sources/PlaybackRejoinPolicy.swift Tests/PlaybackRejoinPolicyTests/main.swift -o /tmp/playback-rejoin-policy-tests
           /tmp/playback-rejoin-policy-tests
+          swiftc Sources/Models.swift Sources/ChatOutboxStore.swift Tests/ChatOutboxStoreTests/main.swift -o /tmp/chat-outbox-store-tests
+          /tmp/chat-outbox-store-tests
           swiftc Sources/Models.swift Tests/CurrentWatchingClockTests/main.swift -o /tmp/current-watching-clock-tests
           /tmp/current-watching-clock-tests
 

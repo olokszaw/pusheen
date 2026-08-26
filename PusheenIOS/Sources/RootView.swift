@@ -1105,7 +1105,7 @@ private struct RoomPreviewOverlay: View {
 struct ChatPane: View {
     let messages: [ChatMessage]; @Binding var draft: String; let send: (String) -> Void
     @FocusState private var focused: Bool
-    var body: some View { VStack(alignment: .leading, spacing: 8) { Text("Чат").font(.headline); ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 7) { ForEach(messages) { message in HStack(alignment: .top, spacing: 8) { Circle().fill(.purple.opacity(0.7)).frame(width: 28, height: 28).overlay(Text(message.nickname.prefix(1)).font(.caption.bold())); VStack(alignment: .leading, spacing: 2) { Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary); Text(message.text).font(.subheadline) }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 15)); Spacer(minLength: 20) }.id(message.id) } } }.onChange(of: messages.count) { _, _ in if let id = messages.last?.id { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }.frame(maxHeight: 250); HStack { TextField("Сообщение…", text: $draft, axis: .vertical).lineLimit(1...3).onSubmit { send(draft) }; Button { send(draft) } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }.padding(8).liquidCard(Capsule()) }.padding(12).liquidCard() }
+    var body: some View { VStack(alignment: .leading, spacing: 8) { Text("Чат").font(.headline); ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 7) { ForEach(messages, id: \.timelineID) { message in HStack(alignment: .top, spacing: 8) { Circle().fill(.purple.opacity(0.7)).frame(width: 28, height: 28).overlay(Text(message.nickname.prefix(1)).font(.caption.bold())); VStack(alignment: .leading, spacing: 2) { Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary); Text(message.text).font(.subheadline) }.padding(9).liquidCard(RoundedRectangle(cornerRadius: 15)); Spacer(minLength: 20) }.id(message.timelineID) } } }.onChange(of: messages.count) { _, _ in if let id = messages.last?.timelineID { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }.frame(maxHeight: 250); HStack { TextField("Сообщение…", text: $draft, axis: .vertical).lineLimit(1...3).onSubmit { send(draft) }; Button { send(draft) } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }.padding(8).liquidCard(Capsule()) }.padding(12).liquidCard() }
 }
 
 struct VideoPlayerPlaceholder: View {
@@ -1570,14 +1570,14 @@ struct NativeChatPane: View {
                 ZStack(alignment: .bottomTrailing) {
                     ScrollView {
                         LazyVStack(spacing: 8) {
-                            ForEach(messages) { message in
+                            ForEach(messages, id: \.timelineID) { message in
                                 NativeMessageBubble(message: message, isMine: message.authorId == currentUserID, react: react, quickReactions: quickReactions, previewProfile: previewProfile, openProfile: openProfile, reply: beginReply, jumpToMessage: { requestedMessageID = $0 }, showContext: { selected in
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.84)
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { contextMessage = selected }
                                 }, isHighlighted: highlightedMessageID == message.id, timePresentationRevision: deviceEnvironment.formattingRevision)
                                     .equatable()
-                                    .padding(.bottom, message.id == messages.last?.id ? 14 : 0)
-                                    .id(message.id)
+                                    .padding(.bottom, message.timelineID == messages.last?.timelineID ? 14 : 0)
+                                    .id(message.timelineID)
                             }
                         }
                         .padding(.top, 2)
@@ -1634,8 +1634,9 @@ struct NativeChatPane: View {
                         }
                     }
                     .onChange(of: requestedMessageID) { _, messageID in
-                        guard let messageID else { return }
-                        withAnimation(.easeOut(duration: 0.24)) { proxy.scrollTo(messageID, anchor: .center) }
+                        guard let messageID,
+                              let timelineID = messages.first(where: { $0.id == messageID })?.timelineID else { return }
+                        withAnimation(.easeOut(duration: 0.24)) { proxy.scrollTo(timelineID, anchor: .center) }
                         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.68)
                         withAnimation(.easeOut(duration: 0.18)) { highlightedMessageID = messageID }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
@@ -1936,7 +1937,7 @@ struct NativeChatPane: View {
         return "data:image/jpeg;base64," + jpeg.base64EncodedString()
     }
     private func scrollToLatestMessage(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard let lastID = messages.last?.id else { return }
+        guard let lastID = messages.last?.timelineID else { return }
         if animated {
             withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(lastID, anchor: .bottom) }
         } else {

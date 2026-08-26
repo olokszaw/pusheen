@@ -100,6 +100,13 @@ struct ChatMessage: Codable, Identifiable, Hashable {
     /// clock and timezone, even when the VPS wall clock is wrong.
     let timestampSnapshotReceivedAt = Date()
     enum CodingKeys: String, CodingKey { case id, nickname, text, reactions; case authorId = "author_id"; case imageDataURL = "image_data_url"; case avatarDataURL = "avatar_data_url"; case replyTo = "reply_to"; case createdAt = "created_at"; case createdAtAgeSeconds = "created_at_age_seconds"; case clientMessageID = "client_message_id" }
+    /// The numeric id changes when an optimistic row receives its database id.
+    /// SwiftUI must keep the same row identity across that acknowledgement or a
+    /// LazyVStack can recycle the row and make it appear to vanish.
+    var timelineID: String {
+        if let clientMessageID, !clientMessageID.isEmpty { return "client:\(clientMessageID)" }
+        return "server:\(id)"
+    }
 }
 
 struct RoomMember: Codable, Identifiable, Hashable {

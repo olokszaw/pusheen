@@ -3,13 +3,7 @@ import Foundation
 
 @MainActor
 final class RoomViewModel: ObservableObject {
-    private struct PendingChatMessage: Identifiable {
-        let id: String
-        let localMessageID: Int
-        let text: String
-        let image: String
-        let replyTo: ChatReplyPreview?
-    }
+    private typealias PendingChatMessage = ChatOutboxItem
     private struct PendingPlaybackCommand {
         let action: String
         let isPlaying: Bool
@@ -35,6 +29,7 @@ final class RoomViewModel: ObservableObject {
     private let token: String
     private var currentUserID: Int?
     private let socket = RoomSocket()
+    private let chatOutbox = ChatOutboxStore.shared
     private var timer: Any?
     private var itemStatusObservation: NSKeyValueObservation?
     private var playbackEndObserver: NSObjectProtocol?
@@ -139,6 +134,7 @@ final class RoomViewModel: ObservableObject {
             // Chat, membership and playback bootstrap must never block media
             // construction. Previously a slow /messages/ request delayed the
             // WebSocket and /stream/, leaving a permanent-looking spinner.
+            restorePendingMessages()
             startMessageSync()
             socket.onEvent = { [weak self] event in self?.apply(event) }
             socket.onConnectionGenerationReady = { [weak self] connectionGeneration in
@@ -328,6 +324,9 @@ final class RoomViewModel: ObservableObject {
         typingUserIDs.removeAll()
         messageFallbackTasks.values.forEach { $0.cancel() }
         messageFallbackTasks.removeAll()
+        persistPendingMessages()
+        chatOutbox.flushWrites()
+        flushPendingMessagesAfterStop()
         pendingMessages.removeAll()
         realtimeMessageInFlightID = nil
         pendingSeekPosition = nil
@@ -637,11 +636,24 @@ final class RoomViewModel: ObservableObject {
         // message with its permanent id a moment later.
         let localID = nextLocalMessageID
         nextLocalMessageID &-= 1
-        if let profile {
-            messages.append(ChatMessage(id: localID, authorId: profile.userId, nickname: profile.nickname, text: text, imageDataURL: image, avatarDataURL: profile.avatarDataUrl, reactions: [], replyTo: replyTo, createdAt: ISO8601DateFormatter().string(from: Date()), createdAtAgeSeconds: 0))
-        }
+        let createdAt = ISO8601DateFormatter().string(from: Date())
+        let authorID = profile?.userId ?? currentUserID ?? 0
+        let nickname = profile?.nickname ?? "Вы"
+        let avatarDataURL = profile?.avatarDataUrl ?? ""
         let pendingID = UUID().uuidString
-        pendingMessages.append(PendingChatMessage(id: pendingID, localMessageID: localID, text: text, image: image, replyTo: replyTo))
+        messages.append(ChatMessage(id: localID, authorId: authorID, nickname: nickname, text: text, imageDataURL: image, avatarDataURL: avatarDataURL, reactions: [], replyTo: replyTo, createdAt: createdAt, createdAtAgeSeconds: 0, clientMessageID: pendingID))
+        pendingMessages.append(PendingChatMessage(
+            id: pendingID,
+            localMessageID: localID,
+            text: text,
+            image: image,
+            replyTo: replyTo,
+            authorID: authorID,
+            nickname: nickname,
+            avatarDataURL: avatarDataURL,
+            createdAt: createdAt
+        ))
+        persistPendingMessages()
         // The WebSocket is the low-latency path: every participant receives a
         // persisted message as soon as the server handles it. The FIFO HTTP
         // outbox remains the reliable fallback for a tunnel/socket interruption.
@@ -687,6 +699,7 @@ final class RoomViewModel: ObservableObject {
         messageFallbackTasks[clientID]?.cancel()
         messageFallbackTasks[clientID] = nil
         pendingMessages.removeAll { $0.id == clientID }
+        persistPendingMessages()
         if realtimeMessageInFlightID == clientID { realtimeMessageInFlightID = nil }
         sendNextPendingRealtimeIfPossible()
     }
@@ -977,13 +990,25 @@ final class RoomViewModel: ObservableObject {
         }
     }
     private func mergeServerMessages(_ serverMessages: [ChatMessage]) {
-        for message in serverMessages where !messages.contains(where: { $0.id == message.id }) {
+        for message in serverMessages {
             // Confirm only the exact optimistic message. Comparing text here
             // used to discard legitimate rapid messages such as "a, a, a".
             if let clientID = message.clientMessageID,
                let pending = pendingMessages.first(where: { $0.id == clientID }) {
                 finishPendingDelivery(clientID)
                 confirmPersistedMessage(message, for: pending)
+                continue
+            }
+            // The HTTP poll and WebSocket can deliver the same persisted row in
+            // either order. Update it in place so reactions/profile data stay
+            // current without ever creating/removing a visible chat row.
+            if let index = messages.firstIndex(where: { $0.id == message.id }) {
+                messages[index] = message
+                continue
+            }
+            if let clientID = message.clientMessageID,
+               let index = messages.firstIndex(where: { $0.clientMessageID == clientID }) {
+                messages[index] = message
                 continue
             }
             // Server ids are authoritative and unique. Two equal texts are two
@@ -1037,6 +1062,62 @@ final class RoomViewModel: ObservableObject {
             messages[localIndex] = persisted
         } else if !messages.contains(where: { $0.id == persisted.id }) {
             messages.append(persisted)
+        }
+    }
+
+    private func restorePendingMessages() {
+        let restored = chatOutbox.load(roomID: room.id, userID: currentUserID)
+        guard !restored.isEmpty else { return }
+        pendingMessages = restored
+        for pending in restored where !messages.contains(where: { $0.id == pending.localMessageID }) {
+            messages.append(ChatMessage(
+                id: pending.localMessageID,
+                authorId: pending.authorID,
+                nickname: pending.nickname,
+                text: pending.text,
+                imageDataURL: pending.image,
+                avatarDataURL: pending.avatarDataURL,
+                reactions: [],
+                replyTo: pending.replyTo,
+                createdAt: pending.createdAt,
+                createdAtAgeSeconds: 0,
+                clientMessageID: pending.id
+            ))
+        }
+        if let oldestLocalID = restored.map(\.localMessageID).min() {
+            nextLocalMessageID = min(nextLocalMessageID, oldestLocalID - 1)
+        }
+    }
+
+    private func persistPendingMessages() {
+        chatOutbox.replace(pendingMessages, roomID: room.id, userID: currentUserID)
+    }
+
+    /// `stop()` is synchronous, but delivery may still be awaiting a socket
+    /// acknowledgement. Hand the immutable batch to an unstructured task before
+    /// releasing the view model; the on-disk copy remains if the request fails.
+    private func flushPendingMessagesAfterStop() {
+        let batch = pendingMessages
+        guard !batch.isEmpty else { return }
+        let api = self.api
+        let roomID = room.id
+        let userID = currentUserID
+        let outbox = chatOutbox
+        Task {
+            let body = batch.map { pending -> [String: Any] in
+                var value: [String: Any] = [
+                    "text": pending.text,
+                    "image_data_url": pending.image,
+                    "client_message_id": pending.id,
+                ]
+                if let replyID = pending.replyTo?.id { value["reply_to_id"] = replyID }
+                return value
+            }
+            guard let persisted = try? await api.sendMessagesBatch(roomID: roomID, messages: body) else { return }
+            let confirmed = Set(persisted.compactMap(\.clientMessageID))
+            guard !confirmed.isEmpty else { return }
+            let remaining = outbox.load(roomID: roomID, userID: userID).filter { !confirmed.contains($0.id) }
+            outbox.replace(remaining, roomID: roomID, userID: userID)
         }
     }
     private func recoverMessagesImmediately() async {
