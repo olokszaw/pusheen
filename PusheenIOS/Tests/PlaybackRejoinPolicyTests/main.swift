@@ -70,5 +70,21 @@ precondition(!PlaybackRejoinPolicy.shouldAttemptStallSeek(
 precondition(!PlaybackRejoinPolicy.snapshotIsPlaying(
     isOwner: true, desiredIsPlaying: false, isActuallyAdvancing: true
 ))
+precondition(PlaybackRejoinPolicy.shouldRecoverUnexpectedZeroReset(
+    isOwner: false, isPlaying: true, actualPosition: 0,
+    previousHealthyPosition: 120, authoritativePosition: 123
+))
+precondition(!PlaybackRejoinPolicy.shouldRecoverUnexpectedZeroReset(
+    isOwner: true, isPlaying: true, actualPosition: 0,
+    previousHealthyPosition: 120, authoritativePosition: 123
+))
+precondition(PlaybackRejoinPolicy.shouldCatchUpParticipant(
+    isOwner: false, isPlaying: true, command: "state",
+    localPosition: 100, authoritativePosition: 104
+))
+precondition(!PlaybackRejoinPolicy.shouldCatchUpParticipant(
+    isOwner: false, isPlaying: true, command: "state",
+    localPosition: 104, authoritativePosition: 100
+), "Periodic state must never rewind a participant")
 
 print("Playback rejoin policy tests passed")

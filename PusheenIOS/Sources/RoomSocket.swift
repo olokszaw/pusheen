@@ -18,7 +18,6 @@ final class RoomSocket: ObservableObject {
     private var inboundWatchdogTask: Task<Void, Never>?
     private var wasClosedByView = false
     private var reconnectDelay: UInt64 = 1
-    private var heartbeatCount = 0
     private var receivedFirstEvent = false
     private var connectionGeneration = 0
     private var lastInboundUptime: TimeInterval = 0
@@ -160,7 +159,6 @@ final class RoomSocket: ObservableObject {
         // `resume()` only starts the handshake. Do not advertise a usable
         // socket until the server has accepted it and sent its first event.
         connected = false
-        heartbeatCount = 0
         receivedFirstEvent = false
         lastInboundUptime = ProcessInfo.processInfo.systemUptime
         receive(from: socket, generation: generation)
@@ -191,14 +189,14 @@ final class RoomSocket: ObservableObject {
                 try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled else { return }
                 guard let self else { return }
-                self.heartbeatCount += 1
                 self.send(["type": "heartbeat"])
                 // A lightweight authoritative snapshot periodically removes
                 // the 1–2 second drift that can build up on another device
                 // without changing the owner's playback logic.
-                if self.heartbeatCount.isMultiple(of: 2) {
-                    self.send(["type": "request_state"])
-                }
+                // Every heartbeat also refreshes the projected owner clock. This
+                // lets a participant catch up within eight seconds after a short
+                // decoder/network stall without accepting backward drift.
+                self.send(["type": "request_state"])
             }
         }
     }

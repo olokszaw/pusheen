@@ -84,4 +84,37 @@ enum PlaybackRejoinPolicy {
     static func shouldAttemptStallSeek(stalledFor: Double, alreadyAttempted: Bool) -> Bool {
         stalledFor >= 7 && !alreadyAttempted
     }
+
+    /// Some HTTP AVPlayer items jump their local clock to exactly zero while
+    /// recovering a range request. A participant must return to the shared room
+    /// clock instead of publishing/displaying that decoder reset.
+    static func shouldRecoverUnexpectedZeroReset(
+        isOwner: Bool,
+        isPlaying: Bool,
+        actualPosition: Double,
+        previousHealthyPosition: Double,
+        authoritativePosition: Double
+    ) -> Bool {
+        !isOwner
+            && isPlaying
+            && actualPosition.isFinite
+            && actualPosition <= 1.25
+            && previousHealthyPosition >= 5
+            && authoritativePosition >= 5
+    }
+
+    /// Periodic state may pull a lagging participant forward, but never rewind
+    /// it. Backward movement is reserved for an explicit owner seek command.
+    static func shouldCatchUpParticipant(
+        isOwner: Bool,
+        isPlaying: Bool,
+        command: String,
+        localPosition: Double,
+        authoritativePosition: Double
+    ) -> Bool {
+        !isOwner
+            && isPlaying
+            && command == "state"
+            && authoritativePosition - localPosition > 3
+    }
 }

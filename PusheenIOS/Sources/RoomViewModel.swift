@@ -271,6 +271,7 @@ final class RoomViewModel: ObservableObject {
                 // The clock is display-only. Publishing it more often forces the
                 // whole room hierarchy to reevaluate while the user scrolls chat.
                 let nextPosition = time.seconds.isFinite ? time.seconds : 0
+                if self.recoverUnexpectedParticipantReset(actualPosition: nextPosition) { return }
                 if abs(self.position - nextPosition) >= 0.5 { self.position = nextPosition }
                 let value = self.player?.currentItem?.duration.seconds ?? 0
                 if value.isFinite && value > 0 && abs(self.duration - value) >= 0.1 { self.duration = value }
@@ -622,6 +623,9 @@ final class RoomViewModel: ObservableObject {
                 self.initialPlaybackPosition = nil
                 self.pendingSeekPosition = nil
                 self.position = target
+                self.lastHealthyPlaybackPosition = target
+                self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
+                self.hasAttemptedStallSeek = false
                 if self.isPlaying { self.player?.play() } else { self.player?.pause() }
             }
         }
@@ -860,13 +864,20 @@ final class RoomViewModel: ObservableObject {
             let actualPosition = player?.currentTime().seconds
             let localPosition = (actualPosition?.isFinite == true) ? (actualPosition ?? position) : position
             let drift = abs(localPosition - authoritative)
+            let shouldCatchUp = PlaybackRejoinPolicy.shouldCatchUpParticipant(
+                isOwner: isOwner,
+                isPlaying: nextIsPlaying,
+                command: command,
+                localPosition: localPosition,
+                authoritativePosition: authoritative
+            )
             let shouldApplyPosition = firstStateForConnection || (
                 !isOwner && PlaybackRejoinPolicy.shouldSeekForRemoteState(
                     firstStateForConnection: false,
                     command: command,
                     isPlaying: nextIsPlaying
                 )
-            )
+            ) || shouldCatchUp
             if shouldApplyPosition && drift > 0.85 {
                 // Invalidate an older initial seek before applying a newer
                 // command. Without this, the old completion could rewind a
@@ -1230,6 +1241,32 @@ final class RoomViewModel: ObservableObject {
             remote + transitSeconds,
             knownDuration: duration
         )
+    }
+
+    @discardableResult
+    private func recoverUnexpectedParticipantReset(actualPosition: Double) -> Bool {
+        guard pendingSeekPosition == nil else { return false }
+        let now = ProcessInfo.processInfo.systemUptime
+        let authoritative = PlaybackRejoinPolicy.projectedRecoveryPosition(
+            anchor: latestAuthoritativeAnchor,
+            elapsed: now - latestAuthoritativeAnchorUptime,
+            isPlaying: latestAuthoritativeIsPlaying,
+            knownDuration: duration
+        )
+        guard PlaybackRejoinPolicy.shouldRecoverUnexpectedZeroReset(
+            isOwner: isOwner,
+            isPlaying: isPlaying,
+            actualPosition: actualPosition,
+            previousHealthyPosition: lastHealthyPlaybackPosition,
+            authoritativePosition: authoritative
+        ) else { return false }
+        seekGeneration &+= 1
+        let generation = seekGeneration
+        pendingSeekPosition = authoritative
+        position = authoritative
+        hasAttemptedStallSeek = true
+        performAuthoritativeSeek(to: authoritative, generation: generation)
+        return true
     }
 
     private func playbackStateDate(from event: [String: Any]) -> Date? {
