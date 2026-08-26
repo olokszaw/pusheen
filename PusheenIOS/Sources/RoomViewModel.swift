@@ -47,6 +47,8 @@ final class RoomViewModel: ObservableObject {
     private var isStopped = false
     private var pendingMessages: [PendingChatMessage] = []
     private var isFlushingMessages = false
+    private var hasLoadedMessageHistory = false
+    private var isSyncingMessageHistory = false
     /// WebSocket frames are ordered, but the old implementation launched one
     /// realtime send per tap while an HTTP fallback could persist the same
     /// outbox concurrently. A later frame could therefore reach the database
@@ -118,6 +120,7 @@ final class RoomViewModel: ObservableObject {
         latestPlaybackSequence = nil
         outboundPlaybackSequence = nil
         pendingPlaybackCommand = nil
+        hasLoadedMessageHistory = false
         awaitingConnectionPlaybackState = true
         initialPlaybackPosition = nil
         pendingSeekPosition = nil
@@ -363,15 +366,19 @@ final class RoomViewModel: ObservableObject {
         messageSyncTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, !self.isStopped else { return }
+                // Reconcile persisted ids before retrying the outbox. Sending a
+                // recovered, already-persisted item first can otherwise block
+                // every genuinely new message behind a duplicate acknowledgement.
+                await self.syncMessagesFromServer()
                 if self.socket.connected {
                     self.sendNextPendingRealtimeIfPossible()
                 } else {
                     await self.flushPendingMessages()
                 }
-                if let serverMessages = try? await self.api.messages(roomID: self.room.id) {
-                    self.mergeServerMessages(serverMessages)
-                }
-                try? await Task.sleep(for: .seconds(3))
+                // WebSocket is still the zero-delay path. This incremental poll
+                // is a cheap safety net for a missed group frame and bounds the
+                // visible delay for the other participant to roughly one second.
+                try? await Task.sleep(for: .seconds(1))
             }
         }
     }
@@ -662,6 +669,10 @@ final class RoomViewModel: ObservableObject {
         // persisted message as soon as the server handles it. The FIFO HTTP
         // outbox remains the reliable fallback for a tunnel/socket interruption.
         sendNextPendingRealtimeIfPossible()
+    }
+
+    private func scheduleMessageAcknowledgementTimeout(for pendingID: String) {
+        guard messageFallbackTasks[pendingID] == nil else { return }
         let fallbackTask = Task { [weak self] in
             guard let self else { return }
             defer { self.messageFallbackTasks[pendingID] = nil }
@@ -696,7 +707,13 @@ final class RoomViewModel: ObservableObject {
             clientMessageID: pending.id,
             replyToID: pending.replyTo?.id
         )
-        if sent { realtimeMessageInFlightID = pending.id }
+        if sent {
+            realtimeMessageInFlightID = pending.id
+            // This must also cover messages restored from disk. Previously only
+            // newly typed messages had a timeout, so one duplicate restored row
+            // could block the realtime FIFO forever.
+            scheduleMessageAcknowledgementTimeout(for: pending.id)
+        }
     }
 
     private func finishPendingDelivery(_ clientID: String) {
@@ -1079,23 +1096,19 @@ final class RoomViewModel: ObservableObject {
     private func restorePendingMessages() {
         let restored = chatOutbox.load(roomID: room.id, userID: currentUserID)
         guard !restored.isEmpty else { return }
-        pendingMessages = restored
-        for pending in restored where !messages.contains(where: { $0.id == pending.localMessageID }) {
-            messages.append(ChatMessage(
-                id: pending.localMessageID,
-                authorId: pending.authorID,
-                nickname: pending.nickname,
-                text: pending.text,
-                imageDataURL: pending.image,
-                avatarDataURL: pending.avatarDataURL,
-                reactions: [],
-                replyTo: pending.replyTo,
-                createdAt: pending.createdAt,
-                createdAtAgeSeconds: 0,
-                clientMessageID: pending.id
-            ))
+        let parser = ISO8601DateFormatter()
+        let now = Date()
+        // An ancient retry appearing at the bottom looks like a newly sent
+        // message and can surprise both participants. The backend keeps every
+        // successfully persisted row; only a recent genuinely unfinished send
+        // remains eligible for automatic retry after process relaunch.
+        let retryable = restored.filter { pending in
+            guard let created = parser.date(from: pending.createdAt) else { return false }
+            return now.timeIntervalSince(created) <= 5 * 60
         }
-        if let oldestLocalID = restored.map(\.localMessageID).min() {
+        pendingMessages = retryable
+        persistPendingMessages()
+        if let oldestLocalID = retryable.map(\.localMessageID).min() {
             nextLocalMessageID = min(nextLocalMessageID, oldestLocalID - 1)
         }
     }
@@ -1133,9 +1146,8 @@ final class RoomViewModel: ObservableObject {
     }
     private func recoverMessagesImmediately() async {
         guard !isStopped else { return }
-        if let serverMessages = try? await api.messages(roomID: room.id) {
-            mergeServerMessages(serverMessages)
-        }
+        await syncMessagesFromServer()
+        guard hasLoadedMessageHistory else { return }
         if socket.connected {
             sendNextPendingRealtimeIfPossible()
         } else {
@@ -1241,6 +1253,18 @@ final class RoomViewModel: ObservableObject {
             remote + transitSeconds,
             knownDuration: duration
         )
+    }
+
+    private func syncMessagesFromServer() async {
+        guard !isStopped, !isSyncingMessageHistory else { return }
+        isSyncingMessageHistory = true
+        defer { isSyncingMessageHistory = false }
+        let afterID = hasLoadedMessageHistory
+            ? messages.lazy.filter { $0.id > 0 }.map(\.id).max()
+            : nil
+        guard let serverMessages = try? await api.messages(roomID: room.id, afterID: afterID) else { return }
+        mergeServerMessages(serverMessages)
+        hasLoadedMessageHistory = true
     }
 
     @discardableResult

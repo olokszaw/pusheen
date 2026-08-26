@@ -246,6 +246,12 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                     self.group_name,
                     {"type": "room.chat", "payload": message},
                 )
+            else:
+                # Idempotent retry is still a successful delivery. The sender
+                # needs the persisted row as an acknowledgement; otherwise its
+                # single-flight FIFO remains blocked and every newer chat waits
+                # behind this already-saved client_message_id.
+                await self.send_json({"type": "chat_message", **message})
 
     async def room_chat(self, event):
         await self.send_json({"type": "chat_message", **event["payload"]})
@@ -417,8 +423,8 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             "author": self.scope["user"].username,
             "nickname": profile.nickname if profile else self.scope["user"].username,
             "avatar_data_url": profile.avatar_data_url if profile and profile.avatar_data_url else getattr(identity, "avatar_data_url", ""),
-            "text": text,
-            "image_data_url": image_data_url,
+            "text": message.text,
+            "image_data_url": message.image_data_url,
             "client_message_id": client_message_id,
             "reactions": [],
             "reply_to": ({

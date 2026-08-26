@@ -115,6 +115,20 @@ class RoomApiTests(APITestCase):
         self.assertEqual(first.data["id"], retry.data["id"])
         self.assertEqual(ChatMessage.objects.filter(room=room).count(), 1)
 
+    def test_message_incremental_poll_returns_only_rows_after_cursor(self):
+        room = Room.objects.create(owner=self.owner, title="Incremental chat")
+        RoomMember.objects.create(room=room, user=self.owner)
+        first = ChatMessage.objects.create(room=room, user=self.owner, text="first")
+        second = ChatMessage.objects.create(room=room, user=self.owner, text="second")
+        third = ChatMessage.objects.create(room=room, user=self.owner, text="third")
+        self.authenticate(self.owner_token)
+
+        response = self.client.get(f"/api/rooms/{room.id}/messages/?after_id={first.id}")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([item["id"] for item in response.data], [second.id, third.id])
+        self.assertEqual([item["text"] for item in response.data], ["second", "third"])
+
     def test_batch_fallback_persists_a_spam_burst_in_client_order(self):
         room = Room.objects.create(owner=self.owner, title="Burst chat")
         RoomMember.objects.create(room=room, user=self.owner)
@@ -1327,9 +1341,13 @@ class RoomSocketTests(TransactionTestCase):
         owner_message = await self._next_event(owner_socket, "chat_message")
         self.assertEqual(owner_message["text"], "while-offline")
         # The same interaction may be sent through both the socket and HTTP.
-        # Retrying its id must not create another row or another broadcast.
+        # Retrying its id must not create another row or another group
+        # broadcast, but the sender still receives an acknowledgement so its
+        # single-flight client queue can advance immediately.
         await owner_socket.send_json_to({"type": "chat_message", "text": "while-offline", "client_message_id": retry_id})
-        self.assertTrue(await owner_socket.receive_nothing(timeout=0.1))
+        duplicate_ack = await self._next_event(owner_socket, "chat_message")
+        self.assertEqual(duplicate_ack["id"], owner_message["id"])
+        self.assertEqual(duplicate_ack["client_message_id"], retry_id)
         self.assertEqual(await self._room_message_texts(), ["while-offline"])
 
         # After reconnect, the client loads this persisted history, then

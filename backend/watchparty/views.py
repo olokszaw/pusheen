@@ -1356,8 +1356,26 @@ def room_messages(request, room_id):
                 f"watch_room_{room.id}", {"type": "room.chat", "payload": dict(payload)}
             )
         return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+    message_query = ChatMessage.objects.filter(room=room)
+    after_id = request.query_params.get("after_id")
+    if after_id is not None:
+        try:
+            after_id = max(0, int(after_id))
+        except (TypeError, ValueError, OverflowError):
+            return Response({"detail": "Invalid after_id"}, status=400)
+        messages = list(
+            message_query.filter(id__gt=after_id)
+            .select_related(
+                "user", "user__watch_profile", "user__client_identity",
+                "reply_to", "reply_to__user", "reply_to__user__watch_profile",
+            )
+            .prefetch_related("reactions")
+            .order_by("id")[:100]
+        )
+        return Response(ChatMessageSerializer(messages, many=True, context={"request": request}).data)
+
     messages = list(
-        ChatMessage.objects.filter(room=room)
+        message_query
         .select_related(
             "user", "user__watch_profile", "user__client_identity",
             "reply_to", "reply_to__user", "reply_to__user__watch_profile",
