@@ -702,25 +702,18 @@ final class RoomViewModel: ObservableObject {
         let fallbackTask = Task { [weak self] in
             guard let self else { return }
             defer { self.messageFallbackTasks[pendingID] = nil }
-            // Never persist the same outbox concurrently over WebSocket and
-            // HTTP: their arrival order is independent. HTTP is used only once
-            // the socket is actually down; while it is connected, the strict
-            // single-flight realtime queue owns delivery order.
             try? await Task.sleep(for: .milliseconds(self.socket.connected ? 1_200 : 40))
             guard !Task.isCancelled,
                   !self.isStopped,
                   self.pendingMessages.contains(where: { $0.id == pendingID }) else { return }
             if self.socket.connected,
                self.realtimeMessageInFlightID == pendingID {
-                // A half-open WebSocket can accept a local frame while never
-                // delivering its acknowledgement. Previously that single frame
-                // blocked the FIFO outbox until the 18-second socket watchdog.
-                // Retire that transport first, then use the idempotent HTTP batch
-                // (client_message_id prevents a duplicate if the frame arrived).
+                // Confirm the same idempotent message over HTTP without replacing
+                // the room socket. Reconnecting here made a participant appear to
+                // join again after every message whose ACK took over 1.2 seconds.
                 self.realtimeMessageInFlightID = nil
-                self.socket.reconnectAuthoritatively()
             }
-            if !self.socket.connected { await self.flushPendingMessages() }
+            await self.flushPendingMessages()
         }
         messageFallbackTasks[pendingID] = fallbackTask
     }
@@ -1015,7 +1008,11 @@ final class RoomViewModel: ObservableObject {
                 remoteTypingExpiryTasks[userID] = nil
                 typingUserIDs.remove(userID)
             }
-            if userID != 0, event["changed"] as? Bool == true, previousOnline != online {
+            // A user already knows that their own room view opened. Showing a
+            // self-join notice is noisy and made an old row-order bug look like
+            // the participant rejoined after every sent message.
+            if userID != 0, userID != currentUserID,
+               event["changed"] as? Bool == true, previousOnline != online {
                 let now = Date()
                 let noticeKey = "\(userID):\(online)"
                 let isRepeatedReconnect = lastPresenceNoticeAt[noticeKey].map { now.timeIntervalSince($0) < 12 } ?? false
@@ -1053,7 +1050,8 @@ final class RoomViewModel: ObservableObject {
         default: break
         }
     }
-    private func mergeServerMessages(_ serverMessages: [ChatMessage]) {
+    private func mergeServerMessages(_ serverMessages: [ChatMessage], prependingHistory: Bool = false) {
+        var missingHistory: [ChatMessage] = []
         for message in serverMessages {
             // Confirm only the exact optimistic message. Comparing text here
             // used to discard legitimate rapid messages such as "a, a, a".
@@ -1077,9 +1075,15 @@ final class RoomViewModel: ObservableObject {
             }
             // Server ids are authoritative and unique. Two equal texts are two
             // real messages unless their id/client id is also equal.
-            messages.append(message)
+            if prependingHistory {
+                missingHistory.append(message)
+            } else {
+                messages = ChatTimelinePolicy.insertingPersisted(message, into: messages)
+            }
         }
-        messages = ChatTimelinePolicy.normalized(messages)
+        if !missingHistory.isEmpty {
+            messages = ChatTimelinePolicy.prependingHistory(missingHistory, to: messages)
+        }
     }
     private func flushPendingMessages() async {
         guard !isStopped, !isFlushingMessages else { return }
@@ -1135,7 +1139,6 @@ final class RoomViewModel: ObservableObject {
         } else if !messages.contains(where: { $0.id == persisted.id }) {
             messages.append(persisted)
         }
-        messages = ChatTimelinePolicy.normalized(messages)
     }
 
     private func restorePendingMessages() {
@@ -1308,7 +1311,7 @@ final class RoomViewModel: ObservableObject {
             ? Array(messages.lazy.filter { $0.id > 0 }.map(\.id).suffix(100))
             : []
         guard let serverMessages = try? await api.messages(roomID: room.id, knownIDs: knownIDs) else { return }
-        mergeServerMessages(serverMessages)
+        mergeServerMessages(serverMessages, prependingHistory: !hasLoadedMessageHistory)
         hasLoadedMessageHistory = true
     }
 

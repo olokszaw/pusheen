@@ -1,17 +1,25 @@
 import Foundation
 
 enum ChatTimelinePolicy {
-    /// Server rows have an absolute database order. Optimistic/system rows have
-    /// only a local arrival order and must never be pushed above freshly loaded
-    /// history. Stable sorting preserves their existing order until ACK replaces
-    /// an optimistic row with its positive server id.
-    static func normalized(_ messages: [ChatMessage]) -> [ChatMessage] {
-        messages.enumerated().sorted { lhs, rhs in
-            let leftPersisted = lhs.element.id > 0
-            let rightPersisted = rhs.element.id > 0
-            if leftPersisted != rightPersisted { return leftPersisted }
-            if leftPersisted { return lhs.element.id < rhs.element.id }
-            return lhs.offset < rhs.offset
-        }.map { $0.element }
+    /// During the first history load, old persisted rows belong before anything
+    /// that arrived locally while that request was in flight. This operation is
+    /// deliberately bootstrap-only: running it after every ACK would keep moving
+    /// an old "joined the room" system row back to the bottom of the chat.
+    static func prependingHistory(_ history: [ChatMessage], to messages: [ChatMessage]) -> [ChatMessage] {
+        history.sorted { $0.id < $1.id } + messages
+    }
+
+    /// Insert a persisted row missed by the socket without globally sorting the
+    /// timeline. Existing system/pending rows are local events and retain their
+    /// visual position forever.
+    static func insertingPersisted(_ message: ChatMessage, into messages: [ChatMessage]) -> [ChatMessage] {
+        guard message.id > 0 else { return messages + [message] }
+        var result = messages
+        if let index = result.firstIndex(where: { $0.id > message.id }) {
+            result.insert(message, at: index)
+        } else {
+            result.append(message)
+        }
+        return result
     }
 }
