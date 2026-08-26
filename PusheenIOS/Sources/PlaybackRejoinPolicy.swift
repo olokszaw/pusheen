@@ -16,6 +16,27 @@ enum PlaybackRejoinPolicy {
         authoritativeConnectionSnapshot || latestSequence.map { incomingSequence >= $0 } ?? true
     }
 
+    static func acknowledgesPendingCommand(
+        expectedSequence: Int64?,
+        incomingSequence: Int64?,
+        legacyPayloadMatches: Bool
+    ) -> Bool {
+        if let expectedSequence, let incomingSequence {
+            return incomingSequence >= expectedSequence
+        }
+        return expectedSequence == nil && incomingSequence == nil && legacyPayloadMatches
+    }
+
+    /// Re-send only after a new connection authority or an explicit stale
+    /// correction. An intermediate Seek acknowledgement in a rapid Seek→Play
+    /// sequence must not duplicate or overwrite the newer queued Play.
+    static func shouldReplayPendingCommand(
+        firstStateForConnection: Bool,
+        command: String
+    ) -> Bool {
+        firstStateForConnection || command == "stale"
+    }
+
     /// AVPlayer keeps an item in its terminal state after the final frame. A
     /// seek sufficiently behind the end is an explicit recovery from it.
     static func recoversFromEnd(target: Double, duration: Double) -> Bool {

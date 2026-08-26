@@ -1363,7 +1363,7 @@ def room_messages(request, room_id):
             "reply_to", "reply_to__user", "reply_to__user__watch_profile",
         )
         .prefetch_related("reactions")
-        .order_by("-created_at")[:100]
+        .order_by("-created_at", "-id")[:100]
     )
     messages.reverse()
     return Response(ChatMessageSerializer(messages, many=True, context={"request": request}).data)

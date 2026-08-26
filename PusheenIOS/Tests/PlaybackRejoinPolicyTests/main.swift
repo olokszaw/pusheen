@@ -15,6 +15,24 @@ precondition(!PlaybackRejoinPolicy.accepts(
 precondition(PlaybackRejoinPolicy.accepts(
     incomingSequence: 6, latestSequence: 7, authoritativeConnectionSnapshot: true
 ))
+precondition(PlaybackRejoinPolicy.acknowledgesPendingCommand(
+    expectedSequence: 12, incomingSequence: 12, legacyPayloadMatches: false
+))
+precondition(!PlaybackRejoinPolicy.acknowledgesPendingCommand(
+    expectedSequence: 12, incomingSequence: 11, legacyPayloadMatches: true
+))
+precondition(PlaybackRejoinPolicy.acknowledgesPendingCommand(
+    expectedSequence: nil, incomingSequence: nil, legacyPayloadMatches: true
+))
+precondition(PlaybackRejoinPolicy.shouldReplayPendingCommand(
+    firstStateForConnection: true, command: "state"
+))
+precondition(PlaybackRejoinPolicy.shouldReplayPendingCommand(
+    firstStateForConnection: false, command: "stale"
+))
+precondition(!PlaybackRejoinPolicy.shouldReplayPendingCommand(
+    firstStateForConnection: false, command: "seek"
+))
 precondition(PlaybackRejoinPolicy.recoversFromEnd(target: 20, duration: 100))
 precondition(!PlaybackRejoinPolicy.recoversFromEnd(target: 99.9, duration: 100))
 // Buffering is not a user pause: a late participant must still receive Play.

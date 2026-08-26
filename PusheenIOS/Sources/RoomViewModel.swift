@@ -10,6 +10,12 @@ final class RoomViewModel: ObservableObject {
         let image: String
         let replyTo: ChatReplyPreview?
     }
+    private struct PendingPlaybackCommand {
+        let action: String
+        let isPlaying: Bool
+        let position: Double
+        let expectedSequence: Int64?
+    }
     @Published var player: AVPlayer?
     @Published var messages: [ChatMessage] = []
     @Published var members: [RoomMember] = []
@@ -60,6 +66,10 @@ final class RoomViewModel: ObservableObject {
     // play immediately following a seek must not be rejected just because the
     // seek acknowledgement has not crossed the tunnel yet.
     private var outboundPlaybackSequence: Int64?
+    /// Play/pause/seek can be tapped while the WebSocket handshake is still in
+    /// progress. Keep the newest owner intent instead of silently dropping it;
+    /// the first server state supplies the sequence needed to send it safely.
+    private var pendingPlaybackCommand: PendingPlaybackCommand?
     private var awaitingConnectionPlaybackState = true
     private var activeConnectionGeneration = 0
     private var lifecycleGeneration = 0
@@ -112,6 +122,7 @@ final class RoomViewModel: ObservableObject {
         latestPlaybackStateAt = nil
         latestPlaybackSequence = nil
         outboundPlaybackSequence = nil
+        pendingPlaybackCommand = nil
         awaitingConnectionPlaybackState = true
         initialPlaybackPosition = nil
         pendingSeekPosition = nil
@@ -397,7 +408,11 @@ final class RoomViewModel: ObservableObject {
                         )
                     }
                 }
-                try? await Task.sleep(for: .milliseconds(1_500))
+                // The shared playing clock is projected from `updated_at`, so
+                // writing every 1.5 seconds adds SQLite contention without
+                // improving late-join accuracy. Five seconds is still fresh
+                // enough for the per-member preview and leaves chat writes free.
+                try? await Task.sleep(for: .seconds(5))
             }
         }
     }
@@ -638,10 +653,19 @@ final class RoomViewModel: ObservableObject {
             // HTTP: their arrival order is independent. HTTP is used only once
             // the socket is actually down; while it is connected, the strict
             // single-flight realtime queue owns delivery order.
-            try? await Task.sleep(for: .milliseconds(self.socket.connected ? 450 : 40))
+            try? await Task.sleep(for: .milliseconds(self.socket.connected ? 1_200 : 40))
             guard !Task.isCancelled,
                   !self.isStopped,
                   self.pendingMessages.contains(where: { $0.id == pendingID }) else { return }
+            if self.socket.connected,
+               self.realtimeMessageInFlightID == pendingID {
+                // A half-open WebSocket can accept a local frame while never
+                // delivering its acknowledgement. Previously that single frame
+                // blocked the FIFO outbox until the 18-second socket watchdog.
+                // Retire that transport first, then use the idempotent HTTP batch
+                // (client_message_id prevents a duplicate if the frame arrived).
+                self.socket.reconnectAuthoritatively()
+            }
             if !self.socket.connected { await self.flushPendingMessages() }
         }
         messageFallbackTasks[pendingID] = fallbackTask
@@ -739,6 +763,32 @@ final class RoomViewModel: ObservableObject {
             if let stateDate { latestPlaybackStateAt = stateDate }
             let nextIsPlaying = event["is_playing"] as? Bool ?? false
             isOwner = event["is_owner"] as? Bool ?? false
+            var queuedOwnerCommand: PendingPlaybackCommand?
+            if isOwner, let pendingPlaybackCommand {
+                let legacyPayloadMatches = command == pendingPlaybackCommand.action
+                    && nextIsPlaying == pendingPlaybackCommand.isPlaying
+                    && abs(((event["position_seconds"] as? NSNumber)?.doubleValue ?? 0) - pendingPlaybackCommand.position) < 0.85
+                if PlaybackRejoinPolicy.acknowledgesPendingCommand(
+                    expectedSequence: pendingPlaybackCommand.expectedSequence,
+                    incomingSequence: incomingSequence,
+                    legacyPayloadMatches: legacyPayloadMatches
+                ) {
+                    self.pendingPlaybackCommand = nil
+                } else {
+                    // Rapid Seek→Play produces two ordered acknowledgements. The
+                    // seek echo is older than the queued play and must neither
+                    // overwrite the local player nor trigger a duplicate command.
+                    if !PlaybackRejoinPolicy.shouldReplayPendingCommand(
+                        firstStateForConnection: firstStateForConnection,
+                        command: command
+                    ) {
+                        return
+                    }
+                    queuedOwnerCommand = pendingPlaybackCommand
+                }
+            } else if !isOwner {
+                pendingPlaybackCommand = nil
+            }
             isPlaying = nextIsPlaying
             if let muted = event["is_muted"] as? Bool { isMuted = muted }
             let remote = (event["position_seconds"] as? NSNumber)?.doubleValue ?? 0
@@ -749,6 +799,30 @@ final class RoomViewModel: ObservableObject {
             latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
             latestAuthoritativeIsPlaying = nextIsPlaying
             let itemIsReady = player?.currentItem?.status == .readyToPlay
+            if let queuedOwnerCommand {
+                // Do not let the first (necessarily older) server snapshot erase
+                // a Play/Seek performed during the handshake. It is used only to
+                // obtain the current sequence, then the newest local intent is
+                // published immediately and remains the owner's visible state.
+                pendingPlaybackCommand = nil
+                isPlaying = queuedOwnerCommand.isPlaying
+                position = queuedOwnerCommand.position
+                latestAuthoritativeAnchor = queuedOwnerCommand.position
+                latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
+                latestAuthoritativeIsPlaying = queuedOwnerCommand.isPlaying
+                if !itemIsReady {
+                    initialPlaybackPosition = queuedOwnerCommand.position
+                    hasAppliedInitialPlaybackState = true
+                } else if pendingSeekPosition == nil {
+                    queuedOwnerCommand.isPlaying ? player?.play() : player?.pause()
+                }
+                sendPlaybackCommand(
+                    action: queuedOwnerCommand.action,
+                    isPlaying: queuedOwnerCommand.isPlaying,
+                    position: queuedOwnerCommand.position
+                )
+                return
+            }
             // The first state may arrive before AVPlayer has been constructed.
             // Persist it and seek the actual player as soon as its item is ready
             // instead of letting every re-entering participant begin at 0:00.
@@ -1097,6 +1171,15 @@ final class RoomViewModel: ObservableObject {
 
     private func sendPlaybackCommand(action: String, isPlaying: Bool, position: Double) {
         let baseSequence = outboundPlaybackSequence ?? latestPlaybackSequence
+        // Keep the intent until its server sequence is observed. URLSession can
+        // accept a frame locally and report the transport error only later, so a
+        // synchronous `send == true` is not yet a playback acknowledgement.
+        pendingPlaybackCommand = PendingPlaybackCommand(
+            action: action,
+            isPlaying: isPlaying,
+            position: position,
+            expectedSequence: baseSequence.map { $0 + 1 }
+        )
         let sent = socket.playback(
             action: action,
             isPlaying: isPlaying,

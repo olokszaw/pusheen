@@ -301,7 +301,9 @@ class ChatMessage(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ("created_at",)
+        # SQLite can assign the same timestamp to several rows created in one
+        # fallback batch. The primary key is the authoritative insertion order.
+        ordering = ("created_at", "id")
         constraints = [
             # HTTP persistence and the live socket can race for the same user
             # action. Only non-empty ids participate so legacy socket messages
