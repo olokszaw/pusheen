@@ -1,3 +1,4 @@
+import asyncio
 import mimetypes
 import gzip
 import os
@@ -1203,6 +1204,29 @@ def _video_file_chunks(file_path, start, length):
             yield chunk
 
 
+async def _async_video_file_chunks(file_path, start, length):
+    """Stream an upload without blocking Daphne's ASGI event loop.
+
+    StreamingHttpResponse cannot consume a synchronous iterator incrementally
+    under ASGI: Django adapts it through a worker and may materialize the whole
+    requested range. That makes a second viewer compete with a long-running
+    file read and looks like participant-only buffering. Keep each file handle
+    independent and move only the small blocking reads to the thread pool.
+    """
+    source = await asyncio.to_thread(open, file_path, "rb")
+    try:
+        await asyncio.to_thread(source.seek, start)
+        remaining = length
+        while remaining > 0:
+            chunk = await asyncio.to_thread(source.read, min(512 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+    finally:
+        source.close()
+
+
 def _uploaded_video_response(request, room):
     if not room.uploaded_video or not room.uploaded_video.storage.exists(room.uploaded_video.name):
         return Response({"detail": "Загруженное видео не найдено"}, status=404)
@@ -1230,8 +1254,14 @@ def _uploaded_video_response(request, room):
         end = min(end, file_size - 1)
     length = end - start + 1
     content_type = mimetypes.guess_type(room.uploaded_video.name)[0] or "video/mp4"
+    raw_request = getattr(request, "_request", request)
+    chunks = (
+        _async_video_file_chunks(file_path, start, length)
+        if hasattr(raw_request, "scope")
+        else _video_file_chunks(file_path, start, length)
+    )
     response = StreamingHttpResponse(
-        _video_file_chunks(file_path, start, length),
+        chunks,
         status=206 if range_header else 200,
         content_type=content_type,
     )
@@ -1357,6 +1387,31 @@ def room_messages(request, room_id):
             )
         return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
     message_query = ChatMessage.objects.filter(room=room)
+    known_ids_value = request.query_params.get("known_ids")
+    if known_ids_value is not None:
+        try:
+            known_ids = {
+                int(value) for value in known_ids_value.split(",") if value.strip()
+            }
+        except (TypeError, ValueError, OverflowError):
+            return Response({"detail": "Invalid known_ids"}, status=400)
+        if len(known_ids) > 100:
+            return Response({"detail": "Too many known_ids"}, status=400)
+        # Compare against the room's current tail, not only id > max(known).
+        # Two consumers can persist in id order but deliver their socket frames
+        # in the opposite order; a max cursor would then skip the lower id forever.
+        messages = list(
+            message_query
+            .select_related(
+                "user", "user__watch_profile", "user__client_identity",
+                "reply_to", "reply_to__user", "reply_to__user__watch_profile",
+            )
+            .prefetch_related("reactions")
+            .order_by("-id")[:100]
+        )
+        messages = [message for message in reversed(messages) if message.id not in known_ids]
+        return Response(ChatMessageSerializer(messages, many=True, context={"request": request}).data)
+
     after_id = request.query_params.get("after_id")
     if after_id is not None:
         try:

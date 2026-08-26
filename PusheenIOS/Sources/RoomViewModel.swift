@@ -144,6 +144,11 @@ final class RoomViewModel: ObservableObject {
                 guard let self, self.lifecycleActive, !self.isStopped else { return }
                 self.activeConnectionGeneration = connectionGeneration
                 self.awaitingConnectionPlaybackState = true
+                // An in-flight id belongs to the previous transport. Keeping it
+                // here makes the fresh socket believe the FIFO is still busy,
+                // so an otherwise deliverable message can sit for minutes when
+                // the parallel HTTP fallback also happens to fail.
+                self.realtimeMessageInFlightID = nil
                 self.scheduleMemberResync()
             }
             socket.onReady = { [weak self] in
@@ -180,7 +185,11 @@ final class RoomViewModel: ObservableObject {
             guard let streamURL = URL(string: stream.url) else { throw URLError(.badURL) }
             let assetOptions: [String: Any] = stream.headers.isEmpty ? [:] : ["AVURLAssetHTTPHeaderFieldsKey": stream.headers]
             let item = AVPlayerItem(asset: AVURLAsset(url: streamURL, options: assetOptions))
-            item.preferredForwardBufferDuration = 8
+            // A participant starts with a cold HTTP range cache while the owner
+            // often already has data locally. Keep enough forward data to absorb
+            // ordinary Wi-Fi/server jitter instead of oscillating in and out of
+            // AVPlayer's waiting state.
+            item.preferredForwardBufferDuration = 20
             let roomPlayer = AVPlayer(playerItem: item)
             roomPlayer.automaticallyWaitsToMinimizeStalling = true
             roomPlayer.isMuted = false
@@ -614,7 +623,25 @@ final class RoomViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, self.seekGeneration == generation, !self.isStopped else { return }
                 guard finished else {
-                    let delay = attempt < 7 ? 220 : 1_000
+                    // AVPlayer can reject a seek while replacing an HTTP range.
+                    // Retrying forever leaves `pendingSeekPosition` set, keeps
+                    // the player paused and presents as a permanent guest-only
+                    // freeze. After a bounded warm-up, fail open and let the
+                    // normal clock/catch-up path recover on the next state.
+                    guard attempt < 8 else {
+                        self.initialPlaybackPosition = nil
+                        self.pendingSeekPosition = nil
+                        let actual = self.player?.currentTime().seconds ?? self.position
+                        if actual.isFinite {
+                            self.position = actual
+                            self.lastHealthyPlaybackPosition = actual
+                        }
+                        self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
+                        if self.isPlaying { self.player?.play() }
+                        self.scheduleSnapshotResync()
+                        return
+                    }
+                    let delay = attempt < 4 ? 220 : 600
                     Task { @MainActor [weak self] in
                         try? await Task.sleep(for: .milliseconds(delay))
                         guard !Task.isCancelled, let self,
@@ -622,7 +649,7 @@ final class RoomViewModel: ObservableObject {
                         self.performAuthoritativeSeek(
                             to: target,
                             generation: generation,
-                            attempt: attempt < 7 ? attempt + 1 : 0
+                            attempt: attempt + 1
                         )
                     }
                     return
@@ -632,7 +659,6 @@ final class RoomViewModel: ObservableObject {
                 self.position = target
                 self.lastHealthyPlaybackPosition = target
                 self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
-                self.hasAttemptedStallSeek = false
                 if self.isPlaying { self.player?.play() } else { self.player?.pause() }
             }
         }
@@ -691,6 +717,7 @@ final class RoomViewModel: ObservableObject {
                 // blocked the FIFO outbox until the 18-second socket watchdog.
                 // Retire that transport first, then use the idempotent HTTP batch
                 // (client_message_id prevents a duplicate if the frame arrived).
+                self.realtimeMessageInFlightID = nil
                 self.socket.reconnectAuthoritatively()
             }
             if !self.socket.connected { await self.flushPendingMessages() }
@@ -699,7 +726,11 @@ final class RoomViewModel: ObservableObject {
     }
 
     private func sendNextPendingRealtimeIfPossible() {
-        guard realtimeMessageInFlightID == nil,
+        // The HTTP fallback persists an entire FIFO transaction. Starting a
+        // socket send from its callbacks can overtake that batch or make the
+        // next row wait on the wrong acknowledgement.
+        guard !isFlushingMessages,
+              realtimeMessageInFlightID == nil,
               let pending = pendingMessages.first else { return }
         let sent = socket.chat(
             text: pending.text,
@@ -884,6 +915,11 @@ final class RoomViewModel: ObservableObject {
             let shouldCatchUp = PlaybackRejoinPolicy.shouldCatchUpParticipant(
                 isOwner: isOwner,
                 isPlaying: nextIsPlaying,
+                // Seeking while AVPlayer is waiting discards its partial range
+                // buffer. Repeating that on every state snapshot can keep only
+                // participants stalled forever. The health monitor will resume
+                // or perform one recovery seek if the wait is truly stuck.
+                isPlayerAdvancing: player?.timeControlStatus == .playing,
                 command: command,
                 localPosition: localPosition,
                 authoritativePosition: authoritative
@@ -1043,11 +1079,18 @@ final class RoomViewModel: ObservableObject {
             // real messages unless their id/client id is also equal.
             messages.append(message)
         }
+        messages = ChatTimelinePolicy.normalized(messages)
     }
     private func flushPendingMessages() async {
         guard !isStopped, !isFlushingMessages else { return }
         isFlushingMessages = true
-        defer { isFlushingMessages = false }
+        defer {
+            isFlushingMessages = false
+            // If HTTP failed but the replacement socket is now healthy, resume
+            // the same idempotent FIFO immediately instead of waiting for a new
+            // user action or another reconnect cycle.
+            sendNextPendingRealtimeIfPossible()
+        }
         // A disconnected socket often collects a burst while the network is
         // returning. Persist it as one ordered transaction instead of turning
         // every tap into a serial  HTTP request and a visible delayed queue.
@@ -1085,12 +1128,14 @@ final class RoomViewModel: ObservableObject {
     }
     private func confirmPersistedMessage(_ persisted: ChatMessage, for pending: PendingChatMessage) {
         if let localIndex = messages.firstIndex(where: { $0.id == pending.localMessageID }) {
-            // Replace in place. Never sort the entire timeline when an older
-            // queued send is finally acknowledged.
+            // Replace only the exact optimistic row. Normalization below moves
+            // its new positive id into the server order without touching the
+            // relative order of other pending/system rows.
             messages[localIndex] = persisted
         } else if !messages.contains(where: { $0.id == persisted.id }) {
             messages.append(persisted)
         }
+        messages = ChatTimelinePolicy.normalized(messages)
     }
 
     private func restorePendingMessages() {
@@ -1259,10 +1304,10 @@ final class RoomViewModel: ObservableObject {
         guard !isStopped, !isSyncingMessageHistory else { return }
         isSyncingMessageHistory = true
         defer { isSyncingMessageHistory = false }
-        let afterID = hasLoadedMessageHistory
-            ? messages.lazy.filter { $0.id > 0 }.map(\.id).max()
-            : nil
-        guard let serverMessages = try? await api.messages(roomID: room.id, afterID: afterID) else { return }
+        let knownIDs = hasLoadedMessageHistory
+            ? Array(messages.lazy.filter { $0.id > 0 }.map(\.id).suffix(100))
+            : []
+        guard let serverMessages = try? await api.messages(roomID: room.id, knownIDs: knownIDs) else { return }
         mergeServerMessages(serverMessages)
         hasLoadedMessageHistory = true
     }

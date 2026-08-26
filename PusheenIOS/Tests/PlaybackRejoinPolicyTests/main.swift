@@ -79,12 +79,16 @@ precondition(!PlaybackRejoinPolicy.shouldRecoverUnexpectedZeroReset(
     previousHealthyPosition: 120, authoritativePosition: 123
 ))
 precondition(PlaybackRejoinPolicy.shouldCatchUpParticipant(
-    isOwner: false, isPlaying: true, command: "state",
+    isOwner: false, isPlaying: true, isPlayerAdvancing: true, command: "state",
     localPosition: 100, authoritativePosition: 104
 ))
 precondition(!PlaybackRejoinPolicy.shouldCatchUpParticipant(
-    isOwner: false, isPlaying: true, command: "state",
+    isOwner: false, isPlaying: true, isPlayerAdvancing: true, command: "state",
     localPosition: 104, authoritativePosition: 100
 ), "Periodic state must never rewind a participant")
+precondition(!PlaybackRejoinPolicy.shouldCatchUpParticipant(
+    isOwner: false, isPlaying: true, isPlayerAdvancing: false, command: "state",
+    localPosition: 100, authoritativePosition: 120
+), "A buffering participant must be allowed to fill its range buffer")
 
 print("Playback rejoin policy tests passed")

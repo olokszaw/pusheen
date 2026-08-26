@@ -326,8 +326,9 @@ final class APIClient {
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw APIError.server("Не удалось выполнить поиск фильмов") }
         return try decoder.decode(MovieCatalogResponse.self, from: data).results.filter { $0.kind == "feature-movie" }
     }
-    func messages(roomID: Int, afterID: Int? = nil) async throws -> [ChatMessage] {
-        let suffix = afterID.map { "?after_id=\($0)" } ?? ""
+    func messages(roomID: Int, knownIDs: [Int] = []) async throws -> [ChatMessage] {
+        let recentIDs = knownIDs.filter { $0 > 0 }.suffix(100)
+        let suffix = recentIDs.isEmpty ? "" : "?known_ids=\(recentIDs.map(String.init).joined(separator: ","))"
         let data = try await request("/api/rooms/\(roomID)/messages/\(suffix)")
         return try decoder.decode([ChatMessage].self, from: data)
     }

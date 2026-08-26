@@ -38,6 +38,8 @@ jobs:
             watchparty.tests.RoomApiTests.test_watched_heartbeat_does_not_double_calendar_activity \
             watchparty.tests.RoomApiTests.test_message_post_is_persisted_and_visible_to_another_member \
             watchparty.tests.RoomApiTests.test_retrying_client_message_id_does_not_duplicate_chat \
+            watchparty.tests.RoomApiTests.test_message_incremental_poll_returns_only_rows_after_cursor \
+            watchparty.tests.RoomApiTests.test_message_known_ids_repairs_a_lower_id_socket_delivery_gap \
             watchparty.tests.RoomApiTests.test_batch_fallback_persists_a_spam_burst_in_client_order \
             watchparty.tests.RoomApiTests.test_newer_single_message_cannot_overtake_older_fallback_batch \
             watchparty.tests.RoomApiTests.test_reply_is_persisted_and_visible_to_every_member \
@@ -92,6 +94,8 @@ jobs:
           /tmp/playback-rejoin-policy-tests
           swiftc Sources/Models.swift Sources/ChatOutboxStore.swift Tests/ChatOutboxStoreTests/main.swift -o /tmp/chat-outbox-store-tests
           /tmp/chat-outbox-store-tests
+          swiftc Sources/Models.swift Sources/ChatTimelinePolicy.swift Tests/ChatTimelinePolicyTests/main.swift -o /tmp/chat-timeline-policy-tests
+          /tmp/chat-timeline-policy-tests
           swiftc Sources/Models.swift Tests/CurrentWatchingClockTests/main.swift -o /tmp/current-watching-clock-tests
           /tmp/current-watching-clock-tests
 

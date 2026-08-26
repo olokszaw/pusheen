@@ -9,7 +9,7 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.db import OperationalError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.test import AsyncRequestFactory, SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
@@ -20,12 +20,25 @@ from rest_framework.test import APITestCase
 
 from config.asgi import application
 from .models import ChatMessage, FriendLink, FriendRequest, MessageReaction, PlaybackState, Room, RoomBan, RoomInvitation, RoomMember, RoomMute, UserPresence, UserProfile, ViewingActivity
-from .views import _normalize_telegram_sticker_data
+from .views import _async_video_file_chunks, _normalize_telegram_sticker_data, _uploaded_video_response
 from .presence import touch_presence
 from .video_stream import _select_web_format
 
 
 class WebStreamSelectionTests(SimpleTestCase):
+    def test_async_upload_stream_keeps_range_reads_incremental(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "movie.mp4")
+            with open(path, "wb") as target:
+                target.write(b"0123456789")
+
+            async def collect():
+                return b"".join([
+                    chunk async for chunk in _async_video_file_chunks(path, 2, 4)
+                ])
+
+            self.assertEqual(asyncio.run(collect()), b"2345")
+
     def test_youtube_prefers_avplayer_codec_over_higher_resolution_av1(self):
         selected = _select_web_format(
             {
@@ -128,6 +141,22 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual([item["id"] for item in response.data], [second.id, third.id])
         self.assertEqual([item["text"] for item in response.data], ["second", "third"])
+
+    def test_message_known_ids_repairs_a_lower_id_socket_delivery_gap(self):
+        room = Room.objects.create(owner=self.owner, title="Gap repair chat")
+        RoomMember.objects.create(room=room, user=self.owner)
+        first = ChatMessage.objects.create(room=room, user=self.owner, text="first")
+        missed = ChatMessage.objects.create(room=room, user=self.owner, text="missed")
+        newer = ChatMessage.objects.create(room=room, user=self.owner, text="newer")
+        self.authenticate(self.owner_token)
+
+        response = self.client.get(
+            f"/api/rooms/{room.id}/messages/?known_ids={first.id},{newer.id}"
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([item["id"] for item in response.data], [missed.id])
+        self.assertEqual([item["text"] for item in response.data], ["missed"])
 
     def test_batch_fallback_persists_a_spam_burst_in_client_order(self):
         room = Room.objects.create(owner=self.owner, title="Burst chat")
@@ -971,6 +1000,22 @@ class RoomApiTests(APITestCase):
             ranged = self.client.get(f"/api/rooms/{room_id}/media/", HTTP_RANGE="bytes=2-5")
             self.assertEqual(ranged.status_code, 206)
             self.assertEqual(b"".join(ranged.streaming_content), b"2345")
+
+            # Production runs through Daphne/ASGI. Its response must retain an
+            # async iterator; adapting a sync iterator would materialize a large
+            # range in Channels' thread-sensitive worker and stall chat writes.
+            asgi_request = AsyncRequestFactory().get(
+                "/media/", headers={"Range": "bytes=2-5"}
+            )
+            asgi_ranged = _uploaded_video_response(asgi_request, room)
+            self.assertTrue(asgi_ranged.is_async)
+
+            async def consume_asgi_range():
+                return b"".join([
+                    chunk async for chunk in asgi_ranged.streaming_content
+                ])
+
+            self.assertEqual(async_to_sync(consume_asgi_range)(), b"2345")
 
             deleted = self.client.delete(f"/api/rooms/{room_id}/")
             self.assertEqual(deleted.status_code, 204)

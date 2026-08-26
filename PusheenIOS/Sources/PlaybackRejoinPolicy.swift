@@ -108,12 +108,14 @@ enum PlaybackRejoinPolicy {
     static func shouldCatchUpParticipant(
         isOwner: Bool,
         isPlaying: Bool,
+        isPlayerAdvancing: Bool,
         command: String,
         localPosition: Double,
         authoritativePosition: Double
     ) -> Bool {
         !isOwner
             && isPlaying
+            && isPlayerAdvancing
             && command == "state"
             && authoritativePosition - localPosition > 3
     }
