@@ -1460,26 +1460,34 @@ def room_messages_batch(request, room_id):
     if len(items) > 40:
         return Response({"detail": "Too many messages"}, status=400)
 
+    # Validate the complete batch before opening the transaction. Returning an
+    # error from inside `atomic()` commits normally; the old loop could therefore
+    # save the valid prefix of a malformed batch without broadcasting it, while
+    # the client correctly believed that nothing had been accepted.
+    normalized_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            return Response({"detail": "Invalid message"}, status=400)
+        text = str(item.get("text") or "").strip()[:500]
+        image_data_url = str(item.get("image_data_url") or "").strip()
+        if len(image_data_url) > 2_800_000:
+            return Response({"detail": "Image is too large"}, status=413)
+        if not text and not image_data_url:
+            return Response({"detail": "Message is empty"}, status=400)
+        client_message_id = str(item.get("client_message_id") or "").strip()[:64]
+        if not client_message_id:
+            return Response({"detail": "client_message_id is required"}, status=400)
+        reply_to = None
+        if item.get("reply_to_id"):
+            reply_to = ChatMessage.objects.filter(id=item["reply_to_id"], room=room).first()
+            if not reply_to:
+                return Response({"detail": "Reply message not found"}, status=404)
+        normalized_items.append((text, image_data_url, client_message_id, reply_to))
+
     persisted = []
     created_payloads = []
     with transaction.atomic():
-        for item in items:
-            if not isinstance(item, dict):
-                return Response({"detail": "Invalid message"}, status=400)
-            text = str(item.get("text") or "").strip()[:500]
-            image_data_url = str(item.get("image_data_url") or "").strip()
-            if len(image_data_url) > 2_800_000:
-                return Response({"detail": "Image is too large"}, status=413)
-            if not text and not image_data_url:
-                return Response({"detail": "Message is empty"}, status=400)
-            client_message_id = str(item.get("client_message_id") or "").strip()[:64]
-            if not client_message_id:
-                return Response({"detail": "client_message_id is required"}, status=400)
-            reply_to = None
-            if item.get("reply_to_id"):
-                reply_to = ChatMessage.objects.filter(id=item["reply_to_id"], room=room).first()
-                if not reply_to:
-                    return Response({"detail": "Reply message not found"}, status=404)
+        for text, image_data_url, client_message_id, reply_to in normalized_items:
             message, created = ChatMessage.objects.get_or_create(
                 room=room, user=request.user, client_message_id=client_message_id,
                 defaults={"text": text, "image_data_url": image_data_url, "reply_to": reply_to},

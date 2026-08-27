@@ -210,6 +210,25 @@ class RoomApiTests(APITestCase):
             ["old-0", "old-1", "old-2", "old-3", "newer"],
         )
 
+    def test_invalid_batch_never_commits_a_valid_prefix(self):
+        room = Room.objects.create(owner=self.owner, title="Atomic fallback")
+        RoomMember.objects.create(room=room, user=self.owner)
+        self.authenticate(self.owner_token)
+
+        response = self.client.post(
+            f"/api/rooms/{room.id}/messages/batch/",
+            {
+                "messages": [
+                    {"text": "must roll back", "client_message_id": "atomic-valid"},
+                    {"text": "", "client_message_id": "atomic-invalid"},
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(ChatMessage.objects.filter(room=room).exists())
+
     def test_reply_is_persisted_and_visible_to_every_member(self):
         room = Room.objects.create(owner=self.owner, title="Reply chat")
         RoomMember.objects.create(room=room, user=self.owner)
@@ -1174,6 +1193,9 @@ class RoomSocketTests(TransactionTestCase):
         with patch("watchparty.consumers.ROOM_DISCONNECT_GRACE_SECONDS", 0.2):
             async_to_sync(self._assert_overlapping_reconnect_presence)()
 
+    def test_room_opened_is_announced_only_once_per_socket(self):
+        async_to_sync(self._assert_room_opened_is_idempotent)()
+
     def test_stale_playback_sequence_cannot_overwrite_new_seek(self):
         async_to_sync(self._assert_stale_playback_is_rejected)()
 
@@ -1206,6 +1228,27 @@ class RoomSocketTests(TransactionTestCase):
         database_state = await self._playback_state()
         self.assertEqual(database_state["sequence"], 1)
         self.assertEqual(database_state["position"], 250)
+        await owner_socket.disconnect()
+
+    async def _assert_room_opened_is_idempotent(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        guest_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(guest_socket, "playback_state")
+
+        await guest_socket.send_json_to({"type": "room_opened"})
+        first = await self._next_event(owner_socket, "presence")
+        self.assertTrue(first["changed"])
+        await guest_socket.send_json_to({"type": "room_opened"})
+        self.assertTrue(await owner_socket.receive_nothing(timeout=0.1))
+
+        await guest_socket.disconnect()
         await owner_socket.disconnect()
 
     async def _assert_overlapping_reconnect_presence(self):

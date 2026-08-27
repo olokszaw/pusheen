@@ -43,4 +43,17 @@ let repairedGap = ChatTimelinePolicy.insertingPersisted(
 )
 precondition(repairedGap.map(\.text) == ["first", "joined", "missed", "newer"])
 
+precondition(!ChatTimelinePolicy.shouldAppendPresenceNotice(
+    userID: 7, currentUserID: 7, changed: true,
+    previousOnline: false, isOnline: true
+), "A participant must never receive a notice about their own room opening")
+precondition(ChatTimelinePolicy.shouldAppendPresenceNotice(
+    userID: 7, currentUserID: 8, changed: true,
+    previousOnline: false, isOnline: true
+))
+precondition(!ChatTimelinePolicy.shouldAppendPresenceNotice(
+    userID: 7, currentUserID: 8, changed: true,
+    previousOnline: true, isOnline: true
+), "A repeated online snapshot is not another join")
+
 print("Chat timeline policy tests passed")

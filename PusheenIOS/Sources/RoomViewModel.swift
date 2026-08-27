@@ -733,11 +733,12 @@ final class RoomViewModel: ObservableObject {
         )
         if sent {
             realtimeMessageInFlightID = pending.id
-            // This must also cover messages restored from disk. Previously only
-            // newly typed messages had a timeout, so one duplicate restored row
-            // could block the realtime FIFO forever.
-            scheduleMessageAcknowledgementTimeout(for: pending.id)
         }
+        // Cover both a sent frame awaiting ACK and a tap that raced with socket
+        // disconnection. Without a timer in the latter case, the message waited
+        // behind the next (potentially eight-second) history request before HTTP
+        // fallback even began.
+        scheduleMessageAcknowledgementTimeout(for: pending.id)
     }
 
     private func finishPendingDelivery(_ clientID: String) {
@@ -1011,8 +1012,13 @@ final class RoomViewModel: ObservableObject {
             // A user already knows that their own room view opened. Showing a
             // self-join notice is noisy and made an old row-order bug look like
             // the participant rejoined after every sent message.
-            if userID != 0, userID != currentUserID,
-               event["changed"] as? Bool == true, previousOnline != online {
+            if ChatTimelinePolicy.shouldAppendPresenceNotice(
+                userID: userID,
+                currentUserID: currentUserID,
+                changed: event["changed"] as? Bool == true,
+                previousOnline: previousOnline,
+                isOnline: online
+            ) {
                 let now = Date()
                 let noticeKey = "\(userID):\(online)"
                 let isRepeatedReconnect = lastPresenceNoticeAt[noticeKey].map { now.timeIntervalSince($0) < 12 } ?? false
@@ -1132,9 +1138,8 @@ final class RoomViewModel: ObservableObject {
     }
     private func confirmPersistedMessage(_ persisted: ChatMessage, for pending: PendingChatMessage) {
         if let localIndex = messages.firstIndex(where: { $0.id == pending.localMessageID }) {
-            // Replace only the exact optimistic row. Normalization below moves
-            // its new positive id into the server order without touching the
-            // relative order of other pending/system rows.
+            // Replace only the exact optimistic row and preserve its visual
+            // position relative to local system notices and other pending rows.
             messages[localIndex] = persisted
         } else if !messages.contains(where: { $0.id == persisted.id }) {
             messages.append(persisted)

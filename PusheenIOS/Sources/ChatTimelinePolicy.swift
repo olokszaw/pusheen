@@ -22,4 +22,17 @@ enum ChatTimelinePolicy {
         }
         return result
     }
+
+    static func shouldAppendPresenceNotice(
+        userID: Int,
+        currentUserID: Int?,
+        changed: Bool,
+        previousOnline: Bool?,
+        isOnline: Bool
+    ) -> Bool {
+        userID != 0
+            && userID != currentUserID
+            && changed
+            && previousOnline != isOnline
+    }
 }
