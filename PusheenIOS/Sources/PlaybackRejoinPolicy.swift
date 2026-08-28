@@ -82,7 +82,67 @@ enum PlaybackRejoinPolicy {
     }
 
     static func shouldAttemptStallSeek(stalledFor: Double, alreadyAttempted: Bool) -> Bool {
-        stalledFor >= 7 && !alreadyAttempted
+        // A slow connection can legitimately spend several seconds filling the
+        // forward buffer. Seeking during that wait throws the partial range
+        // away and may land on an earlier keyframe. Keep a seek as a last-resort
+        // recovery for a genuinely wedged request, not ordinary buffering.
+        stalledFor >= 25 && !alreadyAttempted
+    }
+
+    /// Catch a guest up without throwing away its HTTP/HLS buffer. A tiny rate
+    /// increase is deliberately used only after AVPlayer says the buffered
+    /// media is likely to keep up; a weak connection stays at 1x and continues
+    /// accumulating data instead of entering another stall.
+    static func participantCatchUpRate(
+        isOwner: Bool,
+        isPlaying: Bool,
+        isPlayerAdvancing: Bool,
+        isPlaybackLikelyToKeepUp: Bool,
+        command: String,
+        localPosition: Double,
+        authoritativePosition: Double
+    ) -> Float {
+        guard !isOwner,
+              isPlaying,
+              isPlayerAdvancing,
+              isPlaybackLikelyToKeepUp,
+              command == "state" else { return 1 }
+        let lag = authoritativePosition - localPosition
+        if lag > 8 { return 1.06 }
+        if lag > 2 { return 1.03 }
+        return 1
+    }
+
+    /// Jump to the exact shared clock only when that frame is already on the
+    /// device. A forward seek into an unloaded range is not synchronization on
+    /// a weak connection—it is just another visible spinner.
+    static func shouldUseBufferedExactCatchUp(
+        isOwner: Bool,
+        isPlaying: Bool,
+        command: String,
+        lag: Double,
+        targetIsBuffered: Bool
+    ) -> Bool {
+        !isOwner
+            && isPlaying
+            && command == "state"
+            && lag > 3
+            && targetIsBuffered
+    }
+
+    /// A last-resort recovery must never move a participant behind the frame
+    /// already displayed. Approximate keyframe seeking can otherwise look like
+    /// a short rewind after a network stall.
+    static func nonRewindingRecoveryPosition(
+        projectedAuthoritativePosition: Double,
+        localPosition: Double,
+        previousHealthyPosition: Double,
+        knownDuration: Double
+    ) -> Double {
+        clampedPosition(
+            max(projectedAuthoritativePosition, max(localPosition, previousHealthyPosition)),
+            knownDuration: knownDuration
+        )
     }
 
     /// Some HTTP AVPlayer items jump their local clock to exactly zero while

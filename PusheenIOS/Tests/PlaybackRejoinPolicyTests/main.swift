@@ -59,10 +59,10 @@ precondition(PlaybackRejoinPolicy.projectedRecoveryPosition(
     anchor: 498, elapsed: 7, isPlaying: true, knownDuration: 500
 ) == 500)
 precondition(!PlaybackRejoinPolicy.shouldAttemptStallSeek(
-    stalledFor: 6.9, alreadyAttempted: false
+    stalledFor: 24.9, alreadyAttempted: false
 ))
 precondition(PlaybackRejoinPolicy.shouldAttemptStallSeek(
-    stalledFor: 7, alreadyAttempted: false
+    stalledFor: 25, alreadyAttempted: false
 ))
 precondition(!PlaybackRejoinPolicy.shouldAttemptStallSeek(
     stalledFor: 30, alreadyAttempted: true
@@ -90,5 +90,35 @@ precondition(!PlaybackRejoinPolicy.shouldCatchUpParticipant(
     isOwner: false, isPlaying: true, isPlayerAdvancing: false, command: "state",
     localPosition: 100, authoritativePosition: 120
 ), "A buffering participant must be allowed to fill its range buffer")
+
+precondition(PlaybackRejoinPolicy.participantCatchUpRate(
+    isOwner: false, isPlaying: true, isPlayerAdvancing: true,
+    isPlaybackLikelyToKeepUp: true, command: "state",
+    localPosition: 100, authoritativePosition: 109
+) == 1.06)
+precondition(PlaybackRejoinPolicy.participantCatchUpRate(
+    isOwner: false, isPlaying: true, isPlayerAdvancing: true,
+    isPlaybackLikelyToKeepUp: true, command: "state",
+    localPosition: 100, authoritativePosition: 104
+) == 1.03)
+precondition(PlaybackRejoinPolicy.participantCatchUpRate(
+    isOwner: false, isPlaying: true, isPlayerAdvancing: false,
+    isPlaybackLikelyToKeepUp: false, command: "state",
+    localPosition: 100, authoritativePosition: 109
+) == 1, "A buffering guest must not be forced to consume data faster")
+precondition(PlaybackRejoinPolicy.nonRewindingRecoveryPosition(
+    projectedAuthoritativePosition: 98,
+    localPosition: 101,
+    previousHealthyPosition: 103,
+    knownDuration: 500
+) == 103)
+precondition(PlaybackRejoinPolicy.shouldUseBufferedExactCatchUp(
+    isOwner: false, isPlaying: true, command: "state",
+    lag: 4, targetIsBuffered: true
+))
+precondition(!PlaybackRejoinPolicy.shouldUseBufferedExactCatchUp(
+    isOwner: false, isPlaying: true, command: "state",
+    lag: 4, targetIsBuffered: false
+), "Never seek a weak connection into an unloaded range")
 
 print("Playback rejoin policy tests passed")

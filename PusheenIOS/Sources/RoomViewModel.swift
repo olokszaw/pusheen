@@ -189,7 +189,10 @@ final class RoomViewModel: ObservableObject {
             // often already has data locally. Keep enough forward data to absorb
             // ordinary Wi-Fi/server jitter instead of oscillating in and out of
             // AVPlayer's waiting state.
-            item.preferredForwardBufferDuration = 20
+            // Prefer a smooth shared session over the quickest possible first
+            // frame. This is advisory (AVPlayer can still start earlier), but on
+            // a weak connection it gives the guest substantially more runway.
+            item.preferredForwardBufferDuration = isOwner ? 30 : 60
             let roomPlayer = AVPlayer(playerItem: item)
             roomPlayer.automaticallyWaitsToMinimizeStalling = true
             roomPlayer.isMuted = false
@@ -254,9 +257,16 @@ final class RoomViewModel: ObservableObject {
                     guard let self, !self.isStopped, self.isPlaying else { return }
                     self.playbackRecoveryTask?.cancel()
                     self.playbackRecoveryTask = Task { [weak self] in
-                        try? await Task.sleep(for: .milliseconds(350))
+                        try? await Task.sleep(for: .milliseconds(900))
                         guard !Task.isCancelled, let self, !self.isStopped,
                               self.isPlaying, self.pendingSeekPosition == nil else { return }
+                        // For adaptive HLS this asks AVPlayer to prefer a lower
+                        // rendition after the first real stall. Direct MP4 files
+                        // have only one rendition, so the hint is harmless there.
+                        if !self.isOwner {
+                            self.player?.currentItem?.preferredForwardBufferDuration = 60
+                            self.player?.currentItem?.preferredPeakBitRate = 2_000_000
+                        }
                         self.player?.play()
                         // Refresh the authoritative clock without making the
                         // stalled participant publish its frozen local frame.
@@ -575,8 +585,11 @@ final class RoomViewModel: ObservableObject {
                     continue
                 }
                 let stalledFor = now - self.lastHealthyPlaybackUptime
-                if stalledFor >= 3 {
-                    player.playImmediately(atRate: 1)
+                if stalledFor >= 3, player.timeControlStatus == .paused {
+                    // `playImmediately` bypasses AVPlayer's anti-stall buffer and
+                    // made marginal connections repeatedly start with too little
+                    // data. A normal play preserves automaticallyWaitsToMinimizeStalling.
+                    player.play()
                 }
                 // Exactly one recovery seek per continuous stall. Repeating
                 // this every few seconds makes AVPlayer jump to an earlier
@@ -586,10 +599,16 @@ final class RoomViewModel: ObservableObject {
                     alreadyAttempted: self.hasAttemptedStallSeek
                 ) else { continue }
                 self.hasAttemptedStallSeek = true
-                let target = PlaybackRejoinPolicy.projectedRecoveryPosition(
+                let projectedTarget = PlaybackRejoinPolicy.projectedRecoveryPosition(
                     anchor: self.latestAuthoritativeAnchor,
                     elapsed: now - self.latestAuthoritativeAnchorUptime,
                     isPlaying: self.latestAuthoritativeIsPlaying,
+                    knownDuration: self.duration
+                )
+                let target = PlaybackRejoinPolicy.nonRewindingRecoveryPosition(
+                    projectedAuthoritativePosition: projectedTarget,
+                    localPosition: actual,
+                    previousHealthyPosition: self.lastHealthyPlaybackPosition,
                     knownDuration: self.duration
                 )
                 self.seekGeneration &+= 1
@@ -906,14 +925,18 @@ final class RoomViewModel: ObservableObject {
             let actualPosition = player?.currentTime().seconds
             let localPosition = (actualPosition?.isFinite == true) ? (actualPosition ?? position) : position
             let drift = abs(localPosition - authoritative)
-            let shouldCatchUp = PlaybackRejoinPolicy.shouldCatchUpParticipant(
+            let bufferedExactCatchUp = PlaybackRejoinPolicy.shouldUseBufferedExactCatchUp(
                 isOwner: isOwner,
                 isPlaying: nextIsPlaying,
-                // Seeking while AVPlayer is waiting discards its partial range
-                // buffer. Repeating that on every state snapshot can keep only
-                // participants stalled forever. The health monitor will resume
-                // or perform one recovery seek if the wait is truly stuck.
+                command: command,
+                lag: authoritative - localPosition,
+                targetIsBuffered: isPositionBuffered(authoritative, minimumForwardBuffer: 2)
+            )
+            let catchUpRate = PlaybackRejoinPolicy.participantCatchUpRate(
+                isOwner: isOwner,
+                isPlaying: nextIsPlaying,
                 isPlayerAdvancing: player?.timeControlStatus == .playing,
+                isPlaybackLikelyToKeepUp: player?.currentItem?.isPlaybackLikelyToKeepUp == true,
                 command: command,
                 localPosition: localPosition,
                 authoritativePosition: authoritative
@@ -924,7 +947,7 @@ final class RoomViewModel: ObservableObject {
                     command: command,
                     isPlaying: nextIsPlaying
                 )
-            ) || shouldCatchUp
+            ) || bufferedExactCatchUp
             if shouldApplyPosition && drift > 0.85 {
                 // Invalidate an older initial seek before applying a newer
                 // command. Without this, the old completion could rewind a
@@ -947,7 +970,15 @@ final class RoomViewModel: ObservableObject {
             // Do not start a newly-created player at its default 0:00 frame
             // while the initial room seek is still in flight.
             if initialPlaybackPosition == nil && pendingSeekPosition == nil {
-                isPlaying ? player?.play() : player?.pause()
+                if isPlaying {
+                    if catchUpRate > 1 {
+                        player?.playImmediately(atRate: catchUpRate)
+                    } else {
+                        player?.play()
+                    }
+                } else {
+                    player?.pause()
+                }
             }
         case "chat_message":
             if let data = try? JSONSerialization.data(withJSONObject: event),
@@ -1134,6 +1165,19 @@ final class RoomViewModel: ObservableObject {
                 // heartbeat will retry it without losing or reordering a message.
                 return
             }
+        }
+    }
+
+    private func isPositionBuffered(_ target: Double, minimumForwardBuffer: Double) -> Bool {
+        guard target.isFinite, target >= 0, let item = player?.currentItem else { return false }
+        return item.loadedTimeRanges.contains { value in
+            let range = value.timeRangeValue
+            let start = range.start.seconds
+            let end = CMTimeRangeGetEnd(range).seconds
+            return start.isFinite
+                && end.isFinite
+                && target >= start
+                && target + minimumForwardBuffer <= end
         }
     }
     private func confirmPersistedMessage(_ persisted: ChatMessage, for pending: PendingChatMessage) {

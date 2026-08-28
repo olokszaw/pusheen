@@ -871,7 +871,7 @@ struct RoomView: View {
             // iOS can dismiss the software keyboard while the app is inactive
             // without delivering the complete will-hide notification sequence.
             if phase != .active {
-                chatFocused = false
+                dismissChatKeyboard()
                 resetKeyboardLayout()
             }
         }
@@ -2777,6 +2777,7 @@ private struct PersistentChatTextField: UIViewRepresentable {
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.setContentHuggingPriority(.required, for: .vertical)
         view.setContentCompressionResistancePriority(.required, for: .vertical)
+        context.coordinator.observeApplicationLifecycle(for: view)
         return view
     }
     func updateUIView(_ field: ChatTextView, context: Context) {
@@ -2807,7 +2808,29 @@ private struct PersistentChatTextField: UIViewRepresentable {
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: PersistentChatTextField
+        private weak var observedField: UITextView?
+        private var lifecycleObservers: [NSObjectProtocol] = []
         init(parent: PersistentChatTextField) { self.parent = parent }
+        deinit {
+            lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        }
+        func observeApplicationLifecycle(for field: UITextView) {
+            guard observedField !== field else { return }
+            lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            lifecycleObservers.removeAll()
+            observedField = field
+            let center = NotificationCenter.default
+            for name in [UIApplication.willResignActiveNotification, UIApplication.didEnterBackgroundNotification] {
+                lifecycleObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self, weak field] _ in
+                    guard let self, let field else { return }
+                    // Scene changes can suppress keyboard hide callbacks. End
+                    // the UIKit editing session directly so it cannot be
+                    // restored in a frozen state when the app becomes active.
+                    field.resignFirstResponder()
+                    self.parent.isFocused = false
+                })
+            }
+        }
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
             (textView as? ChatTextView)?.updatePlaceholder()
