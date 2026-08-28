@@ -137,12 +137,43 @@ enum PlaybackRejoinPolicy {
         isOwner: Bool,
         isPlaying: Bool,
         ownerClockIsFresh: Bool,
+        ownerClockAdvancing: Bool,
         localPosition: Double,
         authoritativePosition: Double
     ) -> Bool {
         !isOwner
             && isPlaying
-            && (!ownerClockIsFresh || localPosition - authoritativePosition > 1.0)
+            && (!ownerClockIsFresh || !ownerClockAdvancing)
+    }
+
+    /// Every physical owner-clock sample is authoritative in both directions.
+    /// Large drift is corrected immediately; small drift is handled by a tiny
+    /// rate correction to avoid seeking on every network packet.
+    static func shouldSeekToExactOwnerClock(
+        isOwner: Bool,
+        command: String,
+        drift: Double,
+        ownerClockAdvancing: Bool
+    ) -> Bool {
+        !isOwner
+            && command == "owner_clock"
+            && abs(drift) > (ownerClockAdvancing ? 0.35 : 0.08)
+    }
+
+    static func exactSyncRate(
+        isOwner: Bool,
+        command: String,
+        drift: Double,
+        ownerClockAdvancing: Bool,
+        targetIsBuffered: Bool
+    ) -> Float {
+        guard !isOwner,
+              command == "owner_clock",
+              ownerClockAdvancing,
+              targetIsBuffered else { return 1 }
+        if drift > 0.08 { return 1.03 }
+        if drift < -0.08 { return 0.97 }
+        return 1
     }
 
     /// A last-resort recovery must never move a participant behind the frame

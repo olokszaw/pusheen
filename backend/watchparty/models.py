@@ -110,6 +110,9 @@ class PlaybackState(models.Model):
     # retain it, so a delayed snapshot from an older seek/play generation can
     # never overwrite newer authoritative state.
     sequence = models.PositiveBigIntegerField(default=0)
+    # The room can be logically Playing while the owner's AVPlayer is waiting
+    # for media. Guests must follow the physical clock, not keep running ahead.
+    owner_clock_advancing = models.BooleanField(default=False)
     # UTC time when position_seconds was authoritative; clients compensate for transport delay.
     updated_at = models.DateTimeField(auto_now=True)
 

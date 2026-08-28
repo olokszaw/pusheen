@@ -121,16 +121,40 @@ precondition(!PlaybackRejoinPolicy.shouldUseBufferedExactCatchUp(
     lag: 4, targetIsBuffered: false
 ), "Never seek a weak connection into an unloaded range")
 precondition(PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
-    isOwner: false, isPlaying: true, ownerClockIsFresh: false,
+    isOwner: false, isPlaying: true, ownerClockIsFresh: false, ownerClockAdvancing: true,
     localPosition: 1_585, authoritativePosition: 1_513
 ), "A guest must stop when the owner's physical clock disappears")
-precondition(PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
-    isOwner: false, isPlaying: true, ownerClockIsFresh: true,
-    localPosition: 1_515, authoritativePosition: 1_513
-), "A guest already ahead must wait instead of rewinding")
 precondition(!PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
-    isOwner: false, isPlaying: true, ownerClockIsFresh: true,
+    isOwner: false, isPlaying: true, ownerClockIsFresh: true, ownerClockAdvancing: true,
+    localPosition: 1_515, authoritativePosition: 1_513
+), "An ahead guest must seek to the owner instead of merely waiting")
+precondition(!PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
+    isOwner: false, isPlaying: true, ownerClockIsFresh: true, ownerClockAdvancing: true,
     localPosition: 1_513.5, authoritativePosition: 1_513
 ))
+precondition(PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
+    isOwner: false, isPlaying: true, ownerClockIsFresh: true, ownerClockAdvancing: false,
+    localPosition: 1_513, authoritativePosition: 1_513
+), "Guests must buffer on the same frame as the owner")
+precondition(PlaybackRejoinPolicy.shouldSeekToExactOwnerClock(
+    isOwner: false, command: "owner_clock", drift: -600,
+    ownerClockAdvancing: true
+), "A guest ten minutes ahead must immediately seek back to the owner")
+precondition(PlaybackRejoinPolicy.shouldSeekToExactOwnerClock(
+    isOwner: false, command: "owner_clock", drift: 0.36,
+    ownerClockAdvancing: true
+))
+precondition(!PlaybackRejoinPolicy.shouldSeekToExactOwnerClock(
+    isOwner: false, command: "owner_clock", drift: 0.30,
+    ownerClockAdvancing: true
+))
+precondition(PlaybackRejoinPolicy.exactSyncRate(
+    isOwner: false, command: "owner_clock", drift: 0.20,
+    ownerClockAdvancing: true, targetIsBuffered: true
+) == 1.03)
+precondition(PlaybackRejoinPolicy.exactSyncRate(
+    isOwner: false, command: "owner_clock", drift: -0.20,
+    ownerClockAdvancing: true, targetIsBuffered: true
+) == 0.97)
 
 print("Playback rejoin policy tests passed")

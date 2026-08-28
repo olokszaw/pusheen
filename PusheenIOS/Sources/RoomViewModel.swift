@@ -93,6 +93,7 @@ final class RoomViewModel: ObservableObject {
     private var latestAuthoritativeAnchorUptime: TimeInterval = 0
     private var latestAuthoritativeIsPlaying = false
     private var latestOwnerClockIsFresh = true
+    private var latestOwnerClockAdvancing = true
     private var lastHealthyPlaybackPosition: Double = 0
     private var lastHealthyPlaybackUptime: TimeInterval = 0
     private var hasAttemptedStallSeek = false
@@ -130,6 +131,7 @@ final class RoomViewModel: ObservableObject {
         latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
         latestAuthoritativeIsPlaying = false
         latestOwnerClockIsFresh = true
+        latestOwnerClockAdvancing = true
         lastHealthyPlaybackPosition = 0
         lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
         hasAttemptedStallSeek = false
@@ -235,6 +237,7 @@ final class RoomViewModel: ObservableObject {
                     // public preview was repeatedly projected to the end.
                     self.socket.playbackSnapshot(
                         isPlaying: false,
+                        isActuallyAdvancing: false,
                         position: finalPosition.isFinite ? finalPosition : self.duration,
                         duration: self.duration,
                         sequence: self.outboundPlaybackSequence ?? self.latestPlaybackSequence
@@ -430,17 +433,17 @@ final class RoomViewModel: ObservableObject {
                         // remains unchanged.
                         self.socket.playbackSnapshot(
                             isPlaying: reportedIsPlaying,
+                            isActuallyAdvancing: isActuallyAdvancing,
                             position: max(0, actual),
                             duration: hasDuration ? itemDuration : 0,
                             sequence: self.outboundPlaybackSequence ?? self.latestPlaybackSequence
                         )
                     }
                 }
-                // The shared playing clock is projected from `updated_at`, so
-                // writing every 1.5 seconds adds SQLite contention without
-                // improving late-join accuracy. Five seconds is still fresh
-                // enough for the per-member preview and leaves chat writes free.
-                try? await Task.sleep(for: .seconds(5))
+                // The owner is the physical clock master. Four samples per
+                // second keep healthy guests inside one visible timecode tick;
+                // guest profile previews remain deliberately inexpensive.
+                try? await Task.sleep(for: .milliseconds(self.isOwner ? 250 : 5_000))
             }
         }
     }
@@ -871,19 +874,21 @@ final class RoomViewModel: ObservableObject {
             }
             isPlaying = nextIsPlaying
             let ownerClockIsFresh = event["owner_clock_is_fresh"] as? Bool ?? true
+            let ownerClockAdvancing = event["owner_clock_advancing"] as? Bool ?? nextIsPlaying
             latestOwnerClockIsFresh = ownerClockIsFresh
+            latestOwnerClockAdvancing = ownerClockAdvancing
             if let muted = event["is_muted"] as? Bool { isMuted = muted }
             let remote = (event["position_seconds"] as? NSNumber)?.doubleValue ?? 0
             // The creator receives their own broadcast too. Never seek it back to
             // an older server snapshot: that was the visible forward/back loop.
             let authoritative = compensatedPosition(
                 remote: remote,
-                isPlaying: isPlaying && ownerClockIsFresh,
+                isPlaying: isPlaying && ownerClockIsFresh && ownerClockAdvancing,
                 event: event
             )
             latestAuthoritativeAnchor = authoritative
             latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
-            latestAuthoritativeIsPlaying = nextIsPlaying
+            latestAuthoritativeIsPlaying = nextIsPlaying && ownerClockIsFresh && ownerClockAdvancing
             let itemIsReady = player?.currentItem?.status == .readyToPlay
             if let queuedOwnerCommand {
                 // Do not let the first (necessarily older) server snapshot erase
@@ -896,6 +901,8 @@ final class RoomViewModel: ObservableObject {
                 latestAuthoritativeAnchor = queuedOwnerCommand.position
                 latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
                 latestAuthoritativeIsPlaying = queuedOwnerCommand.isPlaying
+                latestOwnerClockIsFresh = true
+                latestOwnerClockAdvancing = queuedOwnerCommand.isPlaying
                 if !itemIsReady {
                     initialPlaybackPosition = queuedOwnerCommand.position
                     hasAppliedInitialPlaybackState = true
@@ -937,8 +944,15 @@ final class RoomViewModel: ObservableObject {
                 isOwner: isOwner,
                 isPlaying: nextIsPlaying,
                 ownerClockIsFresh: ownerClockIsFresh,
+                ownerClockAdvancing: ownerClockAdvancing,
                 localPosition: localPosition,
                 authoritativePosition: authoritative
+            )
+            let exactOwnerClockSeek = PlaybackRejoinPolicy.shouldSeekToExactOwnerClock(
+                isOwner: isOwner,
+                command: command,
+                drift: authoritative - localPosition,
+                ownerClockAdvancing: ownerClockAdvancing
             )
             let bufferedExactCatchUp = PlaybackRejoinPolicy.shouldUseBufferedExactCatchUp(
                 isOwner: isOwner,
@@ -956,14 +970,24 @@ final class RoomViewModel: ObservableObject {
                 localPosition: localPosition,
                 authoritativePosition: authoritative
             )
+            let exactSyncRate = PlaybackRejoinPolicy.exactSyncRate(
+                isOwner: isOwner,
+                command: command,
+                drift: authoritative - localPosition,
+                ownerClockAdvancing: ownerClockAdvancing,
+                targetIsBuffered: isPositionBuffered(authoritative, minimumForwardBuffer: 1)
+            )
             let shouldApplyPosition = firstStateForConnection || (
                 !isOwner && PlaybackRejoinPolicy.shouldSeekForRemoteState(
                     firstStateForConnection: false,
                     command: command,
                     isPlaying: nextIsPlaying
                 )
-            ) || bufferedExactCatchUp
-            if shouldApplyPosition && drift > 0.85 {
+            ) || bufferedExactCatchUp || exactOwnerClockSeek
+            let ownerClockSeekAlreadyInFlight = command == "owner_clock" && pendingSeekPosition != nil
+            if shouldApplyPosition
+                && !ownerClockSeekAlreadyInFlight
+                && (exactOwnerClockSeek || drift > 0.85) {
                 // Invalidate an older initial seek before applying a newer
                 // command. Without this, the old completion could rewind a
                 // freshly joined viewer back to a stale time.
@@ -988,8 +1012,9 @@ final class RoomViewModel: ObservableObject {
                 if shouldHoldForOwner {
                     player?.pause()
                 } else if isPlaying {
-                    if catchUpRate > 1 {
-                        player?.playImmediately(atRate: catchUpRate)
+                    let synchronizedRate = exactSyncRate != 1 ? exactSyncRate : catchUpRate
+                    if synchronizedRate != 1 {
+                        player?.playImmediately(atRate: synchronizedRate)
                     } else {
                         player?.play()
                     }
@@ -1186,7 +1211,7 @@ final class RoomViewModel: ObservableObject {
     }
 
     private var canAdvanceLocalPlayer: Bool {
-        isPlaying && (isOwner || latestOwnerClockIsFresh)
+        isPlaying && (isOwner || (latestOwnerClockIsFresh && latestOwnerClockAdvancing))
     }
 
     private func isPositionBuffered(_ target: Double, minimumForwardBuffer: Double) -> Bool {
@@ -1349,6 +1374,7 @@ final class RoomViewModel: ObservableObject {
             "position_seconds": playback.positionSeconds,
             "sequence": playback.sequence,
             "owner_clock_is_fresh": playback.ownerClockIsFresh,
+            "owner_clock_advancing": playback.ownerClockAdvancing,
             "is_owner": snapshot.room.owner == currentUserID,
             "is_muted": isMuted,
         ]

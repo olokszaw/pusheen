@@ -61,11 +61,12 @@ final class RoomSocket: ObservableObject {
         if let sequence { value["sequence"] = sequence }
         return send(value)
     }
-    func playbackSnapshot(isPlaying: Bool, position: Double, duration: Double, sequence: Int64? = nil) {
+    func playbackSnapshot(isPlaying: Bool, isActuallyAdvancing: Bool? = nil, position: Double, duration: Double, sequence: Int64? = nil) {
         guard position.isFinite, duration.isFinite else { return }
         var payload: [String: Any] = [
             "type": "playback_snapshot",
             "is_playing": isPlaying,
+            "is_actually_advancing": isActuallyAdvancing ?? isPlaying,
             "position_seconds": max(0, position),
             "duration_seconds": max(0, duration),
         ]

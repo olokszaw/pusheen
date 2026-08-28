@@ -1,6 +1,7 @@
 import asyncio
 import math
 import time
+from contextlib import nullcontext
 from datetime import timedelta
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -29,6 +30,9 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         # heartbeat watchdog makes presence change within seconds instead of
         # waiting for an OS-level socket timeout.
         self.last_heartbeat = time.monotonic()
+        self.connection_is_owner = await self.is_owner()
+        self.last_owner_clock_persisted = 0.0
+        self.last_owner_clock_advancing = None
         self.explicit_leave_handled = False
         self.room_open_announced = False
         self.heartbeat_watchdog = asyncio.create_task(self.watch_heartbeat())
@@ -201,23 +205,43 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         if not math.isfinite(position) or not math.isfinite(duration):
             return
         is_playing = bool(content.get("is_playing"))
-        await self.save_member_playback_snapshot(
-            is_playing=is_playing,
-            position=position,
-            duration=duration,
-        )
-        if not await self.is_owner():
+        is_actually_advancing = bool(content.get("is_actually_advancing", is_playing))
+        if not self.connection_is_owner:
+            await self.save_member_playback_snapshot(
+                is_playing=is_actually_advancing,
+                position=position,
+                duration=duration,
+            )
             return
-        state = await self.save_playback_snapshot(
+        now_monotonic = time.monotonic()
+        persist = (
+            now_monotonic - self.last_owner_clock_persisted >= 1.0
+            or not is_actually_advancing
+            or is_actually_advancing != self.last_owner_clock_advancing
+        )
+        state, accepted = await self.save_playback_snapshot(
             is_playing=is_playing,
+            is_actually_advancing=is_actually_advancing,
             position=position,
             duration=duration,
             base_sequence=content.get("sequence"),
+            persist=persist,
         )
-        if state is not None:
-            # A stale snapshot gets an authoritative correction, but must not
-            # disturb other participants.
+        if state is None:
+            return
+        if not accepted:
+            # A stale physical sample belongs to an older owner command.
             await self.send_json({"type": "playback_state", **state, "is_owner": True})
+            return
+        if persist:
+            self.last_owner_clock_persisted = now_monotonic
+            self.last_owner_clock_advancing = is_actually_advancing
+        # Physical owner samples are the room clock. Relaying them immediately
+        # keeps guests synchronized without waiting for a database round trip or
+        # an eight-second request_state heartbeat.
+        await self.channel_layer.group_send(
+            self.group_name, {"type": "room.playback", "payload": state}
+        )
 
     async def room_playback(self, event):
         # `is_owner` is connection-specific. Never broadcast the creator's
@@ -336,8 +360,12 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 room.save(update_fields=["vk_video_url"])
             state.is_playing = is_playing
             state.position_seconds = position
+            state.owner_clock_advancing = is_playing
             state.sequence += 1
-            state.save(update_fields=["is_playing", "position_seconds", "sequence", "updated_at"])
+            state.save(update_fields=[
+                "is_playing", "position_seconds", "owner_clock_advancing",
+                "sequence", "updated_at",
+            ])
             # Commands carry the exact seek/play anchor. Clients compensate
             # transport time from state.updated_at; projecting here as well
             # would add the same elapsed time twice.
@@ -367,13 +395,21 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         return True
 
     @database_sync_to_async
-    def save_playback_snapshot(self, is_playing, position, duration, base_sequence):
+    def save_playback_snapshot(
+        self, is_playing, is_actually_advancing, position, duration,
+        base_sequence, persist,
+    ):
         try:
-            with transaction.atomic():
-                room = Room.objects.select_for_update().get(id=self.room_id)
-                state = PlaybackState.objects.select_for_update().get(room=room)
+            transaction_context = transaction.atomic() if persist else nullcontext()
+            with transaction_context:
+                if persist:
+                    room = Room.objects.select_for_update().get(id=self.room_id)
+                    state = PlaybackState.objects.select_for_update().get(room=room)
+                else:
+                    room = Room.objects.select_related("playback").get(id=self.room_id)
+                    state = room.playback
                 if room.owner_id != self.scope["user"].id:
-                    return None
+                    return None, False
                 try:
                     incoming_sequence = int(base_sequence) if base_sequence is not None else None
                 except (TypeError, ValueError, OverflowError):
@@ -383,28 +419,66 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
                 # Accepting an unversioned or delayed pre-seek frame lets it rewind
                 # the shared room clock after a newer play/pause/seek command.
                 if incoming_sequence is None:
-                    return None
+                    return None, False
                 if incoming_sequence != state.sequence:
-                    return projected_playback_payload(room, state, command="stale")
-                if duration > 0:
+                    return projected_playback_payload(room, state, command="stale"), False
+                if persist and duration > 0:
                     position = min(position, duration)
                     if abs(float(room.duration_seconds or 0) - duration) > 0.25:
                         room.duration_seconds = duration
                         room.save(update_fields=["duration_seconds"])
-                # Explicit owner commands are the only source of play/pause state.
-                # While logically playing, a same-generation physical frame may
-                # refresh only a forward-moving anchor. This handles buffering but
-                # prevents overlapping/late snapshots from pulling every viewer
-                # backward and forward. A real backward seek has a new sequence.
-                if state.is_playing and position >= float(state.position_seconds or 0):
+                # Same-generation frames on one WebSocket are ordered. The
+                # physical owner position is authoritative even when it is lower
+                # than the server's old projected anchor; refusing that backward
+                # correction was what left guests minutes ahead of the owner.
+                if persist:
                     state.position_seconds = position
-                    state.save(update_fields=["position_seconds", "updated_at"])
-                return None
+                    state.owner_clock_advancing = is_actually_advancing
+                    state.save(update_fields=[
+                        "position_seconds", "owner_clock_advancing", "updated_at",
+                    ])
+                    RoomMember.objects.filter(
+                        room_id=self.room_id,
+                        user_id=self.scope["user"].id,
+                    ).update(
+                        viewer_is_playing=is_actually_advancing,
+                        viewer_position_seconds=position,
+                        viewer_duration_seconds=duration,
+                        viewer_playback_at=django_timezone.now(),
+                    )
+                payload = projected_playback_payload(
+                    room, state, command="owner_clock", project=False
+                )
+                sample_at = django_timezone.now().isoformat()
+                payload.update({
+                    "position_seconds": position,
+                    "is_playing": bool(state.is_playing),
+                    "owner_clock_advancing": is_actually_advancing,
+                    "owner_clock_is_fresh": True,
+                    "server_updated_at": sample_at,
+                    "server_sent_at": sample_at,
+                })
+                return payload, True
         except OperationalError:
             # Losing one physical clock sample is recoverable. Letting the error
             # escape kills the WebSocket, turns the next state into a reconnect
             # authority, and was the source of large guest-only rewinds.
-            return None
+            try:
+                incoming_sequence = int(base_sequence)
+            except (TypeError, ValueError, OverflowError):
+                return None, False
+            sample_at = django_timezone.now().isoformat()
+            return {
+                "room_id": self.room_id,
+                "command": "owner_clock",
+                "is_playing": is_playing,
+                "owner_clock_advancing": is_actually_advancing,
+                "owner_clock_is_fresh": True,
+                "position_seconds": position,
+                "sequence": incoming_sequence,
+                "server_updated_at": sample_at,
+                "server_sent_at": sample_at,
+            }, True
 
     @database_sync_to_async
     def save_chat(self, text, image_data_url, client_message_id, reply_to_id):

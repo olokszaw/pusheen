@@ -63,12 +63,12 @@ class PlaybackProjectionTests(SimpleTestCase):
             position_seconds=1_513,
             is_playing=True,
             sequence=4,
-            updated_at=now - timedelta(seconds=5),
+            updated_at=now - timedelta(seconds=2),
         )
 
         payload = projected_playback_payload(room, state, now=now)
 
-        self.assertEqual(payload["position_seconds"], 1_518)
+        self.assertEqual(payload["position_seconds"], 1_515)
         self.assertTrue(payload["owner_clock_is_fresh"])
 
 
@@ -989,7 +989,8 @@ class RoomApiTests(APITestCase):
             last_heartbeat_at=timezone.now(),
         )
         state = PlaybackState.objects.create(
-            room=room, is_playing=True, position_seconds=600, sequence=7
+            room=room, is_playing=True, owner_clock_advancing=True,
+            position_seconds=600, sequence=7
         )
         PlaybackState.objects.filter(pk=state.pk).update(
             updated_at=timezone.now() - timedelta(seconds=10)
@@ -999,8 +1000,8 @@ class RoomApiTests(APITestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertTrue(response.data["playback"]["is_playing"])
         self.assertEqual(response.data["playback"]["sequence"], 7)
-        self.assertGreaterEqual(response.data["playback"]["position_seconds"], 609)
-        self.assertLess(response.data["playback"]["position_seconds"], 612)
+        self.assertEqual(response.data["playback"]["position_seconds"], 604)
+        self.assertFalse(response.data["playback"]["owner_clock_is_fresh"])
         self.assertEqual(len(response.data["members"]), 1)
         self.assertTrue(response.data["members"][0]["is_online"])
 
@@ -1562,6 +1563,12 @@ class RoomSocketTests(TransactionTestCase):
         )
         self.assertTrue((await owner_socket.connect())[0])
         await self._next_event(owner_socket, "playback_state")
+        guest_socket = WebsocketCommunicator(
+            application,
+            f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}",
+        )
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(guest_socket, "playback_state")
 
         await owner_socket.send_json_to({
             "type": "playback_command",
@@ -1571,37 +1578,58 @@ class RoomSocketTests(TransactionTestCase):
             "sequence": 0,
         })
         playing = await self._next_event(owner_socket, "playback_state")
+        await self._next_event(guest_socket, "playback_state")
         self.assertTrue(playing["is_playing"])
         self.assertEqual(playing["sequence"], 1)
 
-        # AVPlayer can temporarily report not-playing while buffering. That
-        # physical sample may refresh the forward anchor and media duration,
-        # but it must never turn the shared room into Pause.
+        # Logical Play remains active, but the physical owner clock tells every
+        # guest to hold the exact 42-second frame while the owner buffers.
         await owner_socket.send_json_to({
             "type": "playback_snapshot",
-            "is_playing": False,
+            "is_playing": True,
+            "is_actually_advancing": False,
             "position_seconds": 42.0,
             "duration_seconds": 321.5,
             "sequence": 1,
         })
-        # A delayed frame from the same generation must not rewind the newer
-        # 42-second anchor and cause visible back/forward oscillation.
+        buffering = await self._next_event(owner_socket, "playback_state")
+        guest_buffering = await self._next_event(guest_socket, "playback_state")
+        self.assertEqual(buffering["command"], "owner_clock")
+        self.assertEqual(buffering["position_seconds"], 42.0)
+        self.assertTrue(buffering["is_playing"])
+        self.assertFalse(buffering["owner_clock_advancing"])
+        self.assertEqual(guest_buffering["position_seconds"], 42.0)
+        self.assertFalse(guest_buffering["owner_clock_advancing"])
+        self.assertFalse(guest_buffering["is_owner"])
+
+        # When the owner's physical AVPlayer resumes at a lower frame, that
+        # frame—not the server's old projection—is immediately authoritative.
         await owner_socket.send_json_to({
             "type": "playback_snapshot",
             "is_playing": True,
+            "is_actually_advancing": True,
             "position_seconds": 39.0,
             "duration_seconds": 321.5,
             "sequence": 1,
         })
+        physical = await self._next_event(owner_socket, "playback_state")
+        guest_physical = await self._next_event(guest_socket, "playback_state")
+        self.assertEqual(physical["command"], "owner_clock")
+        self.assertEqual(physical["position_seconds"], 39.0)
+        self.assertTrue(physical["owner_clock_advancing"])
+        self.assertEqual(guest_physical["position_seconds"], 39.0)
+        self.assertTrue(guest_physical["owner_clock_advancing"])
+
         await owner_socket.send_json_to({"type": "request_state"})
         state = await self._next_event(owner_socket, "playback_state")
-        self.assertGreaterEqual(state["position_seconds"], 42.0)
-        self.assertLess(state["position_seconds"], 43.0)
+        self.assertGreaterEqual(state["position_seconds"], 39.0)
+        self.assertLess(state["position_seconds"], 40.0)
         self.assertTrue(state["is_playing"])
         self.assertEqual(state["sequence"], 1)
         self.assertAlmostEqual(await self._room_duration(), 321.5)
 
         await owner_socket.disconnect()
+        await guest_socket.disconnect()
 
     async def _assert_guest_viewer_snapshot(self):
         guest_socket = WebsocketCommunicator(
