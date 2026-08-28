@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import uuid
+from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
 from django.db import OperationalError
@@ -22,7 +23,53 @@ from config.asgi import application
 from .models import ChatMessage, FriendLink, FriendRequest, MessageReaction, PlaybackState, Room, RoomBan, RoomInvitation, RoomMember, RoomMute, UserPresence, UserProfile, ViewingActivity
 from .views import _async_video_file_chunks, _normalize_telegram_sticker_data, _uploaded_video_response
 from .presence import touch_presence
+from .playback import OWNER_CLOCK_LEASE_SECONDS, projected_playback_payload
 from .video_stream import _select_web_format
+
+
+class PlaybackProjectionTests(SimpleTestCase):
+    def test_playing_clock_cannot_run_forever_without_owner_snapshot(self):
+        now = timezone.now()
+        room = SimpleNamespace(
+            id=7,
+            duration_seconds=4_000,
+            uploaded_video=None,
+            vk_video_url="",
+        )
+        state = SimpleNamespace(
+            position_seconds=1_513,
+            is_playing=True,
+            sequence=4,
+            updated_at=now - timedelta(seconds=72),
+        )
+
+        payload = projected_playback_payload(room, state, now=now)
+
+        self.assertEqual(
+            payload["position_seconds"],
+            1_513 + OWNER_CLOCK_LEASE_SECONDS,
+        )
+        self.assertFalse(payload["owner_clock_is_fresh"])
+
+    def test_recent_owner_snapshot_keeps_projected_clock_live(self):
+        now = timezone.now()
+        room = SimpleNamespace(
+            id=7,
+            duration_seconds=4_000,
+            uploaded_video=None,
+            vk_video_url="",
+        )
+        state = SimpleNamespace(
+            position_seconds=1_513,
+            is_playing=True,
+            sequence=4,
+            updated_at=now - timedelta(seconds=5),
+        )
+
+        payload = projected_playback_payload(room, state, now=now)
+
+        self.assertEqual(payload["position_seconds"], 1_518)
+        self.assertTrue(payload["owner_clock_is_fresh"])
 
 
 class WebStreamSelectionTests(SimpleTestCase):

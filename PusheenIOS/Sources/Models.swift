@@ -38,19 +38,22 @@ struct Playback: Codable, Hashable {
     var positionSeconds: Double
     var serverUpdatedAt: String?
     var sequence: Int64
+    var ownerClockIsFresh: Bool
 
     enum CodingKeys: String, CodingKey {
         case isPlaying = "is_playing"
         case positionSeconds = "position_seconds"
         case serverUpdatedAt = "server_updated_at"
+        case ownerClockIsFresh = "owner_clock_is_fresh"
         case sequence
     }
 
-    init(isPlaying: Bool, positionSeconds: Double, serverUpdatedAt: String? = nil, sequence: Int64 = 0) {
+    init(isPlaying: Bool, positionSeconds: Double, serverUpdatedAt: String? = nil, sequence: Int64 = 0, ownerClockIsFresh: Bool = true) {
         self.isPlaying = isPlaying
         self.positionSeconds = positionSeconds
         self.serverUpdatedAt = serverUpdatedAt
         self.sequence = sequence
+        self.ownerClockIsFresh = ownerClockIsFresh
     }
 
     init(from decoder: Decoder) throws {
@@ -59,6 +62,7 @@ struct Playback: Codable, Hashable {
         positionSeconds = try values.decodeIfPresent(Double.self, forKey: .positionSeconds) ?? 0
         serverUpdatedAt = try values.decodeIfPresent(String.self, forKey: .serverUpdatedAt)
         sequence = try values.decodeIfPresent(Int64.self, forKey: .sequence) ?? 0
+        ownerClockIsFresh = try values.decodeIfPresent(Bool.self, forKey: .ownerClockIsFresh) ?? true
     }
 }
 

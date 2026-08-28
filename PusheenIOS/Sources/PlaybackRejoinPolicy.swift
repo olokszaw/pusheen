@@ -130,6 +130,21 @@ enum PlaybackRejoinPolicy {
             && targetIsBuffered
     }
 
+    /// If the owner clock stops reporting, or this device somehow gets ahead,
+    /// hold the guest's frame until the authoritative clock catches up. This
+    /// restores exact synchronization without ever showing a backwards seek.
+    static func shouldHoldParticipantForOwner(
+        isOwner: Bool,
+        isPlaying: Bool,
+        ownerClockIsFresh: Bool,
+        localPosition: Double,
+        authoritativePosition: Double
+    ) -> Bool {
+        !isOwner
+            && isPlaying
+            && (!ownerClockIsFresh || localPosition - authoritativePosition > 1.0)
+    }
+
     /// A last-resort recovery must never move a participant behind the frame
     /// already displayed. Approximate keyframe seeking can otherwise look like
     /// a short rewind after a network stall.

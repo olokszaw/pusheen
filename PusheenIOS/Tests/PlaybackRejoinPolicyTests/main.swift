@@ -120,5 +120,17 @@ precondition(!PlaybackRejoinPolicy.shouldUseBufferedExactCatchUp(
     isOwner: false, isPlaying: true, command: "state",
     lag: 4, targetIsBuffered: false
 ), "Never seek a weak connection into an unloaded range")
+precondition(PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
+    isOwner: false, isPlaying: true, ownerClockIsFresh: false,
+    localPosition: 1_585, authoritativePosition: 1_513
+), "A guest must stop when the owner's physical clock disappears")
+precondition(PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
+    isOwner: false, isPlaying: true, ownerClockIsFresh: true,
+    localPosition: 1_515, authoritativePosition: 1_513
+), "A guest already ahead must wait instead of rewinding")
+precondition(!PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
+    isOwner: false, isPlaying: true, ownerClockIsFresh: true,
+    localPosition: 1_513.5, authoritativePosition: 1_513
+))
 
 print("Playback rejoin policy tests passed")

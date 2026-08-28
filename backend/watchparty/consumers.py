@@ -4,7 +4,7 @@ import time
 from datetime import timedelta
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.utils import timezone as django_timezone
 from .models import ChatMessage, MessageReaction, PlaybackState, Room, RoomBan, RoomMember, RoomMute
 from .playback import projected_playback_payload
@@ -349,48 +349,61 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     def save_member_playback_snapshot(self, is_playing, position, duration):
         if duration > 0:
             position = min(position, duration)
-        RoomMember.objects.filter(
-            room_id=self.room_id,
-            user_id=self.scope["user"].id,
-        ).update(
-            viewer_is_playing=is_playing,
-            viewer_position_seconds=position,
-            viewer_duration_seconds=duration,
-            viewer_playback_at=django_timezone.now(),
-        )
+        try:
+            RoomMember.objects.filter(
+                room_id=self.room_id,
+                user_id=self.scope["user"].id,
+            ).update(
+                viewer_is_playing=is_playing,
+                viewer_position_seconds=position,
+                viewer_duration_seconds=duration,
+                viewer_playback_at=django_timezone.now(),
+            )
+        except OperationalError:
+            # A disposable preview sample must never tear down the room socket.
+            # The next five-second sample will retry after SQLite/PostgreSQL is
+            # writable again.
+            return False
+        return True
 
     @database_sync_to_async
     def save_playback_snapshot(self, is_playing, position, duration, base_sequence):
-        with transaction.atomic():
-            room = Room.objects.select_for_update().get(id=self.room_id)
-            state = PlaybackState.objects.select_for_update().get(room=room)
-            if room.owner_id != self.scope["user"].id:
+        try:
+            with transaction.atomic():
+                room = Room.objects.select_for_update().get(id=self.room_id)
+                state = PlaybackState.objects.select_for_update().get(room=room)
+                if room.owner_id != self.scope["user"].id:
+                    return None
+                try:
+                    incoming_sequence = int(base_sequence) if base_sequence is not None else None
+                except (TypeError, ValueError, OverflowError):
+                    incoming_sequence = -1
+                # A physical AVPlayer snapshot is authoritative only inside the
+                # exact playback-command generation in which it was captured.
+                # Accepting an unversioned or delayed pre-seek frame lets it rewind
+                # the shared room clock after a newer play/pause/seek command.
+                if incoming_sequence is None:
+                    return None
+                if incoming_sequence != state.sequence:
+                    return projected_playback_payload(room, state, command="stale")
+                if duration > 0:
+                    position = min(position, duration)
+                    if abs(float(room.duration_seconds or 0) - duration) > 0.25:
+                        room.duration_seconds = duration
+                        room.save(update_fields=["duration_seconds"])
+                # Explicit owner commands are the only source of play/pause state.
+                # While logically playing, a same-generation physical frame may
+                # refresh only a forward-moving anchor. This handles buffering but
+                # prevents overlapping/late snapshots from pulling every viewer
+                # backward and forward. A real backward seek has a new sequence.
+                if state.is_playing and position >= float(state.position_seconds or 0):
+                    state.position_seconds = position
+                    state.save(update_fields=["position_seconds", "updated_at"])
                 return None
-            try:
-                incoming_sequence = int(base_sequence) if base_sequence is not None else None
-            except (TypeError, ValueError, OverflowError):
-                incoming_sequence = -1
-            # A physical AVPlayer snapshot is authoritative only inside the
-            # exact playback-command generation in which it was captured.
-            # Accepting an unversioned or delayed pre-seek frame lets it rewind
-            # the shared room clock after a newer play/pause/seek command.
-            if incoming_sequence is None:
-                return None
-            if incoming_sequence != state.sequence:
-                return projected_playback_payload(room, state, command="stale")
-            if duration > 0:
-                position = min(position, duration)
-                if abs(float(room.duration_seconds or 0) - duration) > 0.25:
-                    room.duration_seconds = duration
-                    room.save(update_fields=["duration_seconds"])
-            # Explicit owner commands are the only source of play/pause state.
-            # While logically playing, a same-generation physical frame may
-            # refresh only a forward-moving anchor. This handles buffering but
-            # prevents overlapping/late snapshots from pulling every viewer
-            # backward and forward. A real backward seek has a new sequence.
-            if state.is_playing and position >= float(state.position_seconds or 0):
-                state.position_seconds = position
-                state.save(update_fields=["position_seconds", "updated_at"])
+        except OperationalError:
+            # Losing one physical clock sample is recoverable. Letting the error
+            # escape kills the WebSocket, turns the next state into a reconnect
+            # authority, and was the source of large guest-only rewinds.
             return None
 
     @database_sync_to_async

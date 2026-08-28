@@ -92,6 +92,7 @@ final class RoomViewModel: ObservableObject {
     private var latestAuthoritativeAnchor: Double = 0
     private var latestAuthoritativeAnchorUptime: TimeInterval = 0
     private var latestAuthoritativeIsPlaying = false
+    private var latestOwnerClockIsFresh = true
     private var lastHealthyPlaybackPosition: Double = 0
     private var lastHealthyPlaybackUptime: TimeInterval = 0
     private var hasAttemptedStallSeek = false
@@ -128,6 +129,7 @@ final class RoomViewModel: ObservableObject {
         latestAuthoritativeAnchor = 0
         latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
         latestAuthoritativeIsPlaying = false
+        latestOwnerClockIsFresh = true
         lastHealthyPlaybackPosition = 0
         lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
         hasAttemptedStallSeek = false
@@ -254,12 +256,12 @@ final class RoomViewModel: ObservableObject {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    guard let self, !self.isStopped, self.isPlaying else { return }
+                    guard let self, !self.isStopped, self.canAdvanceLocalPlayer else { return }
                     self.playbackRecoveryTask?.cancel()
                     self.playbackRecoveryTask = Task { [weak self] in
                         try? await Task.sleep(for: .milliseconds(900))
                         guard !Task.isCancelled, let self, !self.isStopped,
-                              self.isPlaying, self.pendingSeekPosition == nil else { return }
+                              self.canAdvanceLocalPlayer, self.pendingSeekPosition == nil else { return }
                         // For adaptive HLS this asks AVPlayer to prefer a lower
                         // rendition after the first real stall. Direct MP4 files
                         // have only one rendition, so the hint is harmless there.
@@ -566,7 +568,7 @@ final class RoomViewModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, let self, !self.isStopped else { return }
-                guard self.isPlaying else {
+                guard self.canAdvanceLocalPlayer else {
                     self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
                     self.lastHealthyPlaybackPosition = self.player?.currentTime().seconds ?? self.position
                     self.hasAttemptedStallSeek = false
@@ -656,7 +658,7 @@ final class RoomViewModel: ObservableObject {
                             self.lastHealthyPlaybackPosition = actual
                         }
                         self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
-                        if self.isPlaying { self.player?.play() }
+                        if self.canAdvanceLocalPlayer { self.player?.play() }
                         self.scheduleSnapshotResync()
                         return
                     }
@@ -678,7 +680,7 @@ final class RoomViewModel: ObservableObject {
                 self.position = target
                 self.lastHealthyPlaybackPosition = target
                 self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
-                if self.isPlaying { self.player?.play() } else { self.player?.pause() }
+                if self.canAdvanceLocalPlayer { self.player?.play() } else { self.player?.pause() }
             }
         }
     }
@@ -868,11 +870,17 @@ final class RoomViewModel: ObservableObject {
                 pendingPlaybackCommand = nil
             }
             isPlaying = nextIsPlaying
+            let ownerClockIsFresh = event["owner_clock_is_fresh"] as? Bool ?? true
+            latestOwnerClockIsFresh = ownerClockIsFresh
             if let muted = event["is_muted"] as? Bool { isMuted = muted }
             let remote = (event["position_seconds"] as? NSNumber)?.doubleValue ?? 0
             // The creator receives their own broadcast too. Never seek it back to
             // an older server snapshot: that was the visible forward/back loop.
-            let authoritative = compensatedPosition(remote: remote, isPlaying: isPlaying, event: event)
+            let authoritative = compensatedPosition(
+                remote: remote,
+                isPlaying: isPlaying && ownerClockIsFresh,
+                event: event
+            )
             latestAuthoritativeAnchor = authoritative
             latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
             latestAuthoritativeIsPlaying = nextIsPlaying
@@ -925,6 +933,13 @@ final class RoomViewModel: ObservableObject {
             let actualPosition = player?.currentTime().seconds
             let localPosition = (actualPosition?.isFinite == true) ? (actualPosition ?? position) : position
             let drift = abs(localPosition - authoritative)
+            let shouldHoldForOwner = PlaybackRejoinPolicy.shouldHoldParticipantForOwner(
+                isOwner: isOwner,
+                isPlaying: nextIsPlaying,
+                ownerClockIsFresh: ownerClockIsFresh,
+                localPosition: localPosition,
+                authoritativePosition: authoritative
+            )
             let bufferedExactCatchUp = PlaybackRejoinPolicy.shouldUseBufferedExactCatchUp(
                 isOwner: isOwner,
                 isPlaying: nextIsPlaying,
@@ -970,7 +985,9 @@ final class RoomViewModel: ObservableObject {
             // Do not start a newly-created player at its default 0:00 frame
             // while the initial room seek is still in flight.
             if initialPlaybackPosition == nil && pendingSeekPosition == nil {
-                if isPlaying {
+                if shouldHoldForOwner {
+                    player?.pause()
+                } else if isPlaying {
                     if catchUpRate > 1 {
                         player?.playImmediately(atRate: catchUpRate)
                     } else {
@@ -1168,6 +1185,10 @@ final class RoomViewModel: ObservableObject {
         }
     }
 
+    private var canAdvanceLocalPlayer: Bool {
+        isPlaying && (isOwner || latestOwnerClockIsFresh)
+    }
+
     private func isPositionBuffered(_ target: Double, minimumForwardBuffer: Double) -> Bool {
         guard target.isFinite, target >= 0, let item = player?.currentItem else { return false }
         return item.loadedTimeRanges.contains { value in
@@ -1327,6 +1348,7 @@ final class RoomViewModel: ObservableObject {
             "is_playing": playback.isPlaying,
             "position_seconds": playback.positionSeconds,
             "sequence": playback.sequence,
+            "owner_clock_is_fresh": playback.ownerClockIsFresh,
             "is_owner": snapshot.room.owner == currentUserID,
             "is_muted": isMuted,
         ]
