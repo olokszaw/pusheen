@@ -157,7 +157,7 @@ enum PlaybackRejoinPolicy {
     ) -> Bool {
         !isOwner
             && command == "owner_clock"
-            && abs(drift) > (ownerClockAdvancing ? 0.35 : 0.08)
+            && abs(drift) > (ownerClockAdvancing ? 0.12 : 0.04)
     }
 
     static func exactSyncRate(
@@ -171,8 +171,8 @@ enum PlaybackRejoinPolicy {
               command == "owner_clock",
               ownerClockAdvancing,
               targetIsBuffered else { return 1 }
-        if drift > 0.08 { return 1.03 }
-        if drift < -0.08 { return 0.97 }
+        if drift > 0.03 { return 1.04 }
+        if drift < -0.03 { return 0.96 }
         return 1
     }
 

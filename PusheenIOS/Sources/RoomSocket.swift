@@ -73,6 +73,28 @@ final class RoomSocket: ObservableObject {
         if let sequence { payload["sequence"] = sequence }
         send(payload)
     }
+    func requestSyncProbe(requestID: String) {
+        send(["type": "sync_probe_request", "request_id": requestID])
+    }
+    func syncProbeResponse(
+        requestID: String,
+        position: Double,
+        duration: Double,
+        isActuallyAdvancing: Bool,
+        isBuffering: Bool,
+        bufferedAhead: Double
+    ) {
+        guard position.isFinite, duration.isFinite, bufferedAhead.isFinite else { return }
+        send([
+            "type": "sync_probe_response",
+            "request_id": requestID,
+            "position_seconds": max(0, position),
+            "duration_seconds": max(0, duration),
+            "is_actually_advancing": isActuallyAdvancing,
+            "is_buffering": isBuffering,
+            "buffered_ahead_seconds": max(0, bufferedAhead),
+        ])
+    }
     @discardableResult
     func chat(text: String, image: String = "", clientMessageID: String, replyToID: Int? = nil) -> Bool {
         var payload: [String: Any] = [

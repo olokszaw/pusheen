@@ -145,16 +145,16 @@ precondition(PlaybackRejoinPolicy.shouldSeekToExactOwnerClock(
     ownerClockAdvancing: true
 ))
 precondition(!PlaybackRejoinPolicy.shouldSeekToExactOwnerClock(
-    isOwner: false, command: "owner_clock", drift: 0.30,
+    isOwner: false, command: "owner_clock", drift: 0.10,
     ownerClockAdvancing: true
 ))
 precondition(PlaybackRejoinPolicy.exactSyncRate(
     isOwner: false, command: "owner_clock", drift: 0.20,
     ownerClockAdvancing: true, targetIsBuffered: true
-) == 1.03)
+) == 1.04)
 precondition(PlaybackRejoinPolicy.exactSyncRate(
     isOwner: false, command: "owner_clock", drift: -0.20,
     ownerClockAdvancing: true, targetIsBuffered: true
-) == 0.97)
+) == 0.96)
 
 print("Playback rejoin policy tests passed")

@@ -1,6 +1,19 @@
 import AVFoundation
 import Foundation
 
+struct SyncProbeResult: Identifiable, Equatable {
+    let requestID: String
+    let userID: Int
+    let nickname: String
+    let isOwner: Bool
+    let position: Double
+    let duration: Double
+    let isActuallyAdvancing: Bool
+    let isBuffering: Bool
+    let bufferedAhead: Double
+    var id: Int { userID }
+}
+
 @MainActor
 final class RoomViewModel: ObservableObject {
     private typealias PendingChatMessage = ChatOutboxItem
@@ -24,6 +37,8 @@ final class RoomViewModel: ObservableObject {
     @Published var duration: Double = 0
     @Published var error = ""
     @Published var wasRemovedFromRoom = false
+    @Published var showSyncDiagnostics = false
+    @Published private(set) var syncProbeResults: [SyncProbeResult] = []
     private let room: Room
     private let api: APIClient
     private let token: String
@@ -87,6 +102,14 @@ final class RoomViewModel: ObservableObject {
     // frame back to the room.
     private var pendingSeekPosition: Double?
     private var seekGeneration = 0
+    // Owner clock packets can arrive while AVPlayer is completing an earlier
+    // seek. Keep the newest physical frame instead of finishing against the
+    // stale target and ignoring every packet received in between.
+    private var ownerClockSeekInFlight = false
+    private var queuedOwnerClockTarget: Double?
+    private var queuedOwnerClockShouldPlay = false
+    private var ownerClockSeekGeneration = 0
+    private var activeSyncProbeRequestID: String?
     // AVPlayerItem remains terminal after DidPlayToEnd until an explicit seek.
     private var hasReachedPlaybackEnd = false
     private var latestAuthoritativeAnchor: Double = 0
@@ -126,6 +149,11 @@ final class RoomViewModel: ObservableObject {
         awaitingConnectionPlaybackState = true
         initialPlaybackPosition = nil
         pendingSeekPosition = nil
+        ownerClockSeekInFlight = false
+        queuedOwnerClockTarget = nil
+        ownerClockSeekGeneration &+= 1
+        activeSyncProbeRequestID = nil
+        syncProbeResults = []
         hasReachedPlaybackEnd = false
         latestAuthoritativeAnchor = 0
         latestAuthoritativeAnchorUptime = ProcessInfo.processInfo.systemUptime
@@ -358,6 +386,10 @@ final class RoomViewModel: ObservableObject {
         pendingMessages.removeAll()
         realtimeMessageInFlightID = nil
         pendingSeekPosition = nil
+        ownerClockSeekInFlight = false
+        queuedOwnerClockTarget = nil
+        ownerClockSeekGeneration &+= 1
+        activeSyncProbeRequestID = nil
         hasReachedPlaybackEnd = false
         player?.pause()
         socket.onEvent = nil
@@ -440,10 +472,10 @@ final class RoomViewModel: ObservableObject {
                         )
                     }
                 }
-                // The owner is the physical clock master. Four samples per
-                // second keep healthy guests inside one visible timecode tick;
-                // guest profile previews remain deliberately inexpensive.
-                try? await Task.sleep(for: .milliseconds(self.isOwner ? 250 : 5_000))
+                // The owner is the physical clock master. Ten samples per
+                // second bound transport sampling error to one tenth of a
+                // second; guest profile previews remain deliberately cheap.
+                try? await Task.sleep(for: .milliseconds(self.isOwner ? 100 : 5_000))
             }
         }
     }
@@ -514,6 +546,15 @@ final class RoomViewModel: ObservableObject {
         position = target
         performAuthoritativeSeek(to: target, generation: generation)
         sendPlaybackCommand(action: "seek", isPlaying: isPlaying, position: target)
+    }
+
+    func requestSyncDiagnostics() {
+        guard isOwner, socket.connected else { return }
+        let requestID = UUID().uuidString
+        activeSyncProbeRequestID = requestID
+        syncProbeResults = []
+        showSyncDiagnostics = true
+        socket.requestSyncProbe(requestID: requestID)
     }
 
     /// Applies the state received before the media item existed.  This runs only
@@ -663,6 +704,7 @@ final class RoomViewModel: ObservableObject {
                         self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
                         if self.canAdvanceLocalPlayer { self.player?.play() }
                         self.scheduleSnapshotResync()
+                        self.startQueuedOwnerClockSeekIfNeeded()
                         return
                     }
                     let delay = attempt < 4 ? 220 : 600
@@ -684,6 +726,67 @@ final class RoomViewModel: ObservableObject {
                 self.lastHealthyPlaybackPosition = target
                 self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
                 if self.canAdvanceLocalPlayer { self.player?.play() } else { self.player?.pause() }
+                self.startQueuedOwnerClockSeekIfNeeded()
+            }
+        }
+    }
+
+    private func cancelOwnerClockSeek() {
+        ownerClockSeekGeneration &+= 1
+        ownerClockSeekInFlight = false
+        queuedOwnerClockTarget = nil
+    }
+
+    private func scheduleOwnerClockSeek(to target: Double, shouldPlay: Bool) {
+        guard !isOwner, target.isFinite, target >= 0 else { return }
+        queuedOwnerClockTarget = target
+        queuedOwnerClockShouldPlay = shouldPlay
+        startQueuedOwnerClockSeekIfNeeded()
+    }
+
+    private func startQueuedOwnerClockSeekIfNeeded() {
+        guard !isStopped,
+              pendingSeekPosition == nil,
+              !ownerClockSeekInFlight,
+              let target = queuedOwnerClockTarget,
+              let player,
+              player.currentItem?.status == .readyToPlay else { return }
+        queuedOwnerClockTarget = nil
+        let shouldPlay = queuedOwnerClockShouldPlay
+        let actual = player.currentTime().seconds
+        if actual.isFinite, abs(actual - target) <= 0.04 {
+            position = target
+            shouldPlay ? player.play() : player.pause()
+            return
+        }
+        ownerClockSeekInFlight = true
+        let generation = ownerClockSeekGeneration
+        if !shouldPlay { player.pause() }
+        player.seek(
+            to: CMTime(seconds: target, preferredTimescale: 600),
+            toleranceBefore: CMTime(seconds: 0.02, preferredTimescale: 600),
+            toleranceAfter: CMTime(seconds: 0.02, preferredTimescale: 600)
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, !self.isStopped,
+                      generation == self.ownerClockSeekGeneration else { return }
+                self.ownerClockSeekInFlight = false
+                let completed = self.player?.currentTime().seconds ?? target
+                if completed.isFinite {
+                    self.position = completed
+                    self.lastHealthyPlaybackPosition = completed
+                    self.lastHealthyPlaybackUptime = ProcessInfo.processInfo.systemUptime
+                }
+                // A newer packet always wins. This is the key difference from
+                // the old pending-seek guard that could freeze a guest against
+                // a clock sample received many seconds earlier.
+                if self.queuedOwnerClockTarget != nil {
+                    self.startQueuedOwnerClockSeekIfNeeded()
+                } else if shouldPlay && self.canAdvanceLocalPlayer {
+                    self.player?.play()
+                } else {
+                    self.player?.pause()
+                }
             }
         }
     }
@@ -924,6 +1027,7 @@ final class RoomViewModel: ObservableObject {
                 // pause or play can arrive while AVPlayer is loading and must
                 // replace the older target before the item becomes ready.
                 seekGeneration &+= 1
+                cancelOwnerClockSeek()
                 pendingSeekPosition = nil
                 position = authoritative
                 initialPlaybackPosition = authoritative
@@ -984,13 +1088,21 @@ final class RoomViewModel: ObservableObject {
                     isPlaying: nextIsPlaying
                 )
             ) || bufferedExactCatchUp || exactOwnerClockSeek
-            let ownerClockSeekAlreadyInFlight = command == "owner_clock" && pendingSeekPosition != nil
-            if shouldApplyPosition
-                && !ownerClockSeekAlreadyInFlight
-                && (exactOwnerClockSeek || drift > 0.85) {
+            if command == "owner_clock" && !isOwner && ownerClockSeekInFlight {
+                queuedOwnerClockTarget = authoritative
+                queuedOwnerClockShouldPlay = nextIsPlaying && ownerClockIsFresh && ownerClockAdvancing
+                position = authoritative
+            } else if exactOwnerClockSeek {
+                scheduleOwnerClockSeek(
+                    to: authoritative,
+                    shouldPlay: nextIsPlaying && ownerClockIsFresh && ownerClockAdvancing
+                )
+                position = authoritative
+            } else if shouldApplyPosition && drift > 0.85 {
                 // Invalidate an older initial seek before applying a newer
                 // command. Without this, the old completion could rewind a
                 // freshly joined viewer back to a stale time.
+                cancelOwnerClockSeek()
                 seekGeneration &+= 1
                 let generation = seekGeneration
                 pendingSeekPosition = authoritative
@@ -1008,7 +1120,9 @@ final class RoomViewModel: ObservableObject {
             // forward/back loop caused by delayed server positions.
             // Do not start a newly-created player at its default 0:00 frame
             // while the initial room seek is still in flight.
-            if initialPlaybackPosition == nil && pendingSeekPosition == nil {
+            if initialPlaybackPosition == nil
+                && pendingSeekPosition == nil
+                && !ownerClockSeekInFlight {
                 if shouldHoldForOwner {
                     player?.pause()
                 } else if isPlaying {
@@ -1021,6 +1135,45 @@ final class RoomViewModel: ObservableObject {
                 } else {
                     player?.pause()
                 }
+            }
+        case "sync_probe_request":
+            guard let requestID = event["request_id"] as? String, !requestID.isEmpty else { return }
+            activeSyncProbeRequestID = requestID
+            syncProbeResults = []
+            showSyncDiagnostics = true
+            let actual = player?.currentTime().seconds ?? position
+            let itemDuration = player?.currentItem?.duration.seconds ?? duration
+            let isAdvancing = player?.timeControlStatus == .playing
+            let isBuffering = player?.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            socket.syncProbeResponse(
+                requestID: requestID,
+                position: actual.isFinite ? actual : position,
+                duration: itemDuration.isFinite ? itemDuration : duration,
+                isActuallyAdvancing: isAdvancing,
+                isBuffering: isBuffering,
+                bufferedAhead: currentBufferedAhead()
+            )
+        case "sync_probe_result":
+            guard let requestID = event["request_id"] as? String,
+                  requestID == activeSyncProbeRequestID else { return }
+            let userID = (event["user_id"] as? NSNumber)?.intValue ?? 0
+            guard userID != 0 else { return }
+            let result = SyncProbeResult(
+                requestID: requestID,
+                userID: userID,
+                nickname: event["nickname"] as? String ?? "Участник",
+                isOwner: event["is_owner"] as? Bool ?? false,
+                position: (event["position_seconds"] as? NSNumber)?.doubleValue ?? 0,
+                duration: (event["duration_seconds"] as? NSNumber)?.doubleValue ?? 0,
+                isActuallyAdvancing: event["is_actually_advancing"] as? Bool ?? false,
+                isBuffering: event["is_buffering"] as? Bool ?? false,
+                bufferedAhead: (event["buffered_ahead_seconds"] as? NSNumber)?.doubleValue ?? 0
+            )
+            syncProbeResults.removeAll { $0.userID == userID }
+            syncProbeResults.append(result)
+            syncProbeResults.sort { lhs, rhs in
+                if lhs.isOwner != rhs.isOwner { return lhs.isOwner }
+                return lhs.nickname.localizedCaseInsensitiveCompare(rhs.nickname) == .orderedAscending
             }
         case "chat_message":
             if let data = try? JSONSerialization.data(withJSONObject: event),
@@ -1225,6 +1378,16 @@ final class RoomViewModel: ObservableObject {
                 && target >= start
                 && target + minimumForwardBuffer <= end
         }
+    }
+    private func currentBufferedAhead() -> Double {
+        guard let player, let item = player.currentItem else { return 0 }
+        let current = player.currentTime().seconds
+        guard current.isFinite else { return 0 }
+        let end = item.loadedTimeRanges.compactMap { value -> Double? in
+            let rangeEnd = CMTimeRangeGetEnd(value.timeRangeValue).seconds
+            return rangeEnd.isFinite && rangeEnd >= current ? rangeEnd : nil
+        }.max() ?? current
+        return max(0, end - current)
     }
     private func confirmPersistedMessage(_ persisted: ChatMessage, for pending: PendingChatMessage) {
         if let localIndex = messages.firstIndex(where: { $0.id == pending.localMessageID }) {

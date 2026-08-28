@@ -31,12 +31,17 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         # waiting for an OS-level socket timeout.
         self.last_heartbeat = time.monotonic()
         self.connection_is_owner = await self.is_owner()
+        self.connection_identity = await self.member_identity()
         self.last_owner_clock_persisted = 0.0
         self.last_owner_clock_advancing = None
+        self.active_sync_probe_ids = set()
         self.explicit_leave_handled = False
         self.room_open_announced = False
         self.heartbeat_watchdog = asyncio.create_task(self.watch_heartbeat())
-        await self.send_json({"type": "playback_state", **await self.current_state()})
+        initial_state = await self.current_state()
+        self.owner_clock_sequence = initial_state.get("sequence")
+        self.owner_clock_is_playing = bool(initial_state.get("is_playing"))
+        await self.send_json({"type": "playback_state", **initial_state})
         # Transport establishment is not a semantic room entry: an automatic
         # reconnect must update counters silently. The iOS view sends one
         # explicit `room_opened` event only for its first connection.
@@ -98,6 +103,10 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             await self.apply_playback_command(content)
         elif event == "playback_snapshot":
             await self.apply_playback_snapshot(content)
+        elif event == "sync_probe_request":
+            await self.request_sync_probe(content)
+        elif event == "sync_probe_response":
+            await self.respond_to_sync_probe(content)
         elif event == "chat_message":
             await self.broadcast_chat(
                 content.get("text", ""),
@@ -185,7 +194,72 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
             # Broadcasting it would make every healthy client process noise.
             await self.send_json({"type": "playback_state", **state, "is_owner": True})
             return
+        self.owner_clock_sequence = state.get("sequence")
+        self.owner_clock_is_playing = bool(state.get("is_playing"))
         await self.channel_layer.group_send(self.group_name, {"type": "room.playback", "payload": state})
+
+    async def request_sync_probe(self, content):
+        """Ask every connected AVPlayer for the frame it is showing now."""
+        if not self.connection_is_owner:
+            await self.send_json({"type": "error", "code": "owner_only", "detail": "Только создатель запускает проверку синхронизации"})
+            return
+        request_id = str(content.get("request_id") or "").strip()[:64]
+        if not request_id:
+            return
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "room.sync_probe_request",
+                "payload": {
+                    "request_id": request_id,
+                    "requested_at": django_timezone.now().isoformat(),
+                },
+            },
+        )
+
+    async def room_sync_probe_request(self, event):
+        request_id = event["payload"]["request_id"]
+        self.active_sync_probe_ids.add(request_id)
+        if len(self.active_sync_probe_ids) > 8:
+            self.active_sync_probe_ids = {request_id}
+        await self.send_json({"type": "sync_probe_request", **event["payload"]})
+
+    async def respond_to_sync_probe(self, content):
+        request_id = str(content.get("request_id") or "").strip()[:64]
+        if request_id not in self.active_sync_probe_ids:
+            return
+        self.active_sync_probe_ids.discard(request_id)
+        try:
+            position = max(0.0, float(content.get("position_seconds", 0)))
+            duration = max(0.0, float(content.get("duration_seconds", 0)))
+            buffered_ahead = max(0.0, float(content.get("buffered_ahead_seconds", 0)))
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not all(math.isfinite(value) for value in (position, duration, buffered_ahead)):
+            return
+        if duration > 0:
+            position = min(position, duration)
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                "type": "room.sync_probe_result",
+                "payload": {
+                    "request_id": request_id,
+                    "user_id": self.connection_identity["user_id"],
+                    "nickname": self.connection_identity["nickname"],
+                    "is_owner": self.connection_is_owner,
+                    "position_seconds": position,
+                    "duration_seconds": duration,
+                    "is_actually_advancing": bool(content.get("is_actually_advancing")),
+                    "is_buffering": bool(content.get("is_buffering")),
+                    "buffered_ahead_seconds": buffered_ahead,
+                    "received_at": django_timezone.now().isoformat(),
+                },
+            },
+        )
+
+    async def room_sync_probe_result(self, event):
+        await self.send_json({"type": "sync_probe_result", **event["payload"]})
 
     async def apply_playback_snapshot(self, content):
         """Persist this member's actual AVPlayer clock without disturbing viewers.
@@ -216,26 +290,54 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
         now_monotonic = time.monotonic()
         persist = (
             now_monotonic - self.last_owner_clock_persisted >= 1.0
-            or not is_actually_advancing
             or is_actually_advancing != self.last_owner_clock_advancing
         )
-        state, accepted = await self.save_playback_snapshot(
-            is_playing=is_playing,
-            is_actually_advancing=is_actually_advancing,
-            position=position,
-            duration=duration,
-            base_sequence=content.get("sequence"),
-            persist=persist,
-        )
+        did_persist = persist
+        try:
+            incoming_sequence = int(content.get("sequence"))
+        except (TypeError, ValueError, OverflowError):
+            incoming_sequence = None
+        # The physical clock is relayed at high frequency. The WebSocket was
+        # owner-validated at connect and every explicit command refreshes this
+        # cached generation; only the one-Hz durable sample needs a DB query.
+        if (
+            not persist
+            and incoming_sequence is not None
+            and incoming_sequence == self.owner_clock_sequence
+        ):
+            sample_at = django_timezone.now().isoformat()
+            state, accepted = ({
+                "room_id": self.room_id,
+                "command": "owner_clock",
+                "is_playing": self.owner_clock_is_playing,
+                "owner_clock_advancing": is_actually_advancing,
+                "owner_clock_is_fresh": True,
+                "position_seconds": position,
+                "sequence": incoming_sequence,
+                "server_updated_at": sample_at,
+                "server_sent_at": sample_at,
+            }, True)
+        else:
+            did_persist = True
+            state, accepted = await self.save_playback_snapshot(
+                is_playing=is_playing,
+                is_actually_advancing=is_actually_advancing,
+                position=position,
+                duration=duration,
+                base_sequence=content.get("sequence"),
+                persist=True,
+            )
         if state is None:
             return
         if not accepted:
             # A stale physical sample belongs to an older owner command.
             await self.send_json({"type": "playback_state", **state, "is_owner": True})
             return
-        if persist:
+        if did_persist:
             self.last_owner_clock_persisted = now_monotonic
             self.last_owner_clock_advancing = is_actually_advancing
+            self.owner_clock_sequence = state.get("sequence")
+            self.owner_clock_is_playing = bool(state.get("is_playing"))
         # Physical owner samples are the room clock. Relaying them immediately
         # keeps guests synchronized without waiting for a database round trip or
         # an eight-second request_state heartbeat.
@@ -326,6 +428,14 @@ class RoomConsumer(AsyncJsonWebsocketConsumer):
     @database_sync_to_async
     def is_owner(self):
         return Room.objects.filter(id=self.room_id, owner=self.scope["user"]).exists()
+
+    @database_sync_to_async
+    def member_identity(self):
+        profile = getattr(self.scope["user"], "watch_profile", None)
+        return {
+            "user_id": self.scope["user"].id,
+            "nickname": profile.nickname if profile else self.scope["user"].username,
+        }
 
     @database_sync_to_async
     def is_muted(self):

@@ -72,6 +72,7 @@ jobs:
             watchparty.tests.RoomSocketTests.test_room_opened_is_announced_only_once_per_socket \
             watchparty.tests.RoomSocketTests.test_stale_playback_sequence_cannot_overwrite_new_seek \
             watchparty.tests.RoomSocketTests.test_owner_snapshot_cannot_pause_or_rewind_shared_clock \
+            watchparty.tests.RoomSocketTests.test_owner_can_publish_actual_timecodes_from_every_connected_player \
             watchparty.tests.RoomSocketTests.test_guest_snapshot_updates_own_preview_without_controlling_room \
             watchparty.tests.WebStreamSelectionTests \
             --verbosity 2

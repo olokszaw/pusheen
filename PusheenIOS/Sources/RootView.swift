@@ -886,6 +886,11 @@ struct RoomView: View {
         .task { model.setCurrentUserID(session.profile?.userId); await model.start() }.onDisappear { model.stop() }
             .sheet(isPresented: $showTime) { SeekTimePickerSheet(initial: model.position) { model.seek($0) } }
             .sheet(isPresented: $showMembers) { MembersSheet(room: room, members: model.activeMembers, currentID: session.profile?.userId, canModerate: model.isOwner) { member, action in await model.moderate(member: member, action: action) } }
+            .sheet(isPresented: $model.showSyncDiagnostics) {
+                SyncDiagnosticsSheet(results: model.syncProbeResults, canRefresh: model.isOwner) {
+                    model.requestSyncDiagnostics()
+                }
+            }
     }
     private func leaveRoom() {
         dismissChatKeyboard()
@@ -898,13 +903,25 @@ struct RoomView: View {
     private func time(_ value: Double) -> String { let total = Int(value); if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) }; return String(format: "%02d:%02d", total / 60, total % 60) }
     private var playerControls: some View {
         VStack(spacing: 7) {
-            PlaybackScrubber(
-                position: model.position,
-                duration: model.duration,
-                enabled: model.isOwner,
-                commit: { model.seek($0) },
-                interactionChanged: { isScrubbingPlayer = $0 }
-            )
+            HStack(spacing: 7) {
+                PlaybackScrubber(
+                    position: model.position,
+                    duration: model.duration,
+                    enabled: model.isOwner,
+                    commit: { model.seek($0) },
+                    interactionChanged: { isScrubbingPlayer = $0 }
+                )
+                if model.isOwner {
+                    Button { model.requestSyncDiagnostics() } label: {
+                        Image(systemName: "scope")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 36, height: 36)
+                            .liquidCard(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Проверить синхронизацию всех участников")
+                }
+            }
             HStack(spacing: 10) {
                 playerControl("gobackward.10") { model.seek(max(0, model.position - 10)) }
                 playerControl(model.isPlaying ? "pause.fill" : "play.fill", primary: true) { model.toggle() }
@@ -991,6 +1008,80 @@ struct RoomView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         DispatchQueue.main.async { showMembers = true }
     }
+
+private struct SyncDiagnosticsSheet: View {
+    let results: [SyncProbeResult]
+    let canRefresh: Bool
+    let refresh: () -> Void
+
+    private var ownerPosition: Double? {
+        results.first(where: \.isOwner)?.position
+    }
+
+    private func clock(_ value: Double) -> String {
+        let total = max(0, Int(value))
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if results.isEmpty {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                        Text("Ждём фактические таймкоды устройств…")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(results) { result in
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack {
+                                Text(result.nickname).font(.headline)
+                                if result.isOwner {
+                                    Text("Владелец")
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 3)
+                                        .background(.blue.opacity(0.16), in: Capsule())
+                                }
+                                Spacer()
+                                Text(clock(result.position))
+                                    .font(.body.monospacedDigit().weight(.bold))
+                            }
+                            HStack(spacing: 8) {
+                                if let ownerPosition, !result.isOwner {
+                                    let delta = result.position - ownerPosition
+                                    Text(String(format: "%+.2f с от владельца", delta))
+                                        .foregroundStyle(abs(delta) <= 0.15 ? .green : .red)
+                                } else if result.isOwner {
+                                    Text("Эталонный таймкод")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(result.isBuffering ? "Буферизация" : result.isActuallyAdvancing ? "Идёт" : "Стоит")
+                                    .foregroundStyle(result.isBuffering ? .orange : .secondary)
+                            }
+                            .font(.caption)
+                            Text(String(format: "Буфер вперёд: %.1f с", result.bufferedAhead))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+            .navigationTitle("Синхронизация")
+            .toolbar {
+                if canRefresh {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Проверить ещё раз", action: refresh)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
     private func updateKeyboardFrame(_ notification: Notification) {
         guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
         let bounds = UIScreen.main.bounds

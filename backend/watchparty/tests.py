@@ -1247,6 +1247,59 @@ class RoomSocketTests(TransactionTestCase):
     def test_stale_playback_sequence_cannot_overwrite_new_seek(self):
         async_to_sync(self._assert_stale_playback_is_rejected)()
 
+    def test_owner_can_publish_actual_timecodes_from_every_connected_player(self):
+        async_to_sync(self._assert_sync_probe)()
+
+    async def _assert_sync_probe(self):
+        owner_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
+        )
+        guest_socket = WebsocketCommunicator(
+            application, f"/ws/rooms/{self.room.id}/?token={self.guest_token.key}"
+        )
+        self.assertTrue((await owner_socket.connect())[0])
+        await self._next_event(owner_socket, "playback_state")
+        self.assertTrue((await guest_socket.connect())[0])
+        await self._next_event(guest_socket, "playback_state")
+
+        await guest_socket.send_json_to({"type": "sync_probe_request", "request_id": "forbidden"})
+        denied = await self._next_event(guest_socket, "error")
+        self.assertEqual(denied["code"], "owner_only")
+
+        request_id = "probe-1"
+        await owner_socket.send_json_to({"type": "sync_probe_request", "request_id": request_id})
+        owner_request = await self._next_event(owner_socket, "sync_probe_request")
+        guest_request = await self._next_event(guest_socket, "sync_probe_request")
+        self.assertEqual(owner_request["request_id"], request_id)
+        self.assertEqual(guest_request["request_id"], request_id)
+
+        await owner_socket.send_json_to({
+            "type": "sync_probe_response", "request_id": request_id,
+            "position_seconds": 125.25, "duration_seconds": 900,
+            "is_actually_advancing": True, "is_buffering": False,
+            "buffered_ahead_seconds": 18.5,
+        })
+        owner_result = await self._next_event(owner_socket, "sync_probe_result")
+        owner_result_for_guest = await self._next_event(guest_socket, "sync_probe_result")
+        self.assertTrue(owner_result["is_owner"])
+        self.assertEqual(owner_result["position_seconds"], 125.25)
+        self.assertEqual(owner_result_for_guest["user_id"], self.owner.id)
+
+        await guest_socket.send_json_to({
+            "type": "sync_probe_response", "request_id": request_id,
+            "position_seconds": 145.25, "duration_seconds": 900,
+            "is_actually_advancing": False, "is_buffering": True,
+            "buffered_ahead_seconds": 0.4,
+        })
+        guest_result_for_owner = await self._next_event(owner_socket, "sync_probe_result")
+        guest_result = await self._next_event(guest_socket, "sync_probe_result")
+        self.assertFalse(guest_result_for_owner["is_owner"])
+        self.assertEqual(guest_result_for_owner["position_seconds"], 145.25)
+        self.assertTrue(guest_result["is_buffering"])
+
+        await owner_socket.disconnect()
+        await guest_socket.disconnect()
+
     async def _assert_stale_playback_is_rejected(self):
         owner_socket = WebsocketCommunicator(
             application, f"/ws/rooms/{self.room.id}/?token={self.owner_token.key}"
@@ -1619,6 +1672,22 @@ class RoomSocketTests(TransactionTestCase):
         self.assertTrue(physical["owner_clock_advancing"])
         self.assertEqual(guest_physical["position_seconds"], 39.0)
         self.assertTrue(guest_physical["owner_clock_advancing"])
+
+        # Same-generation high-frequency ticks are relayed directly; they do
+        # not wait behind a SQLite/PostgreSQL read on every video frame sample.
+        await owner_socket.send_json_to({
+            "type": "playback_snapshot",
+            "is_playing": True,
+            "is_actually_advancing": True,
+            "position_seconds": 39.2,
+            "duration_seconds": 321.5,
+            "sequence": 1,
+        })
+        fast_owner = await self._next_event(owner_socket, "playback_state")
+        fast_guest = await self._next_event(guest_socket, "playback_state")
+        self.assertEqual(fast_owner["position_seconds"], 39.2)
+        self.assertEqual(fast_guest["position_seconds"], 39.2)
+        self.assertEqual((await self._playback_state())["position"], 39.0)
 
         await owner_socket.send_json_to({"type": "request_state"})
         state = await self._next_event(owner_socket, "playback_state")
