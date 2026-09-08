@@ -16,7 +16,8 @@ private struct ImportedRoomMovie: Transferable {
             let source = received.file
             let ext = source.pathExtension.isEmpty ? "mp4" : source.pathExtension
             let copy = URL.temporaryDirectory.appendingPathComponent("pusheen-movie-\(UUID().uuidString)").appendingPathExtension(ext)
-            try FileManager.default.copyItem(at: source, to: copy)
+            do { try FileManager.default.copyItem(at: source, to: copy) }
+            catch { try? FileManager.default.removeItem(at: copy); throw error }
             return Self(url: copy)
         }
     }
@@ -651,6 +652,12 @@ struct CreateRoomSheet: View {
     @State private var showsFilePicker = false
     @State private var movieURL: URL?
     @State private var movieError = ""
+    @State private var importingMovie = false
+    @State private var importGeneration = UUID()
+    @State private var pendingUploadRoom: Room?
+    @State private var pendingSourceKey: String?
+    @State private var movieImportTask: Task<Void, Never>?
+    @State private var uploadProgress: Double?
     @State private var isPrivate = false
     @State private var loading = false
     @State private var error = ""
@@ -674,8 +681,12 @@ struct CreateRoomSheet: View {
                 .lineLimit(1).padding(12).passiveLiquidCard(RoundedRectangle(cornerRadius: 17))
         }
         .buttonStyle(ImmediateGalleryButtonStyle())
-        .photosPicker(isPresented: $showsMoviePicker, selection: $selectedMovie, matching: .videos)
-        .onChange(of: selectedMovie) { _, item in Task { await loadMovie(item) } }
+        .photosPicker(isPresented: $showsMoviePicker, selection: $selectedMovie, matching: .videos, preferredItemEncoding: .current)
+        .onChange(of: selectedMovie) { _, item in
+            guard !loading, let item else { return }
+            let generation = beginMovieImport()
+            movieImportTask = Task { await loadMovie(item, generation: generation) }
+        }
         Button { showsFilePicker = true } label: {
             HStack { Image(systemName: "folder"); Text("Выбрать видео из файлов"); Spacer() }
                 .padding(12).passiveLiquidCard(RoundedRectangle(cornerRadius: 17))
@@ -684,15 +695,19 @@ struct CreateRoomSheet: View {
         .fileImporter(isPresented: $showsFilePicker, allowedContentTypes: [.movie], allowsMultipleSelection: false) { result in
             do {
                 guard let source = try result.get().first else { return }
-                let accessed = source.startAccessingSecurityScopedResource()
-                defer { if accessed { source.stopAccessingSecurityScopedResource() } }
-                let copy = URL.temporaryDirectory.appendingPathComponent("pusheen-file-\(UUID().uuidString)").appendingPathExtension(source.pathExtension.isEmpty ? "mp4" : source.pathExtension)
-                try FileManager.default.copyItem(at: source, to: copy)
-                cleanupSelectedMovie()
-                movieURL = copy; movieError = ""; url = ""
-            } catch { movieError = "Не удалось получить видео из файлов" }
+                let generation = beginMovieImport()
+                movieImportTask = Task { await loadFileMovie(source, generation: generation) }
+            } catch { movieError = "Не удалось получить видео: \(error.localizedDescription)" }
         }
         Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).liquidCard(RoundedRectangle(cornerRadius: 17))
+        if importingMovie { ProgressView("Подготовка выбранного видео…") }
+        if loading {
+            if let uploadProgress {
+                ProgressView(value: uploadProgress)
+                Text(uploadProgress < 1 ? "Отправлено \(Int(uploadProgress * 100))%" : "Видео отправлено. Сервер сохраняет файл…")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else { ProgressView("Подготовка загрузки…") }
+        }
         if !movieError.isEmpty { Text(movieError).font(.caption).foregroundStyle(.red) }
         if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
         Button {
@@ -701,42 +716,104 @@ struct CreateRoomSheet: View {
             guard !loading else { return }
             loading = true
             Task { await create() }
-        } label: { Label(loading ? "Загрузка…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading)
+        } label: { Label(loading ? "Отправка видео…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(.borderedProminent).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading || importingMovie)
     }.padding(22) }
+        .disabled(loading || importingMovie)
         .presentationDetents([.medium, .large])
         .presentationBackground(.clear)
         .interactiveDismissDisabled(loading)
-        .onDisappear { cleanupSelectedMovie() }
+        .onDisappear {
+            importGeneration = UUID()
+            movieImportTask?.cancel()
+            importingMovie = false
+            cleanupSelectedMovie()
+        }
     }
-    private func loadMovie(_ item: PhotosPickerItem?) async {
+    private func beginMovieImport() -> UUID {
+        movieImportTask?.cancel()
         movieError = ""
-        guard let item else { return }
+        let generation = UUID()
+        importGeneration = generation
+        importingMovie = true
+        return generation
+    }
+    private func loadMovie(_ item: PhotosPickerItem, generation: UUID) async {
+        defer { if importGeneration == generation { importingMovie = false } }
         do {
             if let imported = try await item.loadTransferable(type: ImportedRoomMovie.self)?.url {
+                guard importGeneration == generation, !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: imported)
+                    return
+                }
                 cleanupSelectedMovie()
                 movieURL = imported
                 url = ""
-            } else {
+            } else if importGeneration == generation, !Task.isCancelled {
                 movieError = "Не удалось получить видео из галереи"
+                selectedMovie = nil
             }
         }
-        catch { movieError = "Не удалось получить видео из галереи" }
+        catch {
+            guard importGeneration == generation, !Task.isCancelled else { return }
+            movieError = "Не удалось получить видео: \(error.localizedDescription)"
+            selectedMovie = nil
+        }
+    }
+    private func loadFileMovie(_ source: URL, generation: UUID) async {
+        defer { if importGeneration == generation { importingMovie = false } }
+        do {
+            let copy = try await Task.detached(priority: .userInitiated) {
+                let accessed = source.startAccessingSecurityScopedResource()
+                defer { if accessed { source.stopAccessingSecurityScopedResource() } }
+                let destination = URL.temporaryDirectory.appendingPathComponent("pusheen-file-\(UUID().uuidString)")
+                    .appendingPathExtension(source.pathExtension.isEmpty ? "mp4" : source.pathExtension)
+                do { try FileManager.default.copyItem(at: source, to: destination) }
+                catch { try? FileManager.default.removeItem(at: destination); throw error }
+                return destination
+            }.value
+            guard importGeneration == generation, !Task.isCancelled else {
+                try? FileManager.default.removeItem(at: copy)
+                return
+            }
+            cleanupSelectedMovie()
+            movieURL = copy
+            selectedMovie = nil
+            url = ""
+        } catch {
+            guard importGeneration == generation, !Task.isCancelled else { return }
+            movieError = "Не удалось получить видео: \(error.localizedDescription)"
+        }
     }
     private func create() async {
-        error = ""; defer { loading = false }
+        error = ""; uploadProgress = nil
+        defer { loading = false }
+        let chosenMovie = movieURL
+        let chosenURL = chosenMovie == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let chosenPrivate = isPrivate
+        let sourceKey = "\(chosenMovie?.absoluteString ?? chosenURL)|\(chosenPrivate)"
+        if let pendingSourceKey, pendingSourceKey != sourceKey {
+            pendingUploadRoom = nil
+            creationRequestID = UUID()
+        }
+        pendingSourceKey = sourceKey
         var pendingRoom: Room?
         do {
-            pendingRoom = try await session.api.createRoom(
-                videoURL: movieURL == nil ? url.trimmingCharacters(in: .whitespacesAndNewlines) : "",
-                isPrivate: isPrivate,
+            pendingRoom = pendingUploadRoom
+            if pendingRoom == nil { pendingRoom = try await session.api.createRoom(
+                videoURL: chosenURL,
+                isPrivate: chosenPrivate,
                 requestID: creationRequestID
-            )
+            ) }
+            pendingUploadRoom = pendingRoom
             let room: Room
-            if let movieURL { room = try await session.api.uploadRoomVideo(roomID: pendingRoom!.id, fileURL: movieURL) }
+            if let chosenMovie {
+                room = try await session.api.uploadRoomVideo(roomID: pendingRoom!.id, fileURL: chosenMovie) { fraction in
+                    Task { @MainActor in uploadProgress = fraction }
+                }
+            }
             else { room = pendingRoom! }
             created(room)
         } catch {
-            if let pendingRoom { try? await session.api.deleteRoom(id: pendingRoom.id) }
             self.error = error.localizedDescription
         }
     }

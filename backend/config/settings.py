@@ -21,6 +21,8 @@ MIDDLEWARE = [
 ]
 ROOT_URLCONF = "config.urls"
 ASGI_APPLICATION = "config.asgi.application"
+# Daphne is bound to loopback; Caddy supplies the original HTTPS scheme.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",

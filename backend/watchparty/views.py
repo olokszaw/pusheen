@@ -4,8 +4,11 @@ import gzip
 import os
 import re
 import json
+import logging
+import math
 import ssl
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -19,7 +22,7 @@ from channels.layers import get_channel_layer
 from django.contrib.auth import authenticate, get_user_model
 from django.core.cache import cache
 from django.core.files.base import ContentFile
-from django.db import IntegrityError, transaction
+from django.db import DatabaseError, IntegrityError, transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.conf import settings
@@ -1272,12 +1275,15 @@ def _uploaded_video_response(request, room):
     return response
 
 
-@api_view(["POST"])
+@api_view(["GET", "POST"])
 def room_upload_video(request, room_id):
     """Attach an owner-selected local movie without touching URL providers."""
     room = get_object_or_404(Room, id=room_id)
     if room.owner_id != request.user.id:
         return Response({"detail": "Только создатель комнаты может загрузить видео"}, status=403)
+    if request.method == "GET":
+        return Response({"max_size_bytes": settings.MAX_ROOM_VIDEO_UPLOAD_BYTES,
+                         "extensions": ["mp4", "mov", "m4v"]})
     video = request.FILES.get("video")
     if video is None:
         return Response({"detail": "Выберите файл видео"}, status=400)
@@ -1289,26 +1295,52 @@ def room_upload_video(request, room_id):
     if video.size <= 0:
         return Response({"detail": "Файл видео пустой"}, status=400)
     if video.size > settings.MAX_ROOM_VIDEO_UPLOAD_BYTES:
-        return Response({"detail": "Видео превышает допустимый размер"}, status=413)
-
-    old_file_name = room.uploaded_video.name if room.uploaded_video else ""
-    # Saving through FileField uses Django's streaming upload handler; it does
-    # not read a multi-gigabyte gallery file into Python memory.
-    room.uploaded_video.save(os.path.basename(video.name), video, save=False)
-    room.vk_video_url = ""
+        return Response({"detail": "Видео превышает допустимый размер",
+                         "max_size_bytes": settings.MAX_ROOM_VIDEO_UPLOAD_BYTES}, status=413)
     requested_title = str(request.data.get("title") or "").strip()[:80]
-    room.title = requested_title or os.path.splitext(os.path.basename(video.name))[0][:80] or "Видео"
     try:
-        room.duration_seconds = max(0.0, float(request.data.get("duration_seconds") or 0))
-    except (TypeError, ValueError):
-        room.duration_seconds = 0
-    room.thumbnail_url = ""
-    room.genres = []
-    room.save(update_fields=[
-        "uploaded_video", "vk_video_url", "title", "duration_seconds", "thumbnail_url", "genres",
-    ])
-    if old_file_name and old_file_name != room.uploaded_video.name:
-        room.uploaded_video.storage.delete(old_file_name)
+        duration = float(request.data.get("duration_seconds") or 0)
+    except (TypeError, ValueError, OverflowError):
+        duration = float("nan")
+    if not math.isfinite(duration) or duration < 0:
+        return Response({"detail": "Некорректная длительность видео"}, status=400)
+
+    field = Room._meta.get_field("uploaded_video")
+    storage = field.storage
+    new_file_name = field.generate_filename(room, f"{uuid.uuid4().hex}{extension}")
+    try:
+        # Write the file before locking the room row. Storage streams chunks;
+        # a long disk copy must not hold a database transaction open.
+        new_file_name = storage.save(new_file_name, video)
+        with transaction.atomic():
+            room = Room.objects.select_for_update().get(pk=room_id)
+            if room.owner_id != request.user.id:
+                storage.delete(new_file_name)
+                return Response({"detail": "Владелец комнаты изменился"}, status=403)
+            old_file_name = room.uploaded_video.name if room.uploaded_video else ""
+            room.uploaded_video.name = new_file_name
+            room.vk_video_url = ""
+            room.title = requested_title or os.path.splitext(os.path.basename(video.name))[0][:80] or "Видео"
+            room.duration_seconds = duration
+            room.thumbnail_url = ""
+            room.genres = []
+            room.save(update_fields=[
+                "uploaded_video", "vk_video_url", "title", "duration_seconds", "thumbnail_url", "genres",
+            ])
+    except (DatabaseError, OSError, Room.DoesNotExist):
+        try:
+            storage.delete(new_file_name)
+        except OSError:
+            logging.getLogger(__name__).warning("Could not clean up failed video upload", exc_info=True)
+        logging.getLogger(__name__).exception("Room video upload could not be saved")
+        return Response({"detail": "Не удалось сохранить видео на сервере. Повторите загрузку."}, status=500)
+    if old_file_name and old_file_name != new_file_name:
+        try:
+            storage.delete(old_file_name)
+        except OSError:
+            # Windows may retain an open playback handle. The new upload is
+            # already committed; cleanup must not turn success into HTTP 500.
+            logging.getLogger(__name__).warning("Old video is still locked by a player", exc_info=True)
     return Response(RoomSerializer(room, context={"request": request}).data, status=201)
 
 

@@ -2,6 +2,30 @@
 
 ## Start
 
+### Updating the Windows server (gallery upload build)
+
+Stop the current backend with Ctrl+C, then extract the new backend ZIP into
+`C:\PulseBackend`. Keep the existing `.env`, `.env.local`, `.venv`, database
+and `media` directory. The distribution archive excludes these user files.
+
+```powershell
+Set-Location C:\PulseBackend
+& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run_backend_windows.ps1
+```
+
+The start script loads the server environment and applies pending migrations
+before starting Daphne. This includes migration 0022 for owner-clock sync.
+Keep using the existing Caddy process. Daphne binds to `127.0.0.1:8000`;
+the HTTPS proxy header is trusted only with this loopback deployment.
+
+Gallery videos use `GET /api/rooms/<id>/upload/` to read the size limit and
+`POST` on the same route for multipart upload. The default limit is 2 GiB;
+`MAX_ROOM_VIDEO_UPLOAD_BYTES` in `.env` overrides it. Supported containers:
+MP4, MOV, M4V. The server preserves the original file; it does not transcode.
+Keep the app open while sending. The percentage measures bytes sent from
+the phone; completion is shown only after the server confirms saving.
+
 ```powershell
 cd C:\Users\luiin\OneDrive\Desktop\rave\backend
 py -m venv .venv

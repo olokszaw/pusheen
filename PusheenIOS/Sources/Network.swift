@@ -364,48 +364,56 @@ final class APIClient {
         )
         return try decoder.decode(Room.self, from: data)
     }
-    func uploadRoomVideo(roomID: Int, fileURL: URL) async throws -> Room {
+    func uploadRoomVideo(roomID: Int, fileURL: URL, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Room {
         guard let url = URL(string: "/api/rooms/\(roomID)/upload/", relativeTo: baseURL) else { throw APIError.invalidURL }
+        let limits = try await self.request("/api/rooms/\(roomID)/upload/")
+        let metadata = try JSONSerialization.jsonObject(with: limits) as? [String: Any]
+        let maximumBytes = (metadata?["max_size_bytes"] as? NSNumber)?.int64Value ?? 2_147_483_648
+        try RoomVideoUpload.validate(fileURL, maximumBytes: maximumBytes)
         let boundary = "PusheenUpload-\(UUID().uuidString)"
         let asset = AVURLAsset(url: fileURL)
+        guard try await asset.load(.isPlayable) else {
+            throw APIError.server("iPhone не может воспроизвести этот файл. Выберите другое видео MP4 или MOV.")
+        }
         let loadedDuration = try? await asset.load(.duration)
         let duration = loadedDuration?.seconds ?? 0
         let sourceTitle = fileURL.deletingPathExtension().lastPathComponent
         let generatedTemporaryName = sourceTitle.hasPrefix("pusheen-movie-") || sourceTitle.hasPrefix("pusheen-file-")
         let displayTitle = generatedTemporaryName ? "Видео из галереи" : sourceTitle
-        let bodyURL = try makeMultipartUpload(
-            fileURL: fileURL,
-            boundary: boundary,
-            title: displayTitle,
-            duration: duration.isFinite ? max(0, duration) : 0
-        )
+        let bodyTask = Task.detached(priority: .userInitiated) {
+            try RoomVideoUpload.makeBody(file: fileURL, boundary: boundary,
+                                         title: displayTitle, duration: duration.isFinite ? max(0, duration) : 0)
+        }
+        let bodyURL = try await withTaskCancellationHandler {
+            try await bodyTask.value
+        } onCancel: { bodyTask.cancel() }
         defer { try? FileManager.default.removeItem(at: bodyURL) }
-        var request = URLRequest(url: url)
+        try Task.checkCancellation()
+        var request = URLRequest(url: url, timeoutInterval: 600)
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Token \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: bodyURL)
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 600
+        configuration.timeoutIntervalForResource = 7200
+        let uploadSession = URLSession(configuration: configuration)
+        defer { uploadSession.finishTasksAndInvalidate() }
+        let delegate = RoomVideoUploadProgress(report: progress)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await uploadSession.upload(for: request, fromFile: bodyURL, delegate: delegate)
+        } catch let failure as URLError {
+            throw APIError.server("Загрузка прервалась: \(failure.localizedDescription). Видео выбрано — можно повторить отправку.")
+        }
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String ?? "Не удалось загрузить видео"
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 401 { throw APIError.unauthorized }
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? String ?? "Не удалось загрузить видео (HTTP \(status)). Повторите отправку."
+            if 400..<500 ~= status { throw APIError.http(status, detail) }
             throw APIError.server(detail)
         }
         return try decoder.decode(Room.self, from: data)
-    }
-    private func makeMultipartUpload(fileURL: URL, boundary: String, title: String, duration: Double) throws -> URL {
-        let destination = FileManager.default.temporaryDirectory.appendingPathComponent("pusheen-upload-\(UUID().uuidString).body")
-        FileManager.default.createFile(atPath: destination.path, contents: nil)
-        let output = try FileHandle(forWritingTo: destination)
-        defer { try? output.close() }
-        let name = fileURL.lastPathComponent.replacingOccurrences(of: "\"", with: "")
-        let mime = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "video/mp4"
-        output.write(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n\(title)\r\n".utf8))
-        output.write(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"duration_seconds\"\r\n\r\n\(duration)\r\n".utf8))
-        output.write(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"video\"; filename=\"\(name)\"\r\nContent-Type: \(mime)\r\n\r\n".utf8))
-        let input = try FileHandle(forReadingFrom: fileURL)
-        defer { try? input.close() }
-        while let chunk = try input.read(upToCount: 1024 * 1024), !chunk.isEmpty { output.write(chunk) }
-        output.write(Data("\r\n--\(boundary)--\r\n".utf8))
-        return destination
     }
     func joinRoom(code: String) async throws -> Room { let data = try await request("/api/rooms/join/", method: "POST", body: ["invite_code": code.uppercased()]); return try decoder.decode(Room.self, from: data) }
     func deleteRoom(id: Int) async throws { _ = try await request("/api/rooms/\(id)/", method: "DELETE") }

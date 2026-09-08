@@ -75,6 +75,7 @@ jobs:
             watchparty.tests.RoomSocketTests.test_owner_can_publish_actual_timecodes_from_every_connected_player \
             watchparty.tests.RoomSocketTests.test_guest_snapshot_updates_own_preview_without_controlling_room \
             watchparty.tests.WebStreamSelectionTests \
+            watchparty.test_gallery_upload \
             --verbosity 2
 
       - name: Install XcodeGen
@@ -101,6 +102,8 @@ jobs:
           /tmp/chat-timeline-policy-tests
           swiftc Sources/Models.swift Tests/CurrentWatchingClockTests/main.swift -o /tmp/current-watching-clock-tests
           /tmp/current-watching-clock-tests
+          swiftc Sources/RoomVideoUpload.swift Tests/RoomVideoUploadTests/main.swift -o /tmp/gallery-upload-tests
+          /tmp/gallery-upload-tests
 
       - name: Build native SwiftUI app
         working-directory: PusheenIOS
