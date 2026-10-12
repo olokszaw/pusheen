@@ -1,9 +1,8 @@
-# Pusheen build 36
+# Pusheen build 37
 
-Grouped authentication fields, artwork room cards, grouped friend rows and a profile
-identity card use compact system typography and slate surfaces. Promotional copy is removed.
-The original circular genre chart and Liquid Glass navigation are restored verbatim.
-The statistics pager retains its original gestures, with additional height to fit the genre legend.
+The signed-in app uses a media grid, a flat profile layout, an online friend strip,
+native viewing-history charts, flat player/chat surfaces and new editor fields.
+Authentication, native Liquid Glass navigation and circular genres retain their implementations.
 
 Build: GitHub Actions → Build unsigned IPA → codex/cinema-redesign.
 Backend URL: https://pulse.izanagi.online (unchanged).
