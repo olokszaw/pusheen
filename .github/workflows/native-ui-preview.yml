@@ -35,7 +35,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             PUSHEEN_API_BASE_URL=https://pulse.izanagi.online \
             SYMROOT=$PWD/simulator-build test 2>&1 | tee simulator-build.log
-          xcrun xcresulttool export attachments --path native-screens.xcresult --output-path native-ui-preview
+      - name: Export native screen attachments
+        if: always()
+        working-directory: PusheenIOS
+        run: |
+          if [ -d native-screens.xcresult ]; then
+            xcrun xcresulttool export attachments --path native-screens.xcresult --output-path native-ui-preview
+          fi
       - name: Render native authentication screen
         working-directory: PusheenIOS
         run: |
@@ -58,6 +64,7 @@ jobs:
           sleep 3
           xcrun simctl io "$device" screenshot native-ui-preview/auth-large-text.png
       - name: Upload native screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-ui-preview
