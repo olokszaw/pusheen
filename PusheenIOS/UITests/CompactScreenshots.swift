@@ -32,23 +32,11 @@ final class CompactScreenshots: XCTestCase {
         app.buttons["Профиль"].tap()
         XCTAssertTrue(app.buttons["Редактировать профиль"].waitForExistence(timeout: 5))
         capture(app, "profile-compact")
-        let heading = app.staticTexts["СТАТИСТИКА"]
-        XCTAssertTrue(heading.waitForExistence(timeout: 5))
-        // The original pager's accessibility label propagates to its children.
-        // Anchor the gesture to the independent, visible section heading.
-        let origin = app.coordinate(withNormalizedOffset: .zero)
-        let gestureY = heading.frame.maxY + 75
-        let start = origin.withOffset(CGVector(dx: app.frame.width * 0.82, dy: gestureY))
-        let finish = origin.withOffset(CGVector(dx: app.frame.width * 0.18, dy: gestureY))
-        start.press(forDuration: 0.05, thenDragTo: finish)
-        let activity = app.images["chart.bar.xaxis"]
-        XCTAssertLessThan(activity.frame.maxX, app.frame.maxX)
-        XCTAssertGreaterThan(activity.frame.minX, app.frame.minX)
+        app.buttons["Активность"].tap()
+        XCTAssertTrue(app.staticTexts["За две недели"].waitForExistence(timeout: 5))
         capture(app, "activity-compact")
-        start.press(forDuration: 0.05, thenDragTo: finish)
-        let companion = app.staticTexts["Нажми на аватар"]
-        XCTAssertLessThan(companion.frame.maxX, app.frame.maxX)
-        XCTAssertGreaterThan(companion.frame.minX, app.frame.minX)
+        app.buttons["Вместе"].tap()
+        XCTAssertTrue(app.staticTexts["Совместные просмотры"].waitForExistence(timeout: 5))
         capture(app, "together-compact")
     }
 }
