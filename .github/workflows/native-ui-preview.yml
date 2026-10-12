@@ -27,6 +27,7 @@ jobs:
           if not iphones: raise SystemExit("No available iPhone simulator")
           print(iphones[0]["udid"])
           ')
+          xcrun simctl boot "$device" || true
           set -o pipefail
           xcodebuild -project Pusheen.xcodeproj -scheme Pusheen \
             -configuration Debug -sdk iphonesimulator \

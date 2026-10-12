@@ -32,18 +32,23 @@ final class CompactScreenshots: XCTestCase {
         app.buttons["Профиль"].tap()
         XCTAssertTrue(app.buttons["Редактировать профиль"].waitForExistence(timeout: 5))
         capture(app, "profile-compact")
-        let genres = app.staticTexts["Жанры"].firstMatch
-        XCTAssertTrue(genres.waitForExistence(timeout: 5))
-        // SwiftUI exposes the pager's label as a zero-sized StaticText.
-        // Anchor the real gesture to the visible card heading instead.
+        let heading = app.staticTexts["СТАТИСТИКА"]
+        XCTAssertTrue(heading.waitForExistence(timeout: 5))
+        // The original pager's accessibility label propagates to its children.
+        // Anchor the gesture to the independent, visible section heading.
         let origin = app.coordinate(withNormalizedOffset: .zero)
-        let gestureY = genres.frame.maxY + 30
+        let gestureY = heading.frame.maxY + 75
         let start = origin.withOffset(CGVector(dx: app.frame.width * 0.82, dy: gestureY))
         let finish = origin.withOffset(CGVector(dx: app.frame.width * 0.18, dy: gestureY))
         start.press(forDuration: 0.05, thenDragTo: finish)
-        XCTAssertTrue(app.staticTexts["Активность"].firstMatch.waitForExistence(timeout: 5))
+        let activity = app.images["chart.bar.xaxis"]
+        XCTAssertLessThan(activity.frame.maxX, app.frame.maxX)
+        XCTAssertGreaterThan(activity.frame.minX, app.frame.minX)
         capture(app, "activity-compact")
         start.press(forDuration: 0.05, thenDragTo: finish)
+        let companion = app.staticTexts["Нажми на аватар"]
+        XCTAssertLessThan(companion.frame.maxX, app.frame.maxX)
+        XCTAssertGreaterThan(companion.frame.minX, app.frame.minX)
         capture(app, "together-compact")
     }
 }

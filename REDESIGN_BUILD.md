@@ -1,8 +1,9 @@
-# Pusheen build 35
+# Pusheen build 36
 
 Grouped authentication fields, artwork room cards, grouped friend rows and a profile
 identity card use compact system typography and slate surfaces. Promotional copy is removed.
-The original circular genre chart, statistics pager and Liquid Glass navigation are restored verbatim.
+The original circular genre chart and Liquid Glass navigation are restored verbatim.
+The statistics pager retains its original gestures, with additional height to fit the genre legend.
 
 Build: GitHub Actions → Build unsigned IPA → codex/cinema-redesign.
 Backend URL: https://pulse.izanagi.online (unchanged).

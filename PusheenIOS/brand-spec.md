@@ -11,7 +11,7 @@ The interface is an app, with concise functional labels and no promotional copy.
 - Authentication uses grouped input rows, a 44 pt mode switch, and a 48 pt submit button. Decorative field icons have fixed size to prevent clipping at larger text sizes.
 - No serif headlines, hero sections, marketing slogans, decorative color gradients or coral accent.
 - Existing Liquid Glass navigation and its gestures remain byte-identical to the original source.
-- GenreOnlyCard, GenrePreferenceOrb and ViewingInsightsPager are restored verbatim from acd8bd4. Preserve their circular chart and gestures.
+- GenreOnlyCard and GenrePreferenceOrb are restored verbatim from acd8bd4. ViewingInsightsPager preserves its original gestures with 28 pt more height for multiple genres so its legend fits.
 - Spring feedback is short and low amplitude. Reduce Motion disables new effects.
 
 ## Libraries
@@ -26,4 +26,4 @@ The native simulator workflow tests authentication, registration, native tab swi
 and profile sections. It exports actual XCTest screenshot attachments. Signed-in screenshots
 use DEBUG-only local fixtures; Release IPA excludes the fixture file and launch flags.
 The existing IPA workflow runs backend and Swift policy regressions before compiling Release.
-Simulator screenshots and compilation must be checked before delivery of build 35.
+Simulator screenshots and compilation must be checked before delivery of build 36.

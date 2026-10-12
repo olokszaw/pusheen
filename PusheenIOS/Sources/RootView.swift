@@ -4514,7 +4514,7 @@ private struct ViewingInsightsPager: View {
 
     private var pageHeight: CGFloat {
         if page == 1 { return 360 }
-        if page == 0 { return stats?.genres.count == 1 ? 154 : 228 }
+        if page == 0 { return stats?.genres.count == 1 ? 154 : 256 }
         return 238
     }
 
