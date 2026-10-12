@@ -4,14 +4,14 @@ import ActivityIndicatorView
 
 /// Content is opaque and quiet; Liquid Glass belongs to navigation and controls.
 enum CinemaPalette {
-    static let background = Color(red: 0.047, green: 0.051, blue: 0.059)
-    static let surface = Color(red: 0.090, green: 0.098, blue: 0.110)
-    static let elevated = Color(red: 0.133, green: 0.145, blue: 0.165)
+    static let background = Color(red: 0.055, green: 0.063, blue: 0.078)
+    static let surface = Color(red: 0.105, green: 0.118, blue: 0.145)
+    static let elevated = Color(red: 0.165, green: 0.180, blue: 0.216)
     static let ink = Color(red: 0.933, green: 0.941, blue: 0.953)
     static let muted = Color(red: 0.596, green: 0.612, blue: 0.643)
-    static let accent = Color(red: 0.835, green: 0.855, blue: 0.886)
-    static let line = Color.white.opacity(0.08)
-    static let display = Font.system(.title3).weight(.semibold)
+    static let accent = Color(red: 0.65, green: 0.69, blue: 1.0)
+    static let line = Color.white.opacity(0.10)
+    static let display = Font.system(.title2).weight(.bold)
     static let section = Font.system(.subheadline).weight(.semibold)
 }
 
@@ -19,6 +19,7 @@ extension View {
     func cinemaSurface<S: Shape>(_ shape: S = RoundedRectangle(cornerRadius: 16)) -> some View {
         background(CinemaPalette.surface, in: shape)
             .overlay(shape.stroke(CinemaPalette.line, lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
     }
 
     func cinemaArrival() -> some View { modifier(CinemaArrival()) }
@@ -43,10 +44,10 @@ struct CinemaPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(CinemaPalette.background)
+            .foregroundStyle(Color(red: 0.08, green: 0.10, blue: 0.20))
             .padding(.horizontal, 16)
-            .frame(minHeight: 44)
-            .background(CinemaPalette.accent, in: RoundedRectangle(cornerRadius: 11))
+            .frame(minHeight: 48)
+            .background(CinemaPalette.accent, in: RoundedRectangle(cornerRadius: 16))
             .opacity(enabled ? (configuration.isPressed ? 0.78 : 1) : 0.4)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.72), value: configuration.isPressed)

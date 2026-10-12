@@ -32,9 +32,11 @@ final class CompactScreenshots: XCTestCase {
         app.buttons["Профиль"].tap()
         XCTAssertTrue(app.buttons["Редактировать профиль"].waitForExistence(timeout: 5))
         capture(app, "profile-compact")
-        app.buttons["Активность"].tap()
+        let stats = app.descendants(matching: .any).matching(identifier: "Страницы статистики").firstMatch
+        XCTAssertTrue(stats.waitForExistence(timeout: 5))
+        stats.swipeLeft()
         capture(app, "activity-compact")
-        app.buttons["Вместе"].tap()
+        stats.swipeLeft()
         capture(app, "together-compact")
     }
 }

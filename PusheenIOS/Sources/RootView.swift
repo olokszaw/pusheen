@@ -249,7 +249,7 @@ struct HomeView: View {
         NavigationStack(path: $path) {
             ZStack {
                 ZStack { AcrylicBackground()
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 10) {
+                    ScrollView { LazyVStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     CinemaHeading(title: "Комнаты")
                     Text("\(rooms.count)").font(.caption.monospacedDigit()).foregroundStyle(CinemaPalette.muted)
@@ -263,6 +263,8 @@ struct HomeView: View {
                             .frame(width: 44, height: 44).liquidCard(Circle())
                     }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel("Создать комнату")
                 }
+                Text("МОИ КОМНАТЫ").font(.system(size: 11, weight: .semibold)).tracking(1.2)
+                    .foregroundStyle(CinemaPalette.muted).padding(.top, 12)
                 ForEach(rooms) { room in
                     let canSelect = room.owner == session.profile?.userId
                     let selected = selectedRoomIDs.contains(room.id)
@@ -3361,23 +3363,31 @@ struct LiquidAuthView: View {
             AcrylicBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "play.rectangle").font(.title2.weight(.medium))
-                        Text("Pusheen").font(.title2.weight(.semibold))
-                    }.padding(.bottom, 4)
+                    VStack(alignment: .leading, spacing: 20) {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.system(size: 28, weight: .medium))
+                            .foregroundStyle(CinemaPalette.accent)
+                            .frame(width: 60, height: 60)
+                            .cinemaSurface(RoundedRectangle(cornerRadius: 19))
+                        Text("Pusheen").font(.system(.largeTitle, design: .rounded).weight(.bold))
+                    }.padding(.bottom, 12)
                     AuthModeSwitcher(register: $register) { error = ""; availability = .idle }
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(spacing: 0) {
                         if register {
-                            GlassField(icon: "person", title: "Имя", text: $nickname)
+                            GlassField(icon: "person", title: "Имя", text: $nickname, embedded: true)
                                 .transition(.offset(y: -6).combined(with: .opacity))
+                            Divider().padding(.leading, 48)
                         }
-                        GlassField(icon: "at", title: "Username", text: $username)
+                        GlassField(icon: "at", title: "Username", text: $username, embedded: true)
                             .onChange(of: username) { _, value in Task { await validate(value) } }
+                        Divider().padding(.leading, 48)
+                        GlassSecureField(title: "Пароль", text: $password, embedded: true)
+                        }.cinemaSurface(RoundedRectangle(cornerRadius: 18))
                         if register && !username.isEmpty {
                             AuthProfilePreview(nickname: nickname, username: username, availability: availability)
                                 .transition(.opacity)
                         }
-                        GlassSecureField(title: "Пароль", text: $password)
                         if !error.isEmpty {
                             Label(error, systemImage: "exclamationmark.circle")
                                 .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
@@ -3391,7 +3401,7 @@ struct LiquidAuthView: View {
                     }.animation(.spring(response: 0.36, dampingFraction: 0.86), value: register)
                         .changeEffect(.shake, value: error, isEnabled: !reduceMotion && !error.isEmpty)
                 }
-                .padding(.horizontal, 20).padding(.top, 72).padding(.bottom, 24)
+                .padding(.horizontal, 24).padding(.top, 40).padding(.bottom, 24)
                 .frame(maxWidth: 380).frame(maxWidth: .infinity).cinemaArrival()
             }.scrollDismissesKeyboard(.interactively)
         }
@@ -3484,6 +3494,7 @@ private struct AuthModeSwitcher: View {
         Button(action: action) {
             Text(title)
                 .font(.subheadline.weight(selected ? .semibold : .regular))
+                .minimumScaleFactor(0.65).lineLimit(1)
                 .foregroundStyle(selected ? .primary : .secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
@@ -3501,40 +3512,42 @@ private struct AuthModeSwitcher: View {
 }
 
 struct GlassField: View {
-    let icon: String; let title: String; @Binding var text: String
+    let icon: String; let title: String; @Binding var text: String; var embedded = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption.weight(.medium)).foregroundStyle(CinemaPalette.muted)
+            if !embedded { Text(title).font(.caption.weight(.medium)).foregroundStyle(CinemaPalette.muted) }
             HStack(spacing: 12) {
                 Image(systemName: icon).foregroundStyle(focused ? CinemaPalette.accent : CinemaPalette.muted)
-                    .frame(width: 20).accessibilityHidden(true)
+                    .font(.system(size: 17)).frame(width: 20).accessibilityHidden(true)
                 TextField(title, text: $text).focused($focused)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .textContentType(icon == "at" ? .username : icon == "person" ? .nickname : nil)
                     .accessibilityLabel(title)
-            }.font(.subheadline).padding(.horizontal, 12).frame(minHeight: 44).cinemaSurface(RoundedRectangle(cornerRadius: 11))
-                .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? CinemaPalette.accent : .clear, lineWidth: 1))
+            }.font(.subheadline).padding(.horizontal, 16).padding(.vertical, 15)
+                .background(embedded ? .clear : CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(focused ? CinemaPalette.accent : .clear, lineWidth: 1))
                 .scaleEffect(focused && !reduceMotion ? 1.006 : 1)
                 .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.72), value: focused)
         }
     }
 }
 struct GlassSecureField: View {
-    let title: String; @Binding var text: String
+    let title: String; @Binding var text: String; var embedded = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption.weight(.medium)).foregroundStyle(CinemaPalette.muted)
+            if !embedded { Text(title).font(.caption.weight(.medium)).foregroundStyle(CinemaPalette.muted) }
             HStack(spacing: 12) {
                 Image(systemName: "lock").foregroundStyle(focused ? CinemaPalette.accent : CinemaPalette.muted)
-                    .frame(width: 20).accessibilityHidden(true)
+                    .font(.system(size: 17)).frame(width: 20).accessibilityHidden(true)
                 SecureField(title, text: $text).focused($focused).textContentType(.password)
                     .accessibilityLabel(title)
-            }.font(.subheadline).padding(.horizontal, 12).frame(minHeight: 44).cinemaSurface(RoundedRectangle(cornerRadius: 11))
-                .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? CinemaPalette.accent : .clear, lineWidth: 1))
+            }.font(.subheadline).padding(.horizontal, 16).padding(.vertical, 15)
+                .background(embedded ? .clear : CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(focused ? CinemaPalette.accent : .clear, lineWidth: 1))
                 .scaleEffect(focused && !reduceMotion ? 1.006 : 1)
                 .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.72), value: focused)
         }
@@ -4263,25 +4276,37 @@ private func compactDuration(_ seconds: Int) -> String {
 struct RoomCard: View {
     let room: Room
     var body: some View {
-        HStack(spacing: 12) {
-            CinemaArtwork(url: room.thumbnailURL.isEmpty ? nil : URL(string: room.thumbnailURL))
-                .frame(width: 80, height: 56).clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-            VStack(alignment: .leading, spacing: 5) {
-                Text(room.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                HStack(spacing: 6) {
-                    Image(systemName: "person.2").font(.caption2)
-                    Text("\(room.membersCount)")
-                    Text("·")
-                    Text(room.inviteCode).monospaced()
-                }.font(.caption).foregroundStyle(CinemaPalette.muted)
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(CinemaPalette.muted).accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 14) {
+                CinemaArtwork(url: room.thumbnailURL.isEmpty ? nil : URL(string: room.thumbnailURL))
+                    .frame(width: 112, height: 76).clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white).frame(width: 24, height: 24)
+                            .background(.black.opacity(0.55), in: Circle()).padding(6)
+                    }
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(room.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                    Text(room.ownerName).font(.caption).foregroundStyle(CinemaPalette.muted).lineLimit(1)
+                    if room.playback?.isPlaying == true {
+                        Label("Идёт просмотр", systemImage: "play.circle.fill")
+                            .font(.caption2.weight(.medium)).foregroundStyle(CinemaPalette.accent)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.padding(12)
+            HStack(spacing: 6) {
+                Image(systemName: "person.2").font(.caption2)
+                Text("\(room.membersCount)")
+                Spacer()
+                Text("#\(room.inviteCode)").monospaced()
+                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
+            }.font(.caption).foregroundStyle(CinemaPalette.muted)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(.white.opacity(0.025))
         }
-        .padding(10)
-        .cinemaSurface(RoundedRectangle(cornerRadius: 13))
+        .cinemaSurface(RoundedRectangle(cornerRadius: 18))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
     }
@@ -4417,22 +4442,29 @@ struct ProfileGlassView: View {
                                 .frame(width: 44, height: 44).liquidCard(Circle())
                         }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel(edit ? "Закрыть редактор" : "Редактировать профиль")
                     }
+                    VStack(alignment: .leading, spacing: 20) {
                     HStack(spacing: 14) {
                         PhotosPicker(selection: $avatarPicker, matching: .images) {
-                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 64)
+                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 68)
                         }.accessibilityLabel("Изменить фото")
                             .onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(session.profile?.nickname ?? "").font(.headline)
+                            Text(session.profile?.nickname ?? "").font(.title3.weight(.semibold))
                             Text("@\(session.profile?.username ?? "")").font(.subheadline).foregroundStyle(CinemaPalette.muted)
                         }
                         Spacer(minLength: 0)
                     }
+                    HStack(spacing: 0) {
+                        profileMetric(value: compactDuration(session.viewingStats?.watchedSeconds ?? 0), label: "Просмотрено", symbol: "play.rectangle")
+                        Rectangle().fill(CinemaPalette.line).frame(width: 1, height: 30).padding(.horizontal, 20)
+                        profileMetric(value: "\(friends.count)", label: "Друзья", symbol: "person.2")
+                    }
+                    }.padding(18).cinemaSurface(RoundedRectangle(cornerRadius: 24))
                     if edit {
                         ProfileInlineEditor(close: { withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { edit = false } })
                             .transition(.opacity.combined(with: .offset(y: -6)))
                     }
-                    Divider().overlay(CinemaPalette.line)
+                    Text("СТАТИСТИКА").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(CinemaPalette.muted)
                     ViewingInsightsPager(stats: session.viewingStats, friends: friends)
                     Button("Выйти") { session.logout() }.font(.subheadline).buttonStyle(.plain)
                         .foregroundStyle(CinemaPalette.muted).frame(minHeight: 44)
@@ -4452,6 +4484,12 @@ struct ProfileGlassView: View {
             }
         }
     }
+    private func profileMetric(value: String, label: String, symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(label, systemImage: symbol).font(.caption).foregroundStyle(CinemaPalette.muted)
+            Text(value).font(.title3.weight(.semibold)).monospacedDigit()
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
     private func updateAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self), let profile = session.profile else { return }; let value = "data:image/jpeg;base64," + data.base64EncodedString(); session.profile = try? await session.api.updateProfile(nickname: profile.nickname, username: profile.username, avatar: value) }
 }
 
@@ -4459,38 +4497,144 @@ private struct ViewingInsightsPager: View {
     let stats: ViewingStats?
     let friends: [FriendProfile]
     @State private var page = 0
-    @Namespace private var selection
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private let labels = ["Жанры", "Активность", "Вместе"]
+    @State private var indicatorPressed = false
+    @GestureState private var dragTranslation: CGFloat = 0
+
+    private var pages: [AnyView] {
+        [
+            AnyView(GenreOnlyCard(stats: stats)),
+            AnyView(ViewingHeatmapCard(
+                daily: stats?.dailySeconds ?? [:],
+                backendMonthIncreasePercentage: stats?.monthIncreasePercentage,
+                backendStreakDays: stats?.currentStreakDays
+            )),
+            AnyView(SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends)),
+        ]
+    }
+
+    private var pageHeight: CGFloat {
+        if page == 1 { return 360 }
+        if page == 0 { return stats?.genres.count == 1 ? 154 : 228 }
+        return 238
+    }
+
+    private var indicatorHeight: CGFloat {
+        page == 0 && stats?.genres.count == 1 ? 22 : 30
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 16) {
-                ForEach(labels.indices, id: \.self) { index in
-                    Button {
-                        withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.82)) { page = index }
-                    } label: {
-                        VStack(spacing: 8) {
-                            Text(labels[index]).font(.subheadline.weight(.medium))
-                                .foregroundStyle(page == index ? CinemaPalette.ink : CinemaPalette.muted)
-                            ZStack {
-                                Color.clear.frame(height: 2)
-                                if page == index {
-                                    Capsule().fill(CinemaPalette.accent).frame(height: 2)
-                                        .matchedGeometryEffect(id: "selection", in: selection)
-                                }
+        VStack(spacing: page == 0 && stats?.genres.count == 1 ? 6 : 10) {
+            GeometryReader { proxy in
+                let width = max(1, proxy.size.width)
+                let isHorizontalDrag = abs(dragTranslation) > 0
+                HStack(spacing: 0) {
+                    ForEach(pages.indices, id: \.self) { index in
+                        pages[index]
+                            .frame(width: width, height: proxy.size.height, alignment: .topLeading)
+                            .clipped()
+                    }
+                }
+                // A real interactive offset fixes the old UIPageViewController
+                // bounce: returning the finger right now follows it continuously
+                // instead of waiting for the system pager to settle first.
+                .offset(x: -CGFloat(page) * width + dragTranslation)
+                .animation(isHorizontalDrag ? nil : .interactiveSpring(response: 0.36, dampingFraction: 0.88, blendDuration: 0.06), value: page)
+                .frame(width: width, alignment: .leading)
+                .clipped()
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 8)
+                        .updating($dragTranslation) { value, state, _ in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            let proposed = value.translation.width
+                            let atLeadingEdge = page == 0 && proposed > 0
+                            let atTrailingEdge = page == pages.count - 1 && proposed < 0
+                            // Keep a small elastic edge only; it cannot make a
+                            // reverse swipe appear stuck at either end.
+                            state = (atLeadingEdge || atTrailingEdge) ? proposed * 0.16 : proposed
+                        }
+                        .onEnded { value in
+                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                            let predicted = value.predictedEndTranslation.width
+                            let threshold = width * 0.18
+                            var next = page
+                            if predicted < -threshold { next += 1 }
+                            if predicted > threshold { next -= 1 }
+                            next = min(max(next, 0), pages.count - 1)
+                            guard next != page else { return }
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.82)
+                            withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.88, blendDuration: 0.06)) {
+                                page = next
                             }
-                        }.frame(minHeight: 44)
-                    }.buttonStyle(.plain)
-                        .accessibilityAddTraits(page == index ? .isSelected : [])
+                        }
+                )
+            }
+            .frame(height: pageHeight)
+            .animation(.interactiveSpring(response: 0.36, dampingFraction: 0.88), value: pageHeight)
+
+            GeometryReader { proxy in
+                HStack(spacing: 6) {
+                    ForEach(pages.indices, id: \.self) { index in
+                        Capsule()
+                            .fill(index == page ? Color.primary.opacity(0.72) : Color.white.opacity(0.16))
+                            .frame(width: index == page ? 20 : 8, height: 8)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .scaleEffect(indicatorPressed ? 1.11 : 1)
+                .shadow(color: indicatorPressed ? Color.white.opacity(0.14) : .clear, radius: 6)
+                .contentShape(Rectangle())
+                .highPriorityGesture(indicatorScrubGesture(width: proxy.size.width))
+                .simultaneousGesture(
+                    SpatialTapGesture().onEnded { value in
+                        updateIndicatorPage(at: value.location.x, width: proxy.size.width)
+                    }
+                )
+            }
+            .frame(width: 58, height: indicatorHeight)
+            .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.76), value: indicatorPressed)
+            .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.80), value: page)
+        }
+        .padding(15)
+        .liquidCard(RoundedRectangle(cornerRadius: 26))
+        .accessibilityLabel("Страницы статистики")
+    }
+
+    private func indicatorScrubGesture(width: CGFloat) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.22, maximumDistance: 16)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .onChanged { value in
+                switch value {
+                case .first(true):
+                    guard !indicatorPressed else { return }
+                    indicatorPressed = true
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.80)
+                case .second(true, let drag):
+                    if !indicatorPressed { indicatorPressed = true }
+                    guard let drag else { return }
+                    updateIndicatorPage(at: drag.location.x, width: width)
+                default:
+                    break
                 }
             }
-            Group {
-                switch page {
-                case 0: GenreOnlyCard(stats: stats)
-                case 1: ViewingHeatmapCard(daily: stats?.dailySeconds ?? [:], backendMonthIncreasePercentage: stats?.monthIncreasePercentage, backendStreakDays: stats?.currentStreakDays).frame(minHeight: 290)
-                default: SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends)
+            .onEnded { value in
+                if case .second(true, let drag) = value, let drag {
+                    updateIndicatorPage(at: drag.location.x, width: width)
                 }
-            }.id(page).transition(.opacity.combined(with: .offset(y: reduceMotion ? 0 : 8)))
+                withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.8)) {
+                    indicatorPressed = false
+                }
+            }
+    }
+
+    private func updateIndicatorPage(at x: CGFloat, width: CGFloat) {
+        guard width > 0, !pages.isEmpty else { return }
+        let normalized = min(0.999, max(0, x / width))
+        let target = min(pages.count - 1, Int(normalized * CGFloat(pages.count)))
+        guard target != page else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.88)
+        withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.82, blendDuration: 0.04)) {
+            page = target
         }
     }
 }
@@ -4541,41 +4685,27 @@ private struct TelegramStickerSettingsSheet: View {
 private struct GenreOnlyCard: View {
     let stats: ViewingStats?
     @State private var selectedGenreID: String?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
-        let genres = (stats?.genres ?? []).sorted { $0.seconds > $1.seconds }
-        let total = max(1, genres.reduce(0) { $0 + $1.seconds })
-        VStack(alignment: .leading, spacing: 14) {
+        let genres = stats?.genres ?? []
+        let hasSingleGenre = genres.count == 1
+        VStack(alignment: .leading, spacing: hasSingleGenre ? 5 : 10) {
+            Text("Жанры").font(.headline)
             if genres.isEmpty {
-                CinemaEmptyState(symbol: "film", title: "Нет данных", detail: "Жанры появятся после просмотра видео.")
+                ContentUnavailableView("Жанров пока нет", systemImage: "film", description: Text("После первого фильма здесь появятся твои предпочтения."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ForEach(genres) { genre in
-                    Button {
-                        withAnimation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.8)) {
-                            selectedGenreID = selectedGenreID == genre.id ? nil : genre.id
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(genre.name).font(.subheadline.weight(.medium))
-                                Spacer()
-                                Text("\(genre.percent)%").font(.subheadline.monospacedDigit())
-                                    .foregroundStyle(CinemaPalette.muted)
-                            }
-                            ProgressView(value: Double(genre.seconds) / Double(total))
-                                .tint(selectedGenreID == nil || selectedGenreID == genre.id ? CinemaPalette.accent : CinemaPalette.muted)
-                            if selectedGenreID == genre.id {
-                                Text("\(genre.seconds / 3600) ч \(genre.seconds % 3600 / 60) мин просмотра")
-                                    .font(.caption).foregroundStyle(CinemaPalette.muted)
-                                    .transition(.opacity.combined(with: .offset(y: reduceMotion ? 0 : -4)))
-                            }
-                        }.frame(minHeight: 44).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                        .accessibilityLabel("\(genre.name), \(genre.percent) процентов, \(genre.seconds / 60) минут")
-                        .accessibilityAddTraits(selectedGenreID == genre.id ? .isSelected : [])
-                }
+                GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
+                    .frame(width: hasSingleGenre ? 100 : 146, height: hasSingleGenre ? 100 : 146)
+                    .frame(maxWidth: .infinity)
+                GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
             }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
+        .contentShape(RoundedRectangle(cornerRadius: 26))
+        .onTapGesture { withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { selectedGenreID = nil } }
+        .onAppear { selectedGenreID = nil }
     }
 }
 
@@ -5652,6 +5782,10 @@ struct FriendsGlassView: View {
             VStack(spacing: 15) {
                 HStack {
                     CinemaHeading(title: "Друзья")
+                    Text("\(friends.count)").font(.caption.monospacedDigit())
+                        .foregroundStyle(CinemaPalette.muted)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(CinemaPalette.elevated, in: Capsule())
                     Spacer()
                     if !session.friendRequests.incoming.isEmpty {
                         RequestHeaderButton(symbol: "tray.and.arrow.down.fill", count: session.friendRequests.incoming.count, active: requestFilter == .incoming) {
@@ -5668,6 +5802,16 @@ struct FriendsGlassView: View {
                 if expanded {
                     HStack(spacing: 9) { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Username", text: $query).focused($searchFocused).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }
                         .padding(13).liquidCard(Capsule()).transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                if !expanded && requestFilter == nil {
+                    HStack {
+                        Text("МОИ ДРУЗЬЯ").font(.system(size: 11, weight: .semibold)).tracking(1.2)
+                        Spacer()
+                        let onlineCount = friends.filter { presenceIsOnline(isOnline: friendsPresenceSnapshotFresh ? $0.isOnline : false, lastSeen: $0.lastSeen, visible: $0.activityVisible) }.count
+                        if onlineCount > 0 {
+                            Text("\(onlineCount) в сети").font(.caption)
+                        }
+                    }.foregroundStyle(CinemaPalette.muted).padding(.top, 12)
                 }
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -5710,7 +5854,8 @@ struct FriendsGlassView: View {
                             }
                         }
                         if friends.isEmpty && !expanded && requestFilter == nil { CinemaEmptyState(symbol: "person.2", title: "Нет друзей", detail: "Найди пользователя по username.") }
-                    }
+                    }.background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 20))
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
                 }
             }.padding(.horizontal, 16).padding(.top, 8).cinemaArrival()
         }
@@ -5910,8 +6055,8 @@ private struct FriendSwipeRow: View {
                 }
             }
             .padding(.vertical, 11)
-            .padding(.horizontal, 4)
-            .background(CinemaPalette.background)
+            .padding(.horizontal, 14)
+            .background(CinemaPalette.surface)
             .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 0.5).padding(.leading, 64) }
             .offset(x: offset)
             .contentShape(RoundedRectangle(cornerRadius: 20))
