@@ -10,8 +10,7 @@ struct CinemaPreviews: PreviewProvider {
                 .previewLayout(.fixed(width: 375, height: 812))
             CinemaPreviewBoard()
                 .environment(\.dynamicTypeSize, .accessibility3)
-                .environment(\.accessibilityReduceMotion, true)
-                .previewDisplayName("Крупный текст · без движения")
+                .previewDisplayName("Крупный текст")
                 .previewLayout(.fixed(width: 375, height: 812))
         }
         .preferredColorScheme(.dark)
