@@ -1,8 +1,8 @@
-# Pusheen build 34
+# Pusheen build 35
 
-Compact neutral redesign. Marketing text, serif display typography, coral coloring and
-large poster tiles are removed. Room rows, profile header and form controls are smaller.
-The original Liquid Glass navigation is preserved.
+Grouped authentication fields, artwork room cards, grouped friend rows and a profile
+identity card use compact system typography and slate surfaces. Promotional copy is removed.
+The original circular genre chart, statistics pager and Liquid Glass navigation are restored verbatim.
 
 Build: GitHub Actions → Build unsigned IPA → codex/cinema-redesign.
 Backend URL: https://pulse.izanagi.online (unchanged).
