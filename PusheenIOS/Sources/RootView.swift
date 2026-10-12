@@ -1868,7 +1868,7 @@ struct NativeChatPane: View {
                     Image(systemName: "paperclip")
                         .font(.system(size: 19, weight: .semibold))
                         .frame(width: 44, height: 44)
-                        .passiveLiquidCard(Circle())
+                        .freshSurface(Circle())
                 }
                 .photosPicker(isPresented: $showPhotoLibrary, selection: $selectedPhoto, matching: .images)
                 .disabled(isMuted)
@@ -1879,7 +1879,7 @@ struct NativeChatPane: View {
                     Image(systemName: "face.smiling.inverse")
                         .font(.system(size: 18, weight: .semibold))
                         .frame(width: 44, height: 44)
-                        .passiveLiquidCard(Circle())
+                        .freshSurface(Circle())
                 }
                 .disabled(isMuted).opacity(isMuted ? 0.42 : 1)
 
@@ -2295,7 +2295,7 @@ private struct TelegramStickerKeyboard: View {
                     Image(systemName: "keyboard.chevron.compact.down")
                         .font(.body.weight(.semibold))
                         .frame(width: 44, height: 44)
-                        .passiveLiquidCard(Circle())
+                        .freshSurface(Circle())
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 10)
@@ -4050,15 +4050,16 @@ private struct PublicProfileScreen: View {
                             .accessibilityLabel("Удалить из друзей")
                         } else { Color.clear.frame(width: 44, height: 44) }
                     }
+                    HStack(spacing: 16) {
                     ZStack(alignment: .bottomTrailing) {
-                        AvatarView(dataURL: shownAvatar, name: shownName, size: 72, showsBorder: false)
+                        AvatarView(dataURL: shownAvatar, name: shownName, size: 54, showsBorder: false)
                         if presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 17, height: 17)
                                 .overlay(Circle().stroke(Color.black.opacity(0.64), lineWidth: 3))
                         }
                     }
-                    VStack(spacing: 3) {
-                        Text(shownName).font(.headline)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(shownName).font(.title3.weight(.semibold))
                         if !shownUsername.isEmpty {
                             Text("@\(shownUsername)").foregroundStyle(.secondary)
                                 .contentShape(Rectangle())
@@ -4079,6 +4080,8 @@ private struct PublicProfileScreen: View {
                         Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, lastSeenAgeSeconds: profile?.lastSeenAgeSeconds, ageAnchor: profile?.presenceSnapshotReceivedAt, visible: profile?.activityVisible, now: deviceEnvironment.currentTime))
                             .font(.caption).foregroundStyle(presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) ? FreshPalette.accent.opacity(0.86) : Color.secondary).padding(.top, 2)
                     }
+                    Spacer(minLength: 0)
+                    }
                     if let loaded = profile, loaded.userId != session.profile?.userId, !loaded.isFriend {
                         Button { Task { await toggleFriend(loaded) } } label: {
                             Label("Добавить в друзья", systemImage: "person.badge.plus")
@@ -4087,7 +4090,7 @@ private struct PublicProfileScreen: View {
                         .buttonStyle(.plain).freshSurface(Capsule()).disabled(friendshipBusy)
                     }
                     if let stats = profile?.stats {
-                        HStack(spacing: 9) {
+                        VStack(spacing: 0) {
                             fullMetric("play.rectangle.fill", compactDuration(stats.watchedSeconds), "просмотры", context: .views)
                             fullMetric("clock.fill", compactDuration(stats.appSeconds), "в приложении", context: .appTime)
                             fullMetric("film.fill", compactDuration(stats.longestMovieSeconds), "макс. фильм", context: .longestMovie)
@@ -4140,12 +4143,14 @@ private struct PublicProfileScreen: View {
     }
 
     private func fullMetric(_ icon: String, _ value: String, _ title: String, context: ProfileContext) -> some View {
-        VStack(spacing: 5) {
-            Image(systemName: icon).foregroundStyle(FreshPalette.accent)
-            Text(value).font(.caption.weight(.bold)).lineLimit(1)
-            Text(title).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
-        }.frame(maxWidth: .infinity).padding(.vertical, 11).freshSurface(RoundedRectangle(cornerRadius: 17))
-            .contentShape(RoundedRectangle(cornerRadius: 17))
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.subheadline).foregroundStyle(FreshPalette.muted).frame(width: 22)
+            Text(title).font(.subheadline).foregroundStyle(FreshPalette.muted)
+            Spacer()
+            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit()
+        }.frame(maxWidth: .infinity).padding(.vertical, 13)
+            .overlay(alignment: .bottom) { Rectangle().fill(FreshPalette.line).frame(height: 0.5) }
+            .contentShape(Rectangle())
             .onLongPressGesture(minimumDuration: 0.42, maximumDistance: 8) { showContext(context) }
     }
 
