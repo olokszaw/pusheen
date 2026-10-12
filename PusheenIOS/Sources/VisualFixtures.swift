@@ -17,17 +17,7 @@ enum VisualFixtures {
     ]
     static let stats = ViewingStats(appSeconds: 21000, watchedSeconds: 18000, longestMovieSeconds: 7200,
         genres: [ViewingGenre(name: "Драма", seconds: 10800, percent: 60), ViewingGenre(name: "Комедия", seconds: 5400, percent: 30), ViewingGenre(name: "Документальное", seconds: 1800, percent: 10)],
-        dailySeconds: demoHistory, monthIncreasePercentage: 0, currentStreakDays: 0,
+        dailySeconds: [:], monthIncreasePercentage: 0, currentStreakDays: 0,
         topCompanion: ViewingCompanion(userId: 2, username: "masha", nickname: "Маша", avatarDataURL: "", seconds: 7200))
-    private static let demoHistory: [String: Int] = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        let values = [600, 0, 1800, 0, 1200, 1800, 0, 2400, 3600, 0, 1800, 600, 0, 4200]
-        return Dictionary(uniqueKeysWithValues: values.enumerated().compactMap { index, seconds in
-            guard let date = Calendar.current.date(byAdding: .day, value: index - 13, to: Date()) else { return nil }
-            return (formatter.string(from: date), seconds)
-        })
-    }()
 }
 #endif

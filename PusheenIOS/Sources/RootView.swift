@@ -32,7 +32,7 @@ struct RootView: View {
             switch session.authenticationState {
             case .restoring: PusheenLaunchView()
             case .signedOut: LiquidAuthView()
-            case .signedIn: PusheenTabs().foregroundStyle(FreshPalette.ink).tint(FreshPalette.accent)
+            case .signedIn: PusheenTabs()
             }
         }
             .preferredColorScheme(.dark)
@@ -82,13 +82,13 @@ private struct FriendRequestToast: View {
             Spacer(minLength: 6)
             Button("Принять") { Task { await session.respond(to: request, accept: true) } }
                 .font(.caption.weight(.bold)).buttonStyle(.plain).padding(.horizontal, 11).padding(.vertical, 8)
-                .freshSurface(Capsule())
+                .liquidCard(Capsule())
             Button { Task { await session.respond(to: request, accept: false) } } label: {
                 Image(systemName: "xmark").font(.caption.bold()).frame(width: 28, height: 28)
-            }.buttonStyle(.plain).freshSurface(Circle())
+            }.buttonStyle(.plain).liquidCard(Circle())
         }
         .padding(10)
-        .freshSurface(RoundedRectangle(cornerRadius: 10))
+        .cinemaSurface(RoundedRectangle(cornerRadius: 22))
         .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
     }
 }
@@ -96,9 +96,9 @@ private struct FriendRequestToast: View {
 private struct PusheenLaunchView: View {
     var body: some View {
         ZStack {
-            FreshBackdrop()
+            AcrylicBackground()
             VStack(spacing: 24) {
-                Text("Pusheen").font(FreshPalette.display)
+                Text("Pusheen").font(CinemaPalette.display)
                 CinemaLoadingIndicator()
             }.cinemaArrival()
         }
@@ -110,20 +110,20 @@ struct LegacyPusheenTabs: View {
         HomeView().tabItem { Label("Комнаты", systemImage: "play.rectangle.fill") }
         FriendsView().tabItem { Label("Друзья", systemImage: "person.2.fill") }
         ProfileView().tabItem { Label("Профиль", systemImage: "person.crop.circle") }
-    }.tint(FreshPalette.accent) }
+    }.tint(CinemaPalette.accent) }
 }
 
 struct FriendsView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var query = ""; @State private var people: [FriendProfile] = []
-    var body: some View { ZStack { FreshBackdrop(); VStack(spacing: 14) { HStack { Image(systemName: "person.badge.plus"); TextField("Найти по @username", text: $query).textInputAutocapitalization(.never).onSubmit { Task { await search() } } }.padding(12).freshSurface(Capsule()); ScrollView { LazyVStack(spacing: 8) { ForEach(people) { person in HStack { Circle().fill(.purple.opacity(0.7)).frame(width: 44, height: 44).overlay(Text(person.nickname.prefix(1))); VStack(alignment: .leading) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button(person.isFriend ? "Добавлен" : "Добавить") { Task { try? await session.api.addFriend(username: person.username); await search() } }.buttonStyle(.bordered) }.padding(10).freshSurface(RoundedRectangle(cornerRadius: 10)) } } } }.padding(16) }.task { await search() } }
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 14) { HStack { Image(systemName: "person.badge.plus"); TextField("Найти по @username", text: $query).textInputAutocapitalization(.never).onSubmit { Task { await search() } } }.padding(12).liquidCard(Capsule()); ScrollView { LazyVStack(spacing: 8) { ForEach(people) { person in HStack { Circle().fill(.purple.opacity(0.7)).frame(width: 44, height: 44).overlay(Text(person.nickname.prefix(1))); VStack(alignment: .leading) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button(person.isFriend ? "Добавлен" : "Добавить") { Task { try? await session.api.addFriend(username: person.username); await search() } }.buttonStyle(.bordered) }.padding(10).cinemaSurface(RoundedRectangle(cornerRadius: 18)) } } } }.padding(16) }.task { await search() } }
     private func search() async { people = (try? await session.api.friends(query: query)) ?? [] }
 }
 
 struct ProfileView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var nickname = ""; @State private var username = ""; @State private var available: Bool?; @State private var error = ""
-    var body: some View { ZStack { FreshBackdrop(); VStack(spacing: 16) { Circle().fill(.purple.opacity(0.7)).frame(width: 94, height: 94).overlay(Text((session.profile?.nickname ?? "?").prefix(1)).font(.largeTitle.bold())); Text(session.profile?.nickname ?? "").font(FreshPalette.display); Text("@\(session.profile?.username ?? "")").foregroundStyle(.secondary); VStack(spacing: 10) { TextField("Nickname", text: $nickname); TextField("Username", text: $username).textInputAutocapitalization(.never).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; if !username.isEmpty { Text(available == true ? "@\(username) свободен" : "Проверяем или занято").font(.caption).foregroundStyle(available == true ? .green : .orange) }; Button("Сохранить") { Task { await save() } }.buttonStyle(.borderedProminent); if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) } }.textFieldStyle(.roundedBorder).padding(16).freshSurface(RoundedRectangle(cornerRadius: 10)); Spacer() }.padding(20) }.onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" } }
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 16) { Circle().fill(.purple.opacity(0.7)).frame(width: 94, height: 94).overlay(Text((session.profile?.nickname ?? "?").prefix(1)).font(.largeTitle.bold())); Text(session.profile?.nickname ?? "").font(CinemaPalette.display); Text("@\(session.profile?.username ?? "")").foregroundStyle(.secondary); VStack(spacing: 10) { TextField("Nickname", text: $nickname); TextField("Username", text: $username).textInputAutocapitalization(.never).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; if !username.isEmpty { Text(available == true ? "@\(username) свободен" : "Проверяем или занято").font(.caption).foregroundStyle(available == true ? .green : .orange) }; Button("Сохранить") { Task { await save() } }.buttonStyle(.borderedProminent); if !error.isEmpty { Text(error).foregroundStyle(.red).font(.caption) } }.textFieldStyle(.roundedBorder).padding(16).cinemaSurface(RoundedRectangle(cornerRadius: 24)); Spacer() }.padding(20) }.onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" } }
     private func save() async { do { let profile = try await session.api.updateProfile(nickname: nickname, username: username); session.profile = profile } catch { self.error = error.localizedDescription } }
 }
 
@@ -191,9 +191,9 @@ struct AuthView: View {
     }
 
     var body: some View {
-        ZStack { FreshBackdrop()
+        ZStack { AcrylicBackground()
             VStack(spacing: 18) {
-                Image(systemName: "play.fill").font(.system(size: 34, weight: .bold)).frame(width: 74, height: 74).foregroundStyle(.white).freshSurface(RoundedRectangle(cornerRadius: 10))
+                Image(systemName: "play.fill").font(.system(size: 34, weight: .bold)).frame(width: 74, height: 74).foregroundStyle(.white).cinemaSurface(RoundedRectangle(cornerRadius: 24))
                 Text(isRegister ? "Создать аккаунт" : "Войти").font(.system(size: 31, weight: .bold, design: .rounded)).multilineTextAlignment(.center)
                 VStack(spacing: 10) {
                     if isRegister { TextField("Nickname", text: $nickname).textContentType(.nickname) }
@@ -203,7 +203,7 @@ struct AuthView: View {
                     if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
                     Button { Task { await submit() } } label: { Label(isRegister ? "Создать" : "Войти", systemImage: "arrow.right").frame(maxWidth: .infinity) }
                         .buttonStyle(.borderedProminent).disabled(loading)
-                }.textFieldStyle(.roundedBorder).padding(18).freshSurface(RoundedRectangle(cornerRadius: 10))
+                }.textFieldStyle(.roundedBorder).padding(18).cinemaSurface(RoundedRectangle(cornerRadius: 24))
                 Button(isRegister ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Создать") { withAnimation(.spring(response: 0.38)) { isRegister.toggle(); error = "" } }
             }.padding(24).frame(maxWidth: 430)
         }
@@ -228,7 +228,7 @@ private struct UsernamePreview: View {
     let nickname: String; let username: String; let state: AuthView.UsernameState
     private var title: String { switch state { case .available: return "Available"; case .taken: return "Taken"; case .invalid: return "Use A–Z, 0–9 or _"; case .checking: return "Checking…"; case .idle: return "" } }
     private var tint: Color { switch state { case .available: return .green; case .taken: return .red; case .invalid: return .orange; default: return .secondary } }
-    var body: some View { HStack(spacing: 10) { Circle().fill(.indigo.opacity(0.62)).frame(width: 44, height: 44).overlay(Text((nickname.isEmpty ? username : nickname).prefix(1)).bold()); VStack(alignment: .leading, spacing: 2) { Text(nickname.isEmpty ? "Твоё имя" : nickname).font(.subheadline.bold()); Text("@\(username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(title).font(.caption2.weight(.semibold)).foregroundStyle(tint) }.padding(9).freshSurface(RoundedRectangle(cornerRadius: 16)).transition(.opacity.combined(with: .move(edge: .top))).animation(.spring(response: 0.32), value: username) }
+    var body: some View { HStack(spacing: 10) { Circle().fill(.indigo.opacity(0.62)).frame(width: 44, height: 44).overlay(Text((nickname.isEmpty ? username : nickname).prefix(1)).bold()); VStack(alignment: .leading, spacing: 2) { Text(nickname.isEmpty ? "Твоё имя" : nickname).font(.subheadline.bold()); Text("@\(username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(title).font(.caption2.weight(.semibold)).foregroundStyle(tint) }.padding(9).cinemaSurface(RoundedRectangle(cornerRadius: 16)).transition(.opacity.combined(with: .move(edge: .top))).animation(.spring(response: 0.32), value: username) }
 }
 
 struct HomeView: View {
@@ -248,20 +248,23 @@ struct HomeView: View {
     var body: some View {
         NavigationStack(path: $path) {
             ZStack {
-                ZStack { FreshBackdrop()
+                ZStack { AcrylicBackground()
                     ScrollView { LazyVStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
-                    Text("Комнаты").font(.title2.weight(.semibold))
-                    Text("\(rooms.count)").font(.caption.monospacedDigit()).foregroundStyle(FreshPalette.muted)
+                    CinemaHeading(title: "Комнаты")
+                    Text("\(rooms.count)").font(.caption.monospacedDigit()).foregroundStyle(CinemaPalette.muted)
                     Spacer()
+                    Button { showJoin = true } label: {
+                        Image(systemName: "number").font(.subheadline.weight(.medium))
+                            .frame(width: 44, height: 44).liquidCard(Circle())
+                    }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel("Войти по коду")
+                    Button { showCreate = true } label: {
+                        Image(systemName: "plus").font(.subheadline.weight(.medium))
+                            .frame(width: 44, height: 44).liquidCard(Circle())
+                    }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel("Создать комнату")
                 }
-                HStack {
-                    Button("Войти по коду") { showJoin = true }.font(.subheadline)
-                    Spacer()
-                    Button { showCreate = true } label: { Label("Создать", systemImage: "plus") }
-                        .font(.subheadline.weight(.semibold))
-                }.padding(.vertical, 10)
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], alignment: .leading, spacing: 22) {
+                Text("МОИ КОМНАТЫ").font(.system(size: 11, weight: .semibold)).tracking(1.2)
+                    .foregroundStyle(CinemaPalette.muted).padding(.top, 12)
                 ForEach(rooms) { room in
                     let canSelect = room.owner == session.profile?.userId
                     let selected = selectedRoomIDs.contains(room.id)
@@ -277,7 +280,7 @@ struct HomeView: View {
                     }
                         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSelectingRooms)
                         .animation(.spring(response: 0.24, dampingFraction: 0.74), value: selected)
-                        .contentShape(RoundedRectangle(cornerRadius: 10))
+                        .contentShape(RoundedRectangle(cornerRadius: 22))
                         .gesture(
                             LongPressGesture(minimumDuration: 0.42)
                                 .onEnded { _ in if !isSelectingRooms { previewedRoom = room } }
@@ -296,7 +299,6 @@ struct HomeView: View {
                         .accessibilityAction(named: Text("Действия с комнатой")) {
                             if !isSelectingRooms { previewedRoom = room }
                         }
-                }
                 }
                 if rooms.isEmpty {
                     CinemaEmptyState(symbol: "play.rectangle.on.rectangle", title: "Нет комнат", detail: "Создай комнату или введи код приглашения.")
@@ -415,7 +417,7 @@ struct HomeView: View {
                 Image(systemName: "xmark")
                     .font(.subheadline.weight(.bold))
                     .frame(width: 36, height: 36)
-                    .freshSurface(Circle())
+                    .liquidCard(Circle())
             }
             .frame(width: 46, height: 46)
             .contentShape(Rectangle())
@@ -430,7 +432,7 @@ struct HomeView: View {
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 12)
                 .frame(height: 42)
-                .freshSurface(Capsule())
+                .liquidCard(Capsule())
                 .foregroundStyle(.red)
                 .opacity(selectedRoomIDs.isEmpty || isDeletingSelectedRooms ? 0.42 : 1)
                 .contentShape(Rectangle())
@@ -448,7 +450,7 @@ struct HomeView: View {
                 }
         }
         .padding(9)
-        .freshSurface(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .cinemaSurface(RoundedRectangle(cornerRadius: 19, style: .continuous))
     }
     private func toggleRoomSelection(_ roomID: Int) {
         UISelectionFeedbackGenerator().selectionChanged()
@@ -562,9 +564,9 @@ private struct RoomSelectionIndicator: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(selected ? FreshPalette.accent.opacity(0.24) : Color.white.opacity(0.055))
+                .fill(selected ? CinemaPalette.accent.opacity(0.24) : Color.white.opacity(0.055))
             Circle()
-                .stroke(selected ? FreshPalette.accent.opacity(0.95) : Color.white.opacity(0.2), lineWidth: selected ? 1.6 : 1)
+                .stroke(selected ? CinemaPalette.accent.opacity(0.95) : Color.white.opacity(0.2), lineWidth: selected ? 1.6 : 1)
             if selected {
                 Image(systemName: "checkmark")
                     .font(.system(size: 13, weight: .bold))
@@ -573,7 +575,7 @@ private struct RoomSelectionIndicator: View {
             }
         }
         .frame(width: 32, height: 32)
-        .shadow(color: selected ? FreshPalette.accent.opacity(0.3) : Color.clear, radius: 9, y: 3)
+        .shadow(color: selected ? CinemaPalette.accent.opacity(0.3) : Color.clear, radius: 9, y: 3)
         .accessibilityHidden(true)
     }
 }
@@ -589,7 +591,7 @@ struct MovieSearchSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                FreshBackdrop().ignoresSafeArea()
+                AcrylicBackground().ignoresSafeArea()
                 VStack(spacing: 14) {
                     HStack(spacing: 10) {
                         TextField("Название фильма", text: $query)
@@ -597,12 +599,12 @@ struct MovieSearchSheet: View {
                             .submitLabel(.search)
                             .onSubmit { Task { await search() } }
                             .padding(12)
-                            .freshSurface(RoundedRectangle(cornerRadius: 16))
+                            .cinemaSurface(RoundedRectangle(cornerRadius: 16))
                         Button { Task { await search() } } label: {
                             Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
                         }
                         .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSearching)
-                        .freshSurface(Circle())
+                        .liquidCard(Circle())
                     }
                     .padding(.horizontal, 18)
 
@@ -667,10 +669,10 @@ struct CreateRoomSheet: View {
     // Stable across a transport retry for this sheet, different for the next
     // user-initiated creation flow.
     @State private var creationRequestID = UUID()
-    var body: some View { ZStack { FreshBackdrop(); ScrollView { VStack(alignment: .leading, spacing: 16) {
+    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 16) {
         CinemaHeading(title: "Создать комнату")
         Text("Вставь ссылку VK Видео, сайта или выбери файл из галереи.").font(.subheadline).foregroundStyle(.secondary)
-        TextField("Ссылка на видео", text: $url, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().padding(12).freshSurface(RoundedRectangle(cornerRadius: 17))
+        TextField("Ссылка на видео", text: $url, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
             .onChange(of: url) { _, value in
                 if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, movieURL != nil {
                     selectedMovie = nil
@@ -681,7 +683,7 @@ struct CreateRoomSheet: View {
             showsMoviePicker = true
         } label: {
             HStack { Image(systemName: "video.badge.plus"); Text(movieURL == nil ? "Выбрать видео из галереи" : movieURL!.lastPathComponent); Spacer(); if movieURL != nil { Image(systemName: "checkmark.circle.fill").foregroundStyle(.mint) } }
-                .lineLimit(1).padding(12).freshSurface(RoundedRectangle(cornerRadius: 17))
+                .lineLimit(1).padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
         }
         .buttonStyle(ImmediateGalleryButtonStyle())
         .photosPicker(isPresented: $showsMoviePicker, selection: $selectedMovie, matching: .videos, preferredItemEncoding: .current)
@@ -692,7 +694,7 @@ struct CreateRoomSheet: View {
         }
         Button { showsFilePicker = true } label: {
             HStack { Image(systemName: "folder"); Text("Выбрать видео из файлов"); Spacer() }
-                .padding(12).freshSurface(RoundedRectangle(cornerRadius: 17))
+                .padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
         }
         .buttonStyle(ImmediateGalleryButtonStyle())
         .fileImporter(isPresented: $showsFilePicker, allowedContentTypes: [.movie], allowsMultipleSelection: false) { result in
@@ -702,7 +704,7 @@ struct CreateRoomSheet: View {
                 movieImportTask = Task { await loadFileMovie(source, generation: generation) }
             } catch { movieError = "Не удалось получить видео: \(error.localizedDescription)" }
         }
-        Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).freshSurface(RoundedRectangle(cornerRadius: 17))
+        Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
         if importingMovie { ProgressView("Подготовка выбранного видео…") }
         if loading {
             if let uploadProgress {
@@ -719,7 +721,7 @@ struct CreateRoomSheet: View {
             guard !loading else { return }
             loading = true
             Task { await create() }
-        } label: { Label(loading ? "Отправка видео…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(FreshButtonStyle()).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading || importingMovie)
+        } label: { Label(loading ? "Отправка видео…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(CinemaPrimaryButtonStyle()).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading || importingMovie)
     }.padding(16) } }
         .disabled(loading || importingMovie)
         .presentationDetents([.medium, .large])
@@ -829,7 +831,7 @@ struct CreateRoomSheet: View {
 
 struct LegacyRoomCard: View {
     let room: Room
-    var body: some View { HStack(spacing: 14) { Image(systemName: "play.fill").font(.title2).frame(width: 58, height: 58).freshSurface(Circle()); VStack(alignment: .leading, spacing: 4) { Text(room.title).font(.headline).lineLimit(1); Text("\(room.membersCount) участников · \(room.inviteCode)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary) }.padding(14).freshSurface() }
+    var body: some View { HStack(spacing: 14) { Image(systemName: "play.fill").font(.title2).frame(width: 58, height: 58).liquidCard(Circle()); VStack(alignment: .leading, spacing: 4) { Text(room.title).font(.headline).lineLimit(1); Text("\(room.membersCount) участников · \(room.inviteCode)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary) }.padding(14).liquidCard() }
 }
 
 struct RoomView: View {
@@ -870,8 +872,8 @@ struct RoomView: View {
             // subtraction to focus made the room jump to its full height one
             // frame before the keyboard had actually finished closing.
             let roomHeight = max(playerHeight + 180, geometry.size.height - keyboardHeight - 14)
-            let roomShape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-            ZStack(alignment: .top) { FreshBackdrop().contentShape(Rectangle()).onTapGesture { dismissChatKeyboard() }
+            let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
+            ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { dismissChatKeyboard() }
                 VStack(spacing: 0) {
                     Group {
                         if let player = model.player {
@@ -903,8 +905,8 @@ struct RoomView: View {
                         .layoutPriority(2)
                 }
                 .clipShape(roomShape)
-                .background(FreshPalette.background)
-                .padding(.horizontal, 0)
+                .cinemaSurface(roomShape)
+                .padding(.horizontal, 7)
                 .padding(.top, contentTop)
                 .padding(.bottom, 2)
                 .frame(width: geometry.size.width, height: roomHeight, alignment: .top)
@@ -996,7 +998,7 @@ struct RoomView: View {
                         Image(systemName: "scope")
                             .font(.body.weight(.semibold))
                             .frame(width: 36, height: 36)
-                            .freshSurface(Circle())
+                            .liquidCard(Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Проверить синхронизацию всех участников")
@@ -1014,7 +1016,7 @@ struct RoomView: View {
                         .contentShape(Rectangle())
                         .contentTransition(.symbolEffect(.replace))
                         .symbolEffect(.bounce, value: copyFeedbackTick)
-                        .freshSurface(Circle())
+                        .liquidCard(Circle())
                 }
                 .frame(width: 52, height: 48)
                 .contentShape(Rectangle())
@@ -1029,18 +1031,19 @@ struct RoomView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 7)
-                        .freshSurface(Capsule())
+                        .liquidCard(Capsule())
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.vertical, 7)
+            .padding(7)
+            .liquidCard(Capsule())
             .opacity(model.isOwner ? 1 : 0.62)
         }
         .padding(9)
         // Keep the controls part of the same dark glass surface as the chat.
         // The previous blue wash made this read as a separate, unrelated card.
-        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .freshSurface(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .cinemaSurface(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
     private func copyInviteCode() {
         controlsHideTask?.cancel()
@@ -1064,7 +1067,7 @@ struct RoomView: View {
                 .foregroundStyle(.primary)
                 .frame(width: primary ? 48 : 42, height: 42)
                 .contentShape(Circle())
-                .freshSurface(Circle())
+                .liquidCard(Circle())
         }
         .buttonStyle(.plain)
         .disabled(!model.isOwner)
@@ -1221,12 +1224,12 @@ private struct RoomPreviewOverlay: View {
                 if let url = URL(string: room.thumbnailURL), !room.thumbnailURL.isEmpty {
                     CinemaArtwork(url: url)
                 } else {
-                    FreshPalette.elevated
+                    CinemaPalette.elevated
                 }
-                Image(systemName: "play.fill").font(.title2.weight(.semibold)).padding(16).freshSurface(Circle())
+                Image(systemName: "play.fill").font(.title2.weight(.semibold)).padding(16).liquidCard(Circle())
             }
             .frame(height: 160)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(cornerRadius: 24))
             Text(room.title).font(.title3.bold()).multilineTextAlignment(.center).lineLimit(2)
             Text("Код \(room.inviteCode)").font(.caption.monospaced()).foregroundStyle(.secondary)
             if canDelete {
@@ -1238,13 +1241,13 @@ private struct RoomPreviewOverlay: View {
                             .padding(.vertical, 4)
                     }
                     .buttonStyle(.bordered)
-                    .freshSurface(Capsule())
+                    .liquidCard(Capsule())
                 }
                 Label(deleting ? "Удаление…" : "Удалить комнату", systemImage: "trash")
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
                 .foregroundStyle(.red)
-                .freshSurface(Capsule())
+                .liquidCard(Capsule())
                 .opacity(deleting ? 0.42 : 1)
                 .contentShape(Rectangle())
                 .highPriorityGesture(TapGesture().onEnded {
@@ -1263,9 +1266,9 @@ private struct RoomPreviewOverlay: View {
         }
         .padding(16)
         .frame(maxWidth: 330)
-        .freshSurface(RoundedRectangle(cornerRadius: 30))
+        .cinemaSurface(RoundedRectangle(cornerRadius: 30))
         .overlay(alignment: .topTrailing) {
-            Button(action: close) { Image(systemName: "xmark").font(.caption.weight(.bold)).frame(width: 32, height: 32).freshSurface(Circle()) }
+            Button(action: close) { Image(systemName: "xmark").font(.caption.weight(.bold)).frame(width: 32, height: 32).liquidCard(Circle()) }
                 .buttonStyle(.plain).padding(10)
         }
         .padding(.horizontal, 30)
@@ -1275,7 +1278,7 @@ private struct RoomPreviewOverlay: View {
 struct ChatPane: View {
     let messages: [ChatMessage]; @Binding var draft: String; let send: (String) -> Void
     @FocusState private var focused: Bool
-    var body: some View { VStack(alignment: .leading, spacing: 8) { Text("Чат").font(.headline); ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 7) { ForEach(messages, id: \.timelineID) { message in HStack(alignment: .top, spacing: 8) { Circle().fill(.purple.opacity(0.7)).frame(width: 28, height: 28).overlay(Text(message.nickname.prefix(1)).font(.caption.bold())); VStack(alignment: .leading, spacing: 2) { Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary); Text(message.text).font(.subheadline) }.padding(9).freshSurface(RoundedRectangle(cornerRadius: 15)); Spacer(minLength: 20) }.id(message.timelineID) } } }.onChange(of: messages.count) { _, _ in if let id = messages.last?.timelineID { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }.frame(maxHeight: 250); HStack { TextField("Сообщение…", text: $draft, axis: .vertical).lineLimit(1...3).onSubmit { send(draft) }; Button { send(draft) } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }.padding(8).freshSurface(Capsule()) }.padding(12).freshSurface() }
+    var body: some View { VStack(alignment: .leading, spacing: 8) { Text("Чат").font(.headline); ScrollViewReader { proxy in ScrollView { LazyVStack(spacing: 7) { ForEach(messages, id: \.timelineID) { message in HStack(alignment: .top, spacing: 8) { Circle().fill(.purple.opacity(0.7)).frame(width: 28, height: 28).overlay(Text(message.nickname.prefix(1)).font(.caption.bold())); VStack(alignment: .leading, spacing: 2) { Text(message.nickname).font(.caption.bold()).foregroundStyle(.secondary); Text(message.text).font(.subheadline) }.padding(9).cinemaSurface(RoundedRectangle(cornerRadius: 15)); Spacer(minLength: 20) }.id(message.timelineID) } } }.onChange(of: messages.count) { _, _ in if let id = messages.last?.timelineID { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) } } } }.frame(maxHeight: 250); HStack { TextField("Сообщение…", text: $draft, axis: .vertical).lineLimit(1...3).onSubmit { send(draft) }; Button { send(draft) } label: { Image(systemName: "arrow.up.circle.fill").font(.title2) }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }.padding(8).liquidCard(Capsule()) }.padding(12).liquidCard() }
 }
 
 struct VideoPlayerPlaceholder: View {
@@ -1291,11 +1294,11 @@ struct VideoPlayerPlaceholder: View {
                     Color.black
                 }
                 .frame(height: 220)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .clipShape(RoundedRectangle(cornerRadius: 24))
                 Image(systemName: "play.fill")
                     .font(.system(size: 32))
                     .frame(width: 66, height: 66)
-                    .freshSurface(Circle())
+                    .liquidCard(Circle())
             }
             Slider(value: .constant(room.playback?.positionSeconds ?? 0),
                    in: 0...max(1, (room.playback?.positionSeconds ?? 0) + 1))
@@ -1310,7 +1313,7 @@ struct VideoPlayerPlaceholder: View {
             .buttonStyle(.bordered)
         }
         .padding(12)
-        .freshSurface()
+        .liquidCard()
         .sheet(isPresented: $showTime) { TimePickerSheet() }
     }
 }
@@ -1355,11 +1358,11 @@ struct MembersSheet: View {
     @State private var showInviteFriends = false
     var body: some View {
         ZStack {
-            FreshBackdrop()
+            AcrylicBackground()
             if !showInviteFriends {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Участники").font(FreshPalette.display)
+                    Text("Участники").font(CinemaPalette.display)
                     Spacer()
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.7)
@@ -1369,7 +1372,7 @@ struct MembersSheet: View {
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 11).frame(height: 36)
                     }
-                    .buttonStyle(AlivePressButtonStyle()).freshSurface(Capsule())
+                    .buttonStyle(AlivePressButtonStyle()).liquidCard(Capsule())
                 }
                 ForEach(members) { member in
                     HStack(spacing: 11) {
@@ -1380,7 +1383,7 @@ struct MembersSheet: View {
                                     .overlay(Circle().stroke(Color.black.opacity(0.55), lineWidth: 2))
                             }
                             VStack(alignment: .leading) {
-                                HStack { Text(member.nickname).bold(); if member.isOwner { Image(systemName: "crown.fill").font(.caption).foregroundStyle(.yellow) }; if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).freshSurface(Capsule()) } }
+                                HStack { Text(member.nickname).bold(); if member.isOwner { Image(systemName: "crown.fill").font(.caption).foregroundStyle(.yellow) }; if member.userId == currentID { Text("Вы").font(.caption2).padding(.horizontal, 6).padding(.vertical, 3).liquidCard(Capsule()) } }
                                 Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -1390,7 +1393,7 @@ struct MembersSheet: View {
                             profilePreview = UserProfileReference(member)
                         }
                         Spacer(); if member.isMuted { Image(systemName: "speaker.slash.fill").font(.caption).foregroundStyle(.orange) }
-                    }.padding(9).freshSurface(RoundedRectangle(cornerRadius: 17))
+                    }.padding(9).cinemaSurface(RoundedRectangle(cornerRadius: 17))
                         .contentShape(RoundedRectangle(cornerRadius: 17))
                         .onLongPressGesture(minimumDuration: 0.38) {
                             guard member.userId != currentID else { return }
@@ -1546,7 +1549,7 @@ private struct InviteFriendsPanel: View {
                         Image(systemName: "xmark")
                             .font(.system(size: 14, weight: .bold))
                             .frame(width: 34, height: 34)
-                            .freshSurface(Circle())
+                            .liquidCard(Circle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -1570,14 +1573,14 @@ private struct InviteFriendsPanel: View {
                                 }
                                 Spacer()
                                 if sent {
-                                    Label("Отправлено", systemImage: "checkmark").font(.caption2.weight(.semibold)).foregroundStyle(FreshPalette.accent)
+                                    Label("Отправлено", systemImage: "checkmark").font(.caption2.weight(.semibold)).foregroundStyle(CinemaPalette.accent)
                                 } else {
                                     RoomSelectionIndicator(selected: selected).scaleEffect(0.82)
                                 }
                             }
                             .padding(9)
-                            .freshSurface(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .cinemaSurface(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                             .onTapGesture {
                                 guard !sent else { return }
                                 UISelectionFeedbackGenerator().selectionChanged()
@@ -1596,7 +1599,7 @@ private struct InviteFriendsPanel: View {
                     Label(sending ? "Отправляем…" : "Пригласить (\(selectedIDs.count))", systemImage: "paperplane.fill")
                         .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).frame(height: 46)
                 }
-                .buttonStyle(AlivePressButtonStyle()).freshSurface(Capsule()).disabled(selectedIDs.isEmpty || sending)
+                .buttonStyle(AlivePressButtonStyle()).liquidCard(Capsule()).disabled(selectedIDs.isEmpty || sending)
                 .opacity(selectedIDs.isEmpty ? 0.48 : 1)
         }
         .padding(.horizontal, 20)
@@ -1665,10 +1668,10 @@ struct PlaybackScrubber: View {
                     .fill(.white.opacity(0.10))
                     .overlay(Circle().stroke(.white.opacity(0.48), lineWidth: 0.8))
                     .frame(width: 20, height: 20)
-                    .freshSurface(Circle())
+                    .liquidCard(Circle())
                     .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
                     .offset(x: max(0, min(width - 20, width * ratio - 10)))
-                if let dragging { Text(scrubTime(dragging)).font(.caption2.monospacedDigit().weight(.bold)).padding(.horizontal, 8).padding(.vertical, 5).freshSurface(Capsule()).offset(x: max(0, min(width - 70, width * ratio - 35)), y: -31).transition(.opacity.combined(with: .scale)) }
+                if let dragging { Text(scrubTime(dragging)).font(.caption2.monospacedDigit().weight(.bold)).padding(.horizontal, 8).padding(.vertical, 5).liquidCard(Capsule()).offset(x: max(0, min(width - 70, width * ratio - 35)), y: -31).transition(.opacity.combined(with: .scale)) }
             }
             .frame(height: proxy.size.height)
             .contentShape(Rectangle())
@@ -1687,7 +1690,7 @@ struct PlaybackScrubber: View {
                         if let value = dragging { commit(value) }
                     }
             )
-        }.frame(height: 26).padding(.horizontal, 10).padding(.vertical, 5).freshSurface(Capsule()).opacity(enabled ? 1 : 0.58)
+        }.frame(height: 26).padding(.horizontal, 10).padding(.vertical, 5).liquidCard(Capsule()).opacity(enabled ? 1 : 0.58)
     }
     private func scrubTime(_ seconds: Double) -> String { let total = Int(seconds); return total >= 3600 ? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60) : String(format: "%02d:%02d", total / 60, total % 60) }
 }
@@ -1844,9 +1847,9 @@ struct NativeChatPane: View {
             VStack(spacing: 7) {
             if let reply = replyingTo {
                 HStack(spacing: 9) {
-                    Capsule().fill(FreshPalette.accent.opacity(0.76)).frame(width: 3, height: 30)
+                    Capsule().fill(CinemaPalette.accent.opacity(0.76)).frame(width: 3, height: 30)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(reply.nickname).font(.caption.weight(.semibold)).foregroundStyle(FreshPalette.accent)
+                        Text(reply.nickname).font(.caption.weight(.semibold)).foregroundStyle(CinemaPalette.accent)
                         Text(reply.text.isEmpty ? "Изображение" : reply.text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
@@ -1860,7 +1863,7 @@ struct NativeChatPane: View {
                     .accessibilityLabel("Отменить ответ")
                 }
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .freshSurface(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .cinemaSurface(RoundedRectangle(cornerRadius: 15, style: .continuous))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             HStack(alignment: .bottom, spacing: 7) {
@@ -1868,7 +1871,7 @@ struct NativeChatPane: View {
                     Image(systemName: "paperclip")
                         .font(.system(size: 19, weight: .semibold))
                         .frame(width: 44, height: 44)
-                        .freshSurface(Circle())
+                        .passiveLiquidCard(Circle())
                 }
                 .photosPicker(isPresented: $showPhotoLibrary, selection: $selectedPhoto, matching: .images)
                 .disabled(isMuted)
@@ -1879,7 +1882,7 @@ struct NativeChatPane: View {
                     Image(systemName: "face.smiling.inverse")
                         .font(.system(size: 18, weight: .semibold))
                         .frame(width: 44, height: 44)
-                        .freshSurface(Circle())
+                        .passiveLiquidCard(Circle())
                 }
                 .disabled(isMuted).opacity(isMuted ? 0.42 : 1)
 
@@ -1913,7 +1916,7 @@ struct NativeChatPane: View {
                 .padding(.leading, 12)
                 .padding(.trailing, 6)
                 .padding(.vertical, 3)
-                .freshSurface(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .cinemaSurface(RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
             if showStickerPicker {
                 TelegramStickerKeyboard { sticker in
@@ -2132,7 +2135,7 @@ struct NativeChatPane: View {
                 } else {
                     Text("\(unreadMessageCount)")
                         .font(.subheadline.weight(.bold))
-                        .foregroundStyle(FreshPalette.accent)
+                        .foregroundStyle(CinemaPalette.accent)
                         .contentTransition(.numericText())
                         .transition(.scale.combined(with: .opacity))
                 }
@@ -2148,13 +2151,13 @@ struct NativeChatPane: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 Text("+\(unreadMessageCount)")
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(FreshPalette.accent)
+                    .foregroundStyle(CinemaPalette.accent)
                     .transition(.opacity)
             }
         }
         .padding(.horizontal, showsUnreadSender ? 9 : 5)
         .frame(height: 42)
-        .freshSurface(Capsule())
+        .liquidCard(Capsule())
         .animation(.spring(response: 0.36, dampingFraction: 0.84), value: showsUnreadSender)
         .accessibilityLabel("Новых сообщений: \(unreadMessageCount)")
     }
@@ -2218,7 +2221,7 @@ private struct BouncingTypingDots: View {
             HStack(spacing: 3) {
                 ForEach(0..<3, id: \.self) { index in
                     Circle()
-                        .fill(FreshPalette.accent.opacity(0.9))
+                        .fill(CinemaPalette.accent.opacity(0.9))
                         .frame(width: 4.5, height: 4.5)
                         .offset(y: CGFloat(sin(time * 6.2 - Double(index) * 0.9)) * 2.4)
                 }
@@ -2256,8 +2259,8 @@ private struct TelegramStickerKeyboard: View {
                                 .font(.system(size: 19, weight: .medium))
                                 .foregroundStyle(showsRecents ? .cyan : Color.white.opacity(0.66))
                                 .frame(width: 44, height: 44)
-                                .background(showsRecents ? FreshPalette.accent.opacity(0.12) : Color.white.opacity(0.055), in: Circle())
-                                .overlay(Circle().stroke(showsRecents ? FreshPalette.accent.opacity(0.34) : Color.white.opacity(0.11), lineWidth: 0.8))
+                                .background(showsRecents ? CinemaPalette.accent.opacity(0.12) : Color.white.opacity(0.055), in: Circle())
+                                .overlay(Circle().stroke(showsRecents ? CinemaPalette.accent.opacity(0.34) : Color.white.opacity(0.11), lineWidth: 0.8))
                                 .symbolEffect(.bounce, value: showsRecents)
                         }
                         .buttonStyle(AlivePressButtonStyle())
@@ -2281,7 +2284,7 @@ private struct TelegramStickerKeyboard: View {
                                     }
                                 }
                                 .frame(width: 44, height: 44)
-                                .overlay(Circle().stroke(!showsRecents && selectedPackID == pack.id ? FreshPalette.accent.opacity(0.42) : .clear, lineWidth: 1))
+                                .overlay(Circle().stroke(!showsRecents && selectedPackID == pack.id ? CinemaPalette.accent.opacity(0.42) : .clear, lineWidth: 1))
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(pack.title)
@@ -2295,7 +2298,7 @@ private struct TelegramStickerKeyboard: View {
                     Image(systemName: "keyboard.chevron.compact.down")
                         .font(.body.weight(.semibold))
                         .frame(width: 44, height: 44)
-                        .freshSurface(Circle())
+                        .passiveLiquidCard(Circle())
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 10)
@@ -2332,8 +2335,8 @@ private struct TelegramStickerKeyboard: View {
         }
         .padding(.top, 8)
         .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.white.opacity(0.11), lineWidth: 0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.11), lineWidth: 0.8))
         .task {
             recentStickers = StickerRecentsStore.load(userID: session.profile?.userId)
             packs = (try? await session.api.stickerPacks()) ?? []
@@ -2731,12 +2734,12 @@ private struct ChatPhotoEditor: View {
                             .offset(offset)
                     }
                     DrawingCanvas(drawing: $drawing, isDrawing: drawingMode)
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .stroke(.white.opacity(0.34), lineWidth: 1)
                         .allowsHitTesting(false)
                 }
                 .frame(width: size.width, height: size.height)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear { previewSize = size }
                 .onChange(of: proxy.size) { _, _ in previewSize = cropSize(in: proxy.size) }
@@ -2802,7 +2805,7 @@ private struct ChatPhotoEditor: View {
                 } label: {
                     Text("Отмена").frame(maxWidth: .infinity).frame(height: 48).contentShape(Rectangle())
                 }
-                .freshSurface(Capsule())
+                .liquidCard(Capsule())
                 Button {
                     guard let dataURL = editedDataURL() else { return }
                     send(dataURL)
@@ -2814,7 +2817,7 @@ private struct ChatPhotoEditor: View {
                         .frame(height: 48)
                         .contentShape(Rectangle())
                 }
-                .freshSurface(Capsule())
+                .liquidCard(Capsule())
             }
             .buttonStyle(.plain)
         }
@@ -2874,7 +2877,7 @@ private struct PhotoEditToolButton: ButtonStyle {
             .foregroundStyle(active ? .cyan : .primary)
             .frame(height: 36)
             .padding(.horizontal, 12)
-            .background(active ? FreshPalette.accent.opacity(0.13) : .white.opacity(0.055), in: Capsule())
+            .background(active ? CinemaPalette.accent.opacity(0.13) : .white.opacity(0.055), in: Capsule())
             .overlay(Capsule().stroke(.white.opacity(active ? 0.18 : 0.08), lineWidth: 0.8))
             .scaleEffect(configuration.isPressed ? 0.95 : 1)
     }
@@ -3160,13 +3163,13 @@ struct NativeMessageBubble: View, Equatable {
     }
 
     private var bubbleFill: Color {
-        if isHighlighted { return FreshPalette.accent.opacity(0.17) }
+        if isHighlighted { return CinemaPalette.accent.opacity(0.17) }
         if isStickerMessage { return Color.clear }
-        return isMine ? FreshPalette.accent.opacity(0.16) : Color.white.opacity(0.055)
+        return isMine ? CinemaPalette.accent.opacity(0.16) : Color.white.opacity(0.055)
     }
 
     private var bubbleStroke: Color {
-        isHighlighted ? FreshPalette.accent.opacity(0.72) : Color.white.opacity(isStickerMessage ? 0 : 0.08)
+        isHighlighted ? CinemaPalette.accent.opacity(0.72) : Color.white.opacity(isStickerMessage ? 0 : 0.08)
     }
 
     private var replyIndicatorOpacity: Double {
@@ -3180,7 +3183,7 @@ struct NativeMessageBubble: View, Equatable {
     private var replyIndicator: some View {
         Image(systemName: "arrowshape.turn.up.left.fill")
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(FreshPalette.accent)
+            .foregroundStyle(CinemaPalette.accent)
             .opacity(replyIndicatorOpacity)
             .scaleEffect(replyIndicatorScale)
             .offset(x: -28)
@@ -3205,9 +3208,9 @@ struct NativeMessageBubble: View, Equatable {
             if let original = message.replyTo {
                 Button { jumpToMessage(original.id) } label: {
                     HStack(spacing: 7) {
-                        Capsule().fill(FreshPalette.accent.opacity(0.78)).frame(width: 3, height: 29)
+                        Capsule().fill(CinemaPalette.accent.opacity(0.78)).frame(width: 3, height: 29)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(original.nickname).font(.caption2.weight(.semibold)).foregroundStyle(FreshPalette.accent)
+                            Text(original.nickname).font(.caption2.weight(.semibold)).foregroundStyle(CinemaPalette.accent)
                             Text(original.text.isEmpty ? "Изображение" : original.text).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
@@ -3242,7 +3245,7 @@ struct NativeMessageBubble: View, Equatable {
         .background(bubbleFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(bubbleStroke, lineWidth: isHighlighted ? 1.2 : 1))
         .overlay(alignment: .leading) { replyIndicator }
-        .shadow(color: isHighlighted ? FreshPalette.accent.opacity(0.24) : Color.clear, radius: 10)
+        .shadow(color: isHighlighted ? CinemaPalette.accent.opacity(0.24) : Color.clear, radius: 10)
         .offset(x: replyDragOffset)
         .animation(.interactiveSpring(response: 0.26, dampingFraction: 0.82), value: replyDragOffset)
         .animation(.easeInOut(duration: 0.2), value: isHighlighted)
@@ -3263,7 +3266,7 @@ struct NativeMessageBubble: View, Equatable {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(
-                            item.reacted ? FreshPalette.accent.opacity(0.18) : Color.white.opacity(0.055),
+                            item.reacted ? CinemaPalette.accent.opacity(0.18) : Color.white.opacity(0.055),
                             in: Capsule()
                         )
                         .overlay(Capsule().stroke(.white.opacity(item.reacted ? 0.18 : 0.08), lineWidth: 0.7))
@@ -3277,7 +3280,7 @@ struct NativeMessageBubble: View, Equatable {
 
     @ViewBuilder private var messageRow: some View {
         if message.isSystem {
-            Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).freshSurface(Capsule()).frame(maxWidth: .infinity)
+            Text(message.text).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 11).padding(.vertical, 6).liquidCard(Capsule()).frame(maxWidth: .infinity)
         } else {
             HStack(alignment: .top, spacing: 8) {
                 if !isMine { interactiveAvatar }
@@ -3569,7 +3572,7 @@ struct DataURLImage: View {
         if let comma = dataURL.firstIndex(of: ","), let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])), let image = UIImage(data: data) { Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode) }
         else if let url = URL(string: dataURL), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
             CinemaArtwork(url: url, contentMode: contentMode)
-        } else { FreshPalette.elevated }
+        } else { CinemaPalette.elevated }
     }
 }
 
@@ -3588,7 +3591,7 @@ struct AvatarView: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(FreshPalette.elevated)
+            Circle().fill(CinemaPalette.elevated)
             if !dataURL.isEmpty {
                 DataURLImage(dataURL: dataURL)
                     .clipShape(Circle())
@@ -3786,7 +3789,7 @@ private struct UserProfilePreviewCard: View {
                     HStack(spacing: 6) {
                         ForEach(stats.genres.prefix(3)) { genre in
                             Text(genre.name).font(.caption2.weight(.semibold)).lineLimit(1)
-                                .padding(.horizontal, 9).padding(.vertical, 6).freshSurface(Capsule())
+                                .padding(.horizontal, 9).padding(.vertical, 6).liquidCard(Capsule())
                         }
                     }
                 }
@@ -3801,7 +3804,7 @@ private struct UserProfilePreviewCard: View {
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 11)
             }
             .buttonStyle(.plain)
-            .freshSurface(Capsule())
+            .liquidCard(Capsule())
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
@@ -3825,11 +3828,11 @@ private struct UserProfilePreviewCard: View {
 
     private func previewMetric(_ icon: String, _ value: String, _ title: String) -> some View {
         VStack(spacing: 3) {
-            Image(systemName: icon).font(.caption).foregroundStyle(FreshPalette.accent)
+            Image(systemName: icon).font(.caption).foregroundStyle(CinemaPalette.accent)
             Text(value).font(.caption.weight(.bold)).lineLimit(1)
             Text(title).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 8).freshSurface(RoundedRectangle(cornerRadius: 14))
+        .frame(maxWidth: .infinity).padding(.vertical, 8).cinemaSurface(RoundedRectangle(cornerRadius: 14))
     }
 }
 
@@ -3863,8 +3866,8 @@ private struct CurrentWatchingPreview: View {
                     endPoint: .bottom
                 )
                 HStack(spacing: 7) {
-                    Circle().fill(FreshPalette.accent).frame(width: 7, height: 7)
-                        .shadow(color: FreshPalette.accent.opacity(0.65), radius: 5)
+                    Circle().fill(CinemaPalette.accent).frame(width: 7, height: 7)
+                        .shadow(color: CinemaPalette.accent.opacity(0.65), radius: 5)
                     Text("Смотрит сейчас")
                         .font(.caption2.weight(.bold))
                     Spacer()
@@ -3875,8 +3878,8 @@ private struct CurrentWatchingPreview: View {
                 .padding(.bottom, 9)
             }
             .frame(height: 128)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 0.8))
+            .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 0.8))
             .allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 7) {
@@ -3891,7 +3894,7 @@ private struct CurrentWatchingPreview: View {
                                 ? min(1, max(0, position / effectiveDuration)) : 0
                             ZStack(alignment: .leading) {
                                 Capsule().fill(.white.opacity(0.11))
-                                Capsule().fill(FreshPalette.accent.opacity(0.82))
+                                Capsule().fill(CinemaPalette.accent.opacity(0.82))
                                     .frame(width: max(5, proxy.size.width * ratio))
                             }
                         }
@@ -3909,7 +3912,7 @@ private struct CurrentWatchingPreview: View {
             .padding(.horizontal, 2)
         }
         .padding(10)
-        .freshSurface(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .cinemaSurface(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .task(id: watching.previewURL) { await configurePlayer() }
         .onChange(of: watching.positionSeconds) { _, _ in synchronizePlayer() }
         .onChange(of: watching.isPlaying) { _, _ in synchronizePlayer() }
@@ -4031,11 +4034,11 @@ private struct PublicProfileScreen: View {
 
     var body: some View {
         ZStack {
-            FreshBackdrop()
+            AcrylicBackground()
             ScrollView {
                 VStack(spacing: 14) {
                     HStack {
-                        Button(action: close) { Image(systemName: "xmark").font(.subheadline.bold()).frame(width: 44, height: 44).freshSurface(Circle()) }.buttonStyle(.plain)
+                        Button(action: close) { Image(systemName: "xmark").font(.subheadline.bold()).frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(.plain)
                         Spacer()
                         Text("Профиль").font(.headline)
                         Spacer()
@@ -4044,22 +4047,21 @@ private struct PublicProfileScreen: View {
                                 Image(systemName: "person.badge.minus")
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundStyle(Color(red: 0.88, green: 0.40, blue: 0.43))
-                                    .frame(width: 44, height: 44).freshSurface(Circle())
+                                    .frame(width: 44, height: 44).liquidCard(Circle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Удалить из друзей")
                         } else { Color.clear.frame(width: 44, height: 44) }
                     }
-                    HStack(spacing: 16) {
                     ZStack(alignment: .bottomTrailing) {
-                        AvatarView(dataURL: shownAvatar, name: shownName, size: 54, showsBorder: false)
+                        AvatarView(dataURL: shownAvatar, name: shownName, size: 72, showsBorder: false)
                         if presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 17, height: 17)
                                 .overlay(Circle().stroke(Color.black.opacity(0.64), lineWidth: 3))
                         }
                     }
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(shownName).font(.title3.weight(.semibold))
+                    VStack(spacing: 3) {
+                        Text(shownName).font(.headline)
                         if !shownUsername.isEmpty {
                             Text("@\(shownUsername)").foregroundStyle(.secondary)
                                 .contentShape(Rectangle())
@@ -4078,27 +4080,25 @@ private struct PublicProfileScreen: View {
                                 .accessibilityHint("Нажмите, чтобы скопировать username")
                         }
                         Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, lastSeenAgeSeconds: profile?.lastSeenAgeSeconds, ageAnchor: profile?.presenceSnapshotReceivedAt, visible: profile?.activityVisible, now: deviceEnvironment.currentTime))
-                            .font(.caption).foregroundStyle(presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) ? FreshPalette.accent.opacity(0.86) : Color.secondary).padding(.top, 2)
-                    }
-                    Spacer(minLength: 0)
+                            .font(.caption).foregroundStyle(presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) ? CinemaPalette.accent.opacity(0.86) : Color.secondary).padding(.top, 2)
                     }
                     if let loaded = profile, loaded.userId != session.profile?.userId, !loaded.isFriend {
                         Button { Task { await toggleFriend(loaded) } } label: {
                             Label("Добавить в друзья", systemImage: "person.badge.plus")
                                 .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 9)
                         }
-                        .buttonStyle(.plain).freshSurface(Capsule()).disabled(friendshipBusy)
+                        .buttonStyle(.plain).liquidCard(Capsule()).disabled(friendshipBusy)
                     }
                     if let stats = profile?.stats {
-                        VStack(spacing: 0) {
+                        HStack(spacing: 9) {
                             fullMetric("play.rectangle.fill", compactDuration(stats.watchedSeconds), "просмотры", context: .views)
                             fullMetric("clock.fill", compactDuration(stats.appSeconds), "в приложении", context: .appTime)
                             fullMetric("film.fill", compactDuration(stats.longestMovieSeconds), "макс. фильм", context: .longestMovie)
                         }
-                        FreshProfileInsights(stats: stats)
+                        ViewingInsightsPager(stats: stats, friends: [])
                     } else if profile?.analyticsVisible == false {
                         ContentUnavailableView("Статистика скрыта", systemImage: "lock.shield", description: Text("Агрегированная аналитика доступна только подтверждённым друзьям."))
-                            .padding(.vertical, 32).freshSurface(RoundedRectangle(cornerRadius: 10))
+                            .padding(.vertical, 32).cinemaSurface(RoundedRectangle(cornerRadius: 25))
                     } else if loading {
                         ProgressView().padding(.vertical, 42)
                     } else if let loadError {
@@ -4107,9 +4107,9 @@ private struct PublicProfileScreen: View {
                             Button("Повторить") { Task { await load() } }
                                 .buttonStyle(.plain)
                                 .padding(.horizontal, 16).padding(.vertical, 9)
-                                .freshSurface(Capsule())
+                                .liquidCard(Capsule())
                         }
-                        .padding(.vertical, 32).freshSurface(RoundedRectangle(cornerRadius: 10))
+                        .padding(.vertical, 32).cinemaSurface(RoundedRectangle(cornerRadius: 25))
                     }
                 }
                 .padding(20)
@@ -4143,14 +4143,12 @@ private struct PublicProfileScreen: View {
     }
 
     private func fullMetric(_ icon: String, _ value: String, _ title: String, context: ProfileContext) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).font(.subheadline).foregroundStyle(FreshPalette.muted).frame(width: 22)
-            Text(title).font(.subheadline).foregroundStyle(FreshPalette.muted)
-            Spacer()
-            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit()
-        }.frame(maxWidth: .infinity).padding(.vertical, 13)
-            .overlay(alignment: .bottom) { Rectangle().fill(FreshPalette.line).frame(height: 0.5) }
-            .contentShape(Rectangle())
+        VStack(spacing: 5) {
+            Image(systemName: icon).foregroundStyle(CinemaPalette.accent)
+            Text(value).font(.caption.weight(.bold)).lineLimit(1)
+            Text(title).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+        }.frame(maxWidth: .infinity).padding(.vertical, 11).cinemaSurface(RoundedRectangle(cornerRadius: 17))
+            .contentShape(RoundedRectangle(cornerRadius: 17))
             .onLongPressGesture(minimumDuration: 0.42, maximumDistance: 8) { showContext(context) }
     }
 
@@ -4163,9 +4161,9 @@ private struct PublicProfileScreen: View {
                     Text("Удалить из друзей?").font(.headline)
                     Text("@\(shownUsername) останется доступен через поиск.").font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     HStack(spacing: 10) {
-                        Button("Отмена") { withAnimation { context = nil } }.frame(maxWidth: .infinity).padding(.vertical, 10).freshSurface(Capsule())
+                        Button("Отмена") { withAnimation { context = nil } }.frame(maxWidth: .infinity).padding(.vertical, 10).liquidCard(Capsule())
                         Button("Удалить") { Task { await removeFriend() } }.frame(maxWidth: .infinity).padding(.vertical, 10)
-                            .foregroundStyle(Color(red: 0.95, green: 0.48, blue: 0.50)).freshSurface(Capsule()).disabled(friendshipBusy)
+                            .foregroundStyle(Color(red: 0.95, green: 0.48, blue: 0.50)).liquidCard(Capsule()).disabled(friendshipBusy)
                     }.buttonStyle(.plain)
                 case .username:
                     EmptyView()
@@ -4174,9 +4172,9 @@ private struct PublicProfileScreen: View {
                     let icon = item == .views ? "play.rectangle.fill" : item == .appTime ? "clock.fill" : "film.fill"
                     let title = item == .views ? "Просмотры" : item == .appTime ? "В приложении" : "Макс. фильм"
                     let seconds = item == .views ? stats?.watchedSeconds : item == .appTime ? stats?.appSeconds : stats?.longestMovieSeconds
-                    Image(systemName: icon).font(.title2).foregroundStyle(FreshPalette.accent)
+                    Image(systemName: icon).font(.title2).foregroundStyle(CinemaPalette.accent)
                     Text(title).font(.headline)
-                    Text(compactDuration(seconds ?? 0)).font(.title3.bold()).foregroundStyle(FreshPalette.accent)
+                    Text(compactDuration(seconds ?? 0)).font(.title3.bold()).foregroundStyle(CinemaPalette.accent)
                     Text(item == .views ? "Общее время совместных просмотров." : item == .appTime ? "Суммарная активность пользователя в приложении." : "Самый продолжительный просмотр фильма.")
                         .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
@@ -4278,26 +4276,39 @@ private func compactDuration(_ seconds: Int) -> String {
 struct RoomCard: View {
     let room: Room
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            CinemaArtwork(url: room.thumbnailURL.isEmpty ? nil : URL(string: room.thumbnailURL))
-                .aspectRatio(1.35, contentMode: .fit).clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(alignment: .bottomTrailing) {
-                    Image(systemName: room.playback?.isPlaying == true ? "waveform" : "play.fill")
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
-                        .frame(width: 28, height: 28).background(.black.opacity(0.65), in: Circle()).padding(8)
-                }
-            Text(room.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 4) {
-                Text(room.ownerName).lineLimit(1)
-                Spacer(minLength: 2)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 14) {
+                CinemaArtwork(url: room.thumbnailURL.isEmpty ? nil : URL(string: room.thumbnailURL))
+                    .frame(width: 112, height: 76).clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white).frame(width: 24, height: 24)
+                            .background(.black.opacity(0.55), in: Circle()).padding(6)
+                    }
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(room.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                    Text(room.ownerName).font(.caption).foregroundStyle(CinemaPalette.muted).lineLimit(1)
+                    if room.playback?.isPlaying == true {
+                        Label("Идёт просмотр", systemImage: "play.circle.fill")
+                            .font(.caption2.weight(.medium)).foregroundStyle(CinemaPalette.accent)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.padding(12)
+            HStack(spacing: 6) {
                 Image(systemName: "person.2").font(.caption2)
                 Text("\(room.membersCount)")
-            }.font(.caption).foregroundStyle(FreshPalette.muted)
+                Spacer()
+                Text("#\(room.inviteCode)").monospaced()
+                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
+            }.font(.caption).foregroundStyle(CinemaPalette.muted)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(.white.opacity(0.025))
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
+        .cinemaSurface(RoundedRectangle(cornerRadius: 18))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -4409,7 +4420,7 @@ struct PusheenTabs: View {
 struct LegacyFriendsGlassView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var expanded = false; @State private var query = ""; @State private var people: [FriendProfile] = []
-    var body: some View { ZStack { FreshBackdrop(); VStack(spacing: 16) { HStack { Text("Друзья").font(.largeTitle.bold()); Spacer(); Button { withAnimation(.spring(response: 0.35)) { expanded.toggle() }; if expanded { Task { await search() } } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 44, height: 44).freshSurface(Circle()) }.buttonStyle(.plain) }; if expanded { HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Найти по @username", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }.padding(12).freshSurface(Capsule()).transition(.opacity.combined(with: .move(edge: .top))) }; ScrollView { LazyVStack(spacing: 9) { ForEach(people) { person in HStack(spacing: 11) { Circle().fill(.purple.opacity(0.7)).frame(width: 48, height: 48).overlay(Text(person.nickname.prefix(1)).bold()); VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button(person.isFriend ? "Добавлен" : "Добавить") { Task { try? await session.api.addFriend(username: person.username); await search() } }.buttonStyle(.bordered) }.padding(11).freshSurface(RoundedRectangle(cornerRadius: 10)) } } }; Spacer() }.padding(20) } }
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 16) { HStack { Text("Друзья").font(.largeTitle.bold()); Spacer(); Button { withAnimation(.spring(response: 0.35)) { expanded.toggle() }; if expanded { Task { await search() } } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(.plain) }; if expanded { HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Найти по @username", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }.padding(12).liquidCard(Capsule()).transition(.opacity.combined(with: .move(edge: .top))) }; ScrollView { LazyVStack(spacing: 9) { ForEach(people) { person in HStack(spacing: 11) { Circle().fill(.purple.opacity(0.7)).frame(width: 48, height: 48).overlay(Text(person.nickname.prefix(1)).bold()); VStack(alignment: .leading, spacing: 3) { Text(person.nickname).bold(); Text("@\(person.username)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button(person.isFriend ? "Добавлен" : "Добавить") { Task { try? await session.api.addFriend(username: person.username); await search() } }.buttonStyle(.bordered) }.padding(11).cinemaSurface(RoundedRectangle(cornerRadius: 20)) } } }; Spacer() }.padding(20) } }
     private func search() async { people = (try? await session.api.friends(query: query)) ?? [] }
 }
 
@@ -4420,42 +4431,44 @@ struct ProfileGlassView: View {
     @State private var friends: [FriendProfile] = []
     var body: some View {
         ZStack {
-            FreshBackdrop()
+            AcrylicBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    HStack(alignment: .center, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(session.profile?.nickname ?? "").font(.title2.weight(.semibold))
-                            Text("@\(session.profile?.username ?? "")").font(.subheadline).foregroundStyle(FreshPalette.muted)
-                        }
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        CinemaHeading(title: "Профиль")
                         Spacer()
+                        Button { withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { edit.toggle() } } label: {
+                            Image(systemName: edit ? "xmark" : "pencil").font(.subheadline)
+                                .frame(width: 44, height: 44).liquidCard(Circle())
+                        }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel(edit ? "Закрыть редактор" : "Редактировать профиль")
+                    }
+                    VStack(alignment: .leading, spacing: 20) {
+                    HStack(spacing: 14) {
                         PhotosPicker(selection: $avatarPicker, matching: .images) {
-                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 54)
+                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 68)
                         }.accessibilityLabel("Изменить фото")
                             .onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(session.profile?.nickname ?? "").font(.title3.weight(.semibold))
+                            Text("@\(session.profile?.username ?? "")").font(.subheadline).foregroundStyle(CinemaPalette.muted)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    HStack {
-                        Button { withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { edit.toggle() } } label: {
-                            Label(edit ? "Закрыть редактор" : "Редактировать профиль", systemImage: edit ? "xmark" : "pencil")
-                        }.font(.caption).frame(minHeight: 44)
-                            .accessibilityLabel(edit ? "Закрыть редактор" : "Редактировать профиль")
-                        Spacer()
-                        Text("\(friends.count) друзей").font(.caption).foregroundStyle(FreshPalette.muted)
+                    HStack(spacing: 0) {
+                        profileMetric(value: compactDuration(session.viewingStats?.watchedSeconds ?? 0), label: "Просмотрено", symbol: "play.rectangle")
+                        Rectangle().fill(CinemaPalette.line).frame(width: 1, height: 30).padding(.horizontal, 20)
+                        profileMetric(value: "\(friends.count)", label: "Друзья", symbol: "person.2")
                     }
+                    }.padding(18).cinemaSurface(RoundedRectangle(cornerRadius: 24))
                     if edit {
-                        ProfileInlineEditor(close: { withAnimation(.spring(response: 0.34)) { edit = false } })
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        ProfileInlineEditor(close: { withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { edit = false } })
+                            .transition(.opacity.combined(with: .offset(y: -6)))
                     }
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Text(compactDuration(session.viewingStats?.watchedSeconds ?? 0)).font(.title.weight(.semibold)).monospacedDigit()
-                        Text("просмотрено").font(.subheadline).foregroundStyle(FreshPalette.muted)
-                        Spacer()
-                    }.padding(.vertical, 8)
-                    FreshProfileInsights(stats: session.viewingStats)
-                    Divider()
-                    Button { session.logout() } label: { Label("Выйти из аккаунта", systemImage: "rectangle.portrait.and.arrow.right") }
-                        .font(.subheadline).foregroundStyle(FreshPalette.muted).frame(minHeight: 44)
-                }.padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 24).cinemaArrival()
+                    Text("СТАТИСТИКА").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(CinemaPalette.muted)
+                    ViewingInsightsPager(stats: session.viewingStats, friends: friends)
+                    Button("Выйти") { session.logout() }.font(.subheadline).buttonStyle(.plain)
+                        .foregroundStyle(CinemaPalette.muted).frame(minHeight: 44)
+                }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 16).cinemaArrival()
             }
         }
         .task {
@@ -4473,49 +4486,11 @@ struct ProfileGlassView: View {
     }
     private func profileMetric(value: String, label: String, symbol: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(label, systemImage: symbol).font(.caption).foregroundStyle(FreshPalette.muted)
+            Label(label, systemImage: symbol).font(.caption).foregroundStyle(CinemaPalette.muted)
             Text(value).font(.title3.weight(.semibold)).monospacedDigit()
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
     private func updateAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self), let profile = session.profile else { return }; let value = "data:image/jpeg;base64," + data.base64EncodedString(); session.profile = try? await session.api.updateProfile(nickname: profile.nickname, username: profile.username, avatar: value) }
-}
-
-private struct FreshProfileInsights: View {
-    let stats: ViewingStats?
-    @State private var section = "Жанры"
-    @State private var selectedGenreID: String?
-    @Namespace private var underline
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 24) {
-                ForEach(["Жанры", "Активность", "Вместе"], id: \.self) { title in
-                    Button { withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { section = title } } label: {
-                        Text(title).font(.subheadline.weight(section == title ? .semibold : .regular))
-                            .foregroundStyle(section == title ? FreshPalette.ink : FreshPalette.muted)
-                            .frame(minHeight: 44)
-                            .overlay(alignment: .bottom) {
-                                if section == title {
-                                    Rectangle().fill(FreshPalette.accent).frame(height: 2).matchedGeometryEffect(id: "section", in: underline)
-                                }
-                            }
-                    }.buttonStyle(.plain)
-                }
-            }
-            Group {
-                if section == "Жанры" {
-                    if let genres = stats?.genres, !genres.isEmpty {
-                        VStack(spacing: 22) {
-                            GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
-                                .frame(width: 146, height: 146).frame(maxWidth: .infinity)
-                            GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
-                        }.padding(.vertical, 16)
-                    } else { Text("Жанров пока нет").font(.subheadline).foregroundStyle(FreshPalette.muted).padding(.vertical, 32) }
-                } else if section == "Активность" {
-                    FreshHistoryChart(daily: stats?.dailySeconds ?? [:])
-                } else { FreshCompanionRow(companion: stats?.topCompanion) }
-            }.id(section).transition(.opacity.combined(with: .offset(y: 8)))
-        }
-    }
 }
 
 private struct ViewingInsightsPager: View {
@@ -4621,7 +4596,7 @@ private struct ViewingInsightsPager: View {
             .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.80), value: page)
         }
         .padding(15)
-        .freshSurface(RoundedRectangle(cornerRadius: 10))
+        .liquidCard(RoundedRectangle(cornerRadius: 26))
         .accessibilityLabel("Страницы статистики")
     }
 
@@ -4672,9 +4647,9 @@ private struct TelegramStickerSettingsSheet: View {
     @State private var statusText = ""
     var body: some View {
         ZStack {
-            FreshBackdrop()
+            AcrylicBackground()
             VStack(alignment: .leading, spacing: 15) {
-                HStack { Text("Настройки").font(FreshPalette.display); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44).freshSurface(Circle()) }.buttonStyle(.plain) }
+                HStack { Text("Настройки").font(CinemaPalette.display); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(.plain) }
                 Label("Импортировать стикеры из Telegram", systemImage: "paperplane.fill").font(.headline)
                 ZStack(alignment: .leading) {
                     if link.isEmpty {
@@ -4689,10 +4664,10 @@ private struct TelegramStickerSettingsSheet: View {
                         .autocorrectionDisabled()
                 }
                 .padding(12)
-                .freshSurface(RoundedRectangle(cornerRadius: 16))
+                .cinemaSurface(RoundedRectangle(cornerRadius: 16))
                 Button { Task { await importPack() } } label: {
                     HStack { if loading { ProgressView().controlSize(.small) }; Text("Импортировать"); Spacer(); Image(systemName: "square.and.arrow.down") }
-                        .frame(height: 44).padding(.horizontal, 13).freshSurface(RoundedRectangle(cornerRadius: 17))
+                        .frame(height: 44).padding(.horizontal, 13).cinemaSurface(RoundedRectangle(cornerRadius: 17))
                 }.buttonStyle(.plain).disabled(loading || link.isEmpty)
                 if !statusText.isEmpty { Text(statusText).font(.caption).foregroundStyle(statusText.hasPrefix("Готово") ? .mint : .red) }
                 Spacer()
@@ -4728,7 +4703,7 @@ private struct GenreOnlyCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
-        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .contentShape(RoundedRectangle(cornerRadius: 26))
         .onTapGesture { withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { selectedGenreID = nil } }
         .onAppear { selectedGenreID = nil }
     }
@@ -4783,42 +4758,42 @@ private struct ViewingHeatmapCard: View {
             HStack(spacing: 13) {
                 Image(systemName: "chart.bar.xaxis")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(FreshPalette.accent)
+                    .foregroundStyle(CinemaPalette.accent)
                     .frame(width: 34, height: 34)
-                    .background(FreshPalette.accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(FreshPalette.accent.opacity(0.30), lineWidth: 1))
+                    .background(CinemaPalette.accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(CinemaPalette.accent.opacity(0.30), lineWidth: 1))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Активность").font(.headline.bold())
                     Text(visibleMonths == 1 ? "Последний месяц" : "Последние 3 месяца").font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
                 HStack(spacing: 5) {
-                    Image(systemName: "flame.fill").font(.subheadline).foregroundStyle(FreshPalette.accent)
+                    Image(systemName: "flame.fill").font(.subheadline).foregroundStyle(CinemaPalette.accent)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text("\(streakDays) дней подряд").font(.caption2.weight(.bold)).foregroundStyle(FreshPalette.accent)
+                        Text("\(streakDays) дней подряд").font(.caption2.weight(.bold)).foregroundStyle(CinemaPalette.accent)
                         Text("Текущая серия").font(.system(size: 9)).foregroundStyle(.secondary)
                     }
                 }
                 .padding(.horizontal, 8).padding(.vertical, 6)
-                .background(FreshPalette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(CinemaPalette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.8))
             }
 
             HStack(spacing: 7) {
                 Image(systemName: "calendar")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(FreshPalette.accent)
+                    .foregroundStyle(CinemaPalette.accent)
                     .frame(width: 26, height: 26)
                     .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                Text(Self.detailFormatter.string(from: highlightedDay)).font(.caption.weight(.bold)).foregroundStyle(FreshPalette.accent)
-                Text("•").foregroundStyle(FreshPalette.muted)
+                Text(Self.detailFormatter.string(from: highlightedDay)).font(.caption.weight(.bold)).foregroundStyle(CinemaPalette.accent)
+                Text("•").foregroundStyle(CinemaPalette.muted)
                 Text(durationText(for: highlightedDay)).font(.caption.weight(.semibold))
                 Spacer()
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(FreshPalette.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(FreshPalette.accent.opacity(0.25), lineWidth: 0.9))
+            .background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(CinemaPalette.accent.opacity(0.25), lineWidth: 0.9))
 
             GeometryReader { proxy in
                 let layout = calendarLayout
@@ -4855,7 +4830,7 @@ private struct ViewingHeatmapCard: View {
                                                 if item.isSelectable && calendar.isDate(item.date, inSameDayAs: highlightedDay) {
                                                     RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous)
                                                         .stroke(.white, lineWidth: 1.7)
-                                                        .shadow(color: FreshPalette.accent.opacity(0.75), radius: 4)
+                                                        .shadow(color: CinemaPalette.accent.opacity(0.75), radius: 4)
                                                 }
                                             }
                                             .contentShape(Rectangle())
@@ -4886,12 +4861,12 @@ private struct ViewingHeatmapCard: View {
             .frame(height: 172)
 
             HStack(spacing: 8) {
-                Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(FreshPalette.accent).font(.caption.weight(.bold))
+                Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(CinemaPalette.accent).font(.caption.weight(.bold))
                 (
                     Text("В этом месяце активность выше на ")
                         .foregroundColor(.secondary)
                     + Text("\(monthIncreasePercentage)%")
-                        .foregroundColor(FreshPalette.accent)
+                        .foregroundColor(CinemaPalette.accent)
                         .fontWeight(.semibold)
                     + Text(", чем в прошлом")
                         .foregroundColor(.secondary)
@@ -4903,7 +4878,7 @@ private struct ViewingHeatmapCard: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, 2)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .simultaneousGesture(heatmapMagnification)
     }
 
@@ -4915,7 +4890,7 @@ private struct ViewingHeatmapCard: View {
     private func color(for day: Date) -> Color {
         let seconds = daily[dayKey(for: day)] ?? 0
         guard seconds > 0 else { return .white.opacity(0.10) }
-        return FreshPalette.accent.opacity(0.22 + 0.72 * min(1, Double(seconds) / 10_800))
+        return CinemaPalette.accent.opacity(0.22 + 0.72 * min(1, Double(seconds) / 10_800))
     }
     private func tileGradient(for day: Date) -> LinearGradient {
         let base = color(for: day)
@@ -5075,7 +5050,7 @@ private struct LegacyViewingHeatmapCard: View {
                                             if let selectedDay, calendar.isDate(day, inSameDayAs: selectedDay) {
                                                 RoundedRectangle(cornerRadius: max(3, tile * 0.25), style: .continuous)
                                                     .stroke(.white.opacity(0.94), lineWidth: 1.8)
-                                                    .shadow(color: FreshPalette.accent.opacity(0.8), radius: 6)
+                                                    .shadow(color: CinemaPalette.accent.opacity(0.8), radius: 6)
                                             }
                                         }
                                         .contentShape(Rectangle())
@@ -5112,7 +5087,7 @@ private struct LegacyViewingHeatmapCard: View {
             // clipped below the page in the zoomed state.
             .frame(height: 166)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .simultaneousGesture(heatmapMagnification)
     }
 
@@ -5124,7 +5099,7 @@ private struct LegacyViewingHeatmapCard: View {
         // three hours and above reaches the clear light-cyan level.
         let threeHours = 3.0 * 60.0 * 60.0
         let progress = min(1, Double(value) / threeHours)
-        return FreshPalette.accent.opacity(0.12 + 0.68 * progress)
+        return CinemaPalette.accent.opacity(0.12 + 0.68 * progress)
     }
 
     private func tileGradient(for day: Date) -> LinearGradient {
@@ -5199,7 +5174,7 @@ private struct SharedWatchingCard: View {
                     VStack(spacing: 9) {
                         AvatarView(dataURL: companion.avatarDataURL, name: companion.nickname, size: 56)
                             .padding(7)
-                            .freshSurface(Circle())
+                            .liquidCard(Circle())
                         Text(showsDetail ? companion.nickname : "Нажми на аватар")
                             .font(.subheadline.weight(.semibold))
                         if showsDetail {
@@ -5216,7 +5191,7 @@ private struct SharedWatchingCard: View {
                 VStack(spacing: 8) {
                     AvatarView(dataURL: friend.avatarDataURL, name: friend.nickname, size: 56)
                         .padding(5)
-                        .freshSurface(Circle())
+                        .liquidCard(Circle())
                     Text(friend.nickname).font(.subheadline.weight(.semibold))
                     Text("Совместные часы появятся после общего просмотра").font(.caption2).foregroundStyle(.secondary)
                 }
@@ -5265,8 +5240,8 @@ private struct ViewingActivityCard: View {
             }
         }
         .padding(15)
-        .freshSurface(RoundedRectangle(cornerRadius: 10))
-        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .cinemaSurface(RoundedRectangle(cornerRadius: 26))
+        .contentShape(RoundedRectangle(cornerRadius: 26))
         .onTapGesture {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
                 selectedGenreID = nil
@@ -5731,7 +5706,7 @@ struct JoinRoomSheet: View {
     @State private var code = ""
     @State private var error = ""
     @State private var loading = false
-    var body: some View { ZStack { FreshBackdrop(); ScrollView { VStack(alignment: .leading, spacing: 24) { CinemaHeading(title: "Войти в комнату"); FreshField(icon: "number", title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button(loading ? "Подключение…" : "Присоединиться") { Task { await join() } }.buttonStyle(FreshButtonStyle()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading) }.padding(24) } }.presentationDetents([.medium, .large]).presentationBackground(.clear).interactiveDismissDisabled(loading) }
+    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 24) { CinemaHeading(title: "Войти в комнату"); GlassField(icon: "number", title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button(loading ? "Подключение…" : "Присоединиться") { Task { await join() } }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading) }.padding(24) } }.presentationDetents([.medium, .large]).presentationBackground(.clear).interactiveDismissDisabled(loading) }
     private func join() async {
         guard !loading else { return }
         loading = true; error = ""; defer { loading = false }
@@ -5746,7 +5721,7 @@ struct LegacyProfileEditSheet: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.dismiss) private var dismiss
     @State private var nickname = ""; @State private var username = ""; @State private var available: Bool?; @State private var error = ""
-    var body: some View { ZStack { FreshBackdrop(); VStack(spacing: 13) { Text("Редактировать профиль").font(.title3.bold()); FreshField(icon: "person", title: "Имя", text: $nickname); FreshField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; if !username.isEmpty { Text(available == true ? "@\(username) available" : "Username unavailable").font(.caption).foregroundStyle(available == true ? .green : .orange) }; if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button("Сохранить") { Task { await save() } }.buttonStyle(.borderedProminent) }.padding(22) }.onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" }.presentationDetents([.height(360)]).presentationBackground(.clear) }
+    var body: some View { ZStack { AcrylicBackground(); VStack(spacing: 13) { Text("Редактировать профиль").font(.title3.bold()); GlassField(icon: "person", title: "Nickname", text: $nickname); GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; if !username.isEmpty { Text(available == true ? "@\(username) available" : "Username unavailable").font(.caption).foregroundStyle(available == true ? .green : .orange) }; if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button("Сохранить") { Task { await save() } }.buttonStyle(.borderedProminent) }.padding(22) }.onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" }.presentationDetents([.height(360)]).presentationBackground(.clear) }
     private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username); dismiss() } catch { self.error = error.localizedDescription } }
 }
 
@@ -5760,17 +5735,17 @@ struct ProfileEditSheet: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var error = ""
     var body: some View {
-        ZStack { FreshBackdrop()
+        ZStack { AcrylicBackground()
             ScrollView { VStack(alignment: .leading, spacing: 24) {
                 CinemaHeading(title: "Редактировать")
-                PhotosPicker(selection: $selectedPhoto, matching: .images) { ZStack(alignment: .bottomTrailing) { AvatarView(dataURL: avatar, name: nickname, size: 78); Image(systemName: "camera.fill").font(.caption).padding(7).freshSurface(Circle()) } }
+                PhotosPicker(selection: $selectedPhoto, matching: .images) { ZStack(alignment: .bottomTrailing) { AvatarView(dataURL: avatar, name: nickname, size: 78); Image(systemName: "camera.fill").font(.caption).padding(7).liquidCard(Circle()) } }
                     .onChange(of: selectedPhoto) { _, item in Task { await loadAvatar(item) } }
                 VStack(spacing: 9) {
-                    FreshField(icon: "person", title: "Имя", text: $nickname)
-                    VStack(spacing: 5) { FreshField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; HStack { Text("@\(username)").font(.caption).foregroundStyle(.secondary); Spacer(); if !username.isEmpty { Text(available == true ? "Свободен" : "Занят").font(.caption2.weight(.semibold)).foregroundStyle(available == true ? .green : .orange) } } }
+                    GlassField(icon: "person", title: "Имя", text: $nickname)
+                    VStack(spacing: 5) { GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; HStack { Text("@\(username)").font(.caption).foregroundStyle(.secondary); Spacer(); if !username.isEmpty { Text(available == true ? "Свободен" : "Занят").font(.caption2.weight(.semibold)).foregroundStyle(available == true ? .green : .orange) } } }
                 }
                 if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
-                Button("Готово") { Task { await save() } }.buttonStyle(FreshButtonStyle())
+                Button("Готово") { Task { await save() } }.buttonStyle(CinemaPrimaryButtonStyle())
             }.padding(24) }
         }.presentationDetents([.medium, .large]).presentationBackground(.clear).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? ""; avatar = session.profile?.avatarDataUrl ?? "" }
     }
@@ -5784,7 +5759,7 @@ struct ProfileInlineEditor: View {
     @State private var nickname = ""
     @State private var username = ""
     @State private var error = ""
-    var body: some View { VStack(spacing: 10) { FreshField(icon: "person", title: "Имя", text: $nickname); FreshField(icon: "at", title: "Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled(); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; HStack { Button("Отмена", action: close).buttonStyle(.bordered); Button("Готово") { Task { await save() } }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 11).freshSurface(Capsule()) } }.padding(14).freshSurface(RoundedRectangle(cornerRadius: 10)).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" } }
+    var body: some View { VStack(spacing: 10) { GlassField(icon: "person", title: "Nickname", text: $nickname); GlassField(icon: "at", title: "Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled(); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; HStack { Button("Отмена", action: close).buttonStyle(.bordered); Button("Готово") { Task { await save() } }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 11).liquidCard(Capsule()) } }.padding(14).cinemaSurface(RoundedRectangle(cornerRadius: 22)).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" } }
     private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username); close() } catch { self.error = error.localizedDescription } }
 }
 
@@ -5803,14 +5778,14 @@ struct FriendsGlassView: View {
     @State private var lastFriendsRefreshAt: Date?
     @FocusState private var searchFocused: Bool
     var body: some View {
-        ZStack { FreshBackdrop()
+        ZStack { AcrylicBackground()
             VStack(spacing: 15) {
                 HStack {
                     CinemaHeading(title: "Друзья")
                     Text("\(friends.count)").font(.caption.monospacedDigit())
-                        .foregroundStyle(FreshPalette.muted)
+                        .foregroundStyle(CinemaPalette.muted)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(FreshPalette.elevated, in: Capsule())
+                        .background(CinemaPalette.elevated, in: Capsule())
                     Spacer()
                     if !session.friendRequests.incoming.isEmpty {
                         RequestHeaderButton(symbol: "tray.and.arrow.down.fill", count: session.friendRequests.incoming.count, active: requestFilter == .incoming) {
@@ -5822,42 +5797,24 @@ struct FriendsGlassView: View {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) { requestFilter = requestFilter == .outgoing ? nil : .outgoing }
                         }
                     }
-                    Button { withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { expanded.toggle() }; if expanded { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { searchFocused = true } } else { query = ""; searchFocused = false } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 44, height: 44).freshSurface(Circle()) }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel(expanded ? "Закрыть поиск" : "Найти друзей")
+                    Button { withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { expanded.toggle() }; if expanded { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { searchFocused = true } } else { query = ""; searchFocused = false } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel(expanded ? "Закрыть поиск" : "Найти друзей")
                 }
                 if expanded {
                     HStack(spacing: 9) { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Username", text: $query).focused($searchFocused).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }
-                        .padding(13).freshSurface(Capsule()).transition(.opacity.combined(with: .move(edge: .top)))
+                        .padding(13).liquidCard(Capsule()).transition(.opacity.combined(with: .move(edge: .top)))
                 }
                 if !expanded && requestFilter == nil {
                     HStack {
-                        Text("Друзья").font(.system(size: 11, weight: .semibold)).tracking(1.2)
+                        Text("МОИ ДРУЗЬЯ").font(.system(size: 11, weight: .semibold)).tracking(1.2)
                         Spacer()
                         let onlineCount = friends.filter { presenceIsOnline(isOnline: friendsPresenceSnapshotFresh ? $0.isOnline : false, lastSeen: $0.lastSeen, visible: $0.activityVisible) }.count
                         if onlineCount > 0 {
                             Text("\(onlineCount) в сети").font(.caption)
                         }
-                    }.foregroundStyle(FreshPalette.muted).padding(.top, 12)
+                    }.foregroundStyle(CinemaPalette.muted).padding(.top, 12)
                 }
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if !expanded && requestFilter == nil {
-                            let online = friends.filter { presenceIsOnline(isOnline: friendsPresenceSnapshotFresh ? $0.isOnline : false, lastSeen: $0.lastSeen, visible: $0.activityVisible) }
-                            if !online.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 20) {
-                                        ForEach(online) { person in
-                                            Button { profilePreview = UserProfileReference(person) } label: {
-                                                VStack(spacing: 8) {
-                                                    AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
-                                                        .overlay(Circle().stroke(FreshPalette.accent, lineWidth: 1.5).padding(-4))
-                                                    Text(person.nickname).font(.caption).lineLimit(1)
-                                                }.padding(5)
-                                            }.buttonStyle(AlivePressButtonStyle())
-                                        }
-                                    }.padding(.vertical, 12)
-                                }.padding(.bottom, 20)
-                            }
-                        }
+                    LazyVStack(spacing: 0) {
                         if !session.friendRequests.incoming.isEmpty && requestFilter == .incoming {
                             FriendRequestSection(title: "Входящие", requests: session.friendRequests.incoming, incoming: true) { request, accept in
                                 await session.respond(to: request, accept: accept)
@@ -5897,7 +5854,8 @@ struct FriendsGlassView: View {
                             }
                         }
                         if friends.isEmpty && !expanded && requestFilter == nil { CinemaEmptyState(symbol: "person.2", title: "Нет друзей", detail: "Найди пользователя по username.") }
-                    }
+                    }.background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 20))
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
                 }
             }.padding(.horizontal, 16).padding(.top, 8).cinemaArrival()
         }
@@ -5948,7 +5906,7 @@ private struct RequestHeaderButton: View {
                     .font(.subheadline.weight(.semibold))
                     .frame(width: 44, height: 44)
                     .background(active ? Color.teal.opacity(0.20) : .clear, in: Circle())
-                    .freshSurface(Circle())
+                    .liquidCard(Circle())
                 if let count, count > 0 {
                     Text("\(count)")
                         .font(.system(size: 10, weight: .bold, design: .rounded))
@@ -6098,10 +6056,10 @@ private struct FriendSwipeRow: View {
             }
             .padding(.vertical, 11)
             .padding(.horizontal, 14)
-            .background(FreshPalette.background)
-            .overlay(alignment: .bottom) { Rectangle().fill(FreshPalette.line).frame(height: 0.5).padding(.leading, 64) }
+            .background(CinemaPalette.surface)
+            .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 0.5).padding(.leading, 64) }
             .offset(x: offset)
-            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .contentShape(RoundedRectangle(cornerRadius: 20))
             .zIndex(1)
             // A simultaneous gesture preserves the delete button's own tap
             // handling once it is exposed, while still tracking the swipe.
@@ -6219,8 +6177,8 @@ private struct FriendRequestSection: View {
                     VStack(alignment: .leading, spacing: 2) { Text(request.nickname).font(.subheadline.bold()); Text("@\(request.username)").font(.caption).foregroundStyle(.secondary) }
                     Spacer()
                     if incoming {
-                        Button { Task { await action(request, true) } } label: { Image(systemName: "checkmark").frame(width: 32, height: 32) }.buttonStyle(.plain).freshSurface(Circle())
-                        Button { Task { await action(request, false) } } label: { Image(systemName: "xmark").frame(width: 32, height: 32) }.buttonStyle(.plain).freshSurface(Circle())
+                        Button { Task { await action(request, true) } } label: { Image(systemName: "checkmark").frame(width: 32, height: 32) }.buttonStyle(.plain).liquidCard(Circle())
+                        Button { Task { await action(request, false) } } label: { Image(systemName: "xmark").frame(width: 32, height: 32) }.buttonStyle(.plain).liquidCard(Circle())
                     } else {
                         Button { Task { await action(request, false) } } label: {
                             Label("Отменить", systemImage: "xmark")
@@ -6228,9 +6186,9 @@ private struct FriendRequestSection: View {
                                 .padding(.horizontal, 10).frame(height: 32)
                         }
                         .buttonStyle(.plain)
-                        .freshSurface(Capsule())
+                        .liquidCard(Capsule())
                     }
-                }.padding(10).freshSurface(RoundedRectangle(cornerRadius: 10))
+                }.padding(10).cinemaSurface(RoundedRectangle(cornerRadius: 19))
             }
         }
     }
