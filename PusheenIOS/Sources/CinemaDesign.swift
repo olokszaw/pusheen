@@ -4,15 +4,15 @@ import ActivityIndicatorView
 
 /// Content is opaque and quiet; Liquid Glass belongs to navigation and controls.
 enum CinemaPalette {
-    static let background = Color(red: 0.063, green: 0.063, blue: 0.067)
-    static let surface = Color(red: 0.110, green: 0.110, blue: 0.118)
-    static let elevated = Color(red: 0.153, green: 0.153, blue: 0.165)
-    static let ink = Color(red: 0.957, green: 0.937, blue: 0.906)
-    static let muted = Color(red: 0.690, green: 0.682, blue: 0.671)
-    static let accent = Color(red: 0.941, green: 0.478, blue: 0.376)
-    static let line = Color.white.opacity(0.12)
-    static let display = Font.system(.largeTitle, design: .serif).weight(.semibold)
-    static let section = Font.system(.title3).weight(.semibold)
+    static let background = Color(red: 0.047, green: 0.051, blue: 0.059)
+    static let surface = Color(red: 0.090, green: 0.098, blue: 0.110)
+    static let elevated = Color(red: 0.133, green: 0.145, blue: 0.165)
+    static let ink = Color(red: 0.933, green: 0.941, blue: 0.953)
+    static let muted = Color(red: 0.596, green: 0.612, blue: 0.643)
+    static let accent = Color(red: 0.835, green: 0.855, blue: 0.886)
+    static let line = Color.white.opacity(0.08)
+    static let display = Font.system(.title3).weight(.semibold)
+    static let section = Font.system(.subheadline).weight(.semibold)
 }
 
 extension View {
@@ -42,11 +42,11 @@ struct CinemaPrimaryButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.semibold))
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(CinemaPalette.background)
-            .padding(.horizontal, 20)
-            .frame(minHeight: 52)
-            .background(CinemaPalette.accent, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .background(CinemaPalette.accent, in: RoundedRectangle(cornerRadius: 11))
             .opacity(enabled ? (configuration.isPressed ? 0.78 : 1) : 0.4)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.72), value: configuration.isPressed)
@@ -54,18 +54,11 @@ struct CinemaPrimaryButtonStyle: ButtonStyle {
 }
 
 struct CinemaHeading: View {
-    let eyebrow: String
     let title: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(eyebrow.uppercased())
-                .font(.caption2.weight(.semibold)).tracking(2)
-                .foregroundStyle(CinemaPalette.muted)
-            Text(title).font(CinemaPalette.display).foregroundStyle(CinemaPalette.ink)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+        Text(title).font(CinemaPalette.display).foregroundStyle(CinemaPalette.ink)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -74,15 +67,15 @@ struct CinemaEmptyState: View {
     let title: String
     let detail: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Image(systemName: symbol).font(.system(size: 32, weight: .light))
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 22, weight: .regular))
                 .foregroundStyle(CinemaPalette.muted).accessibilityHidden(true)
             Text(title).font(CinemaPalette.section)
             Text(detail).font(.subheadline).foregroundStyle(CinemaPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 40)
+        .padding(.vertical, 24)
     }
 }
 

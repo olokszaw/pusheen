@@ -28,8 +28,8 @@ private struct CinemaPreviewBoard: View {
         ZStack {
             AcrylicBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    CinemaHeading(eyebrow: "Pusheen · watch together", title: "Твой кинозал")
+                VStack(alignment: .leading, spacing: 16) {
+                    CinemaHeading(title: "Комнаты")
                     RoomCard(room: room)
                     GlassField(icon: "at", title: "Username", text: $name)
                     GlassSecureField(title: "Пароль", text: $password)
@@ -37,7 +37,7 @@ private struct CinemaPreviewBoard: View {
                         HStack { Text("Создать комнату"); Spacer(); Image(systemName: "arrow.right") }
                     }.buttonStyle(CinemaPrimaryButtonStyle())
                     CinemaLoadingIndicator()
-                }.padding(24)
+                }.padding(16)
             }
         }
     }

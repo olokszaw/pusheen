@@ -6,6 +6,9 @@ settings:
     SWIFT_VERSION: 5.0
     IPHONEOS_DEPLOYMENT_TARGET: 18.0
 packages:
+  Pow:
+    url: https://github.com/EmergeTools/Pow.git
+    exactVersion: 0.3.1
   Nuke:
     url: https://github.com/kean/Nuke.git
     exactVersion: 12.8.0
@@ -22,6 +25,7 @@ targets:
     sources:
       - path: Sources
     dependencies:
+      - package: Pow
       - package: Nuke
         product: NukeUI
       - package: ActivityIndicatorView
@@ -31,13 +35,27 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: online.izanagi.pusheen
         PRODUCT_NAME: Pusheen
         MARKETING_VERSION: 1.0
-        CURRENT_PROJECT_VERSION: 33
+        CURRENT_PROJECT_VERSION: 34
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Pusheen
         INFOPLIST_KEY_CFBundleShortVersionString: 1.0
-        INFOPLIST_KEY_CFBundleVersion: 33
+        INFOPLIST_KEY_CFBundleVersion: 34
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_NSCameraUsageDescription: Pusheen uses your photo library for chat images and avatars.
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Pusheen uses your photo library for chat images and avatars.
         INFOPLIST_KEY_PusheenAPIBaseURL: $(PUSHEEN_API_BASE_URL)
+    scheme:
+      testTargets:
+        - PusheenUITests
+  PusheenUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Pusheen
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Pusheen

@@ -8,6 +8,7 @@ import CoreTransferable
 import UniformTypeIdentifiers
 import WebKit
 import Lottie
+import Pow
 
 private struct ImportedRoomMovie: Transferable {
     let url: URL
@@ -248,38 +249,20 @@ struct HomeView: View {
         NavigationStack(path: $path) {
             ZStack {
                 ZStack { AcrylicBackground()
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 24) {
-                HStack(alignment: .top, spacing: 16) {
-                    CinemaHeading(eyebrow: "Pusheen · watch together", title: "Твой кинозал")
-                    Spacer(minLength: 0)
-                    Menu {
-                        Button("Создать комнату", systemImage: "plus") { showCreate = true }
-                        Button("Войти по коду", systemImage: "number") { showJoin = true }
-                    } label: {
-                        Image(systemName: "plus").font(.headline)
-                            .frame(width: 48, height: 48).liquidCard(Circle())
-                    }
-                    .buttonStyle(AlivePressButtonStyle())
-                    .accessibilityLabel("Действия с комнатами")
-                }.padding(.top, 16)
-                Text("Хорошее кино. В хорошей компании.")
-                    .font(.subheadline).foregroundStyle(CinemaPalette.muted)
-                HStack(spacing: 12) {
-                    Button { showCreate = true } label: {
-                        Label("Создать", systemImage: "plus").frame(maxWidth: .infinity)
-                    }.buttonStyle(CinemaPrimaryButtonStyle())
-                    Button { showJoin = true } label: {
-                        Label("По коду", systemImage: "number")
-                            .font(.subheadline.weight(.semibold)).frame(minHeight: 52)
-                            .padding(.horizontal, 16).liquidCard(RoundedRectangle(cornerRadius: 14))
-                    }.buttonStyle(AlivePressButtonStyle())
-                }.padding(.vertical, 8)
-                HStack {
-                    Text("Мои комнаты").font(CinemaPalette.section)
+                    ScrollView { LazyVStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    CinemaHeading(title: "Комнаты")
+                    Text("\(rooms.count)").font(.caption.monospacedDigit()).foregroundStyle(CinemaPalette.muted)
                     Spacer()
-                    Text("\(rooms.count)").font(.caption.monospacedDigit())
-                        .foregroundStyle(CinemaPalette.muted)
-                }.padding(.top, 8)
+                    Button { showJoin = true } label: {
+                        Image(systemName: "number").font(.subheadline.weight(.medium))
+                            .frame(width: 44, height: 44).liquidCard(Circle())
+                    }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel("Войти по коду")
+                    Button { showCreate = true } label: {
+                        Image(systemName: "plus").font(.subheadline.weight(.medium))
+                            .frame(width: 44, height: 44).liquidCard(Circle())
+                    }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel("Создать комнату")
+                }
                 ForEach(rooms) { room in
                     let canSelect = room.owner == session.profile?.userId
                     let selected = selectedRoomIDs.contains(room.id)
@@ -316,9 +299,14 @@ struct HomeView: View {
                         }
                 }
                 if rooms.isEmpty {
-                    CinemaEmptyState(symbol: "play.rectangle.on.rectangle", title: "Первый вечер начинается здесь", detail: "Создай комнату с видео или присоединись по коду друга.")
+                    CinemaEmptyState(symbol: "play.rectangle.on.rectangle", title: "Нет комнат", detail: "Создай комнату или введи код приглашения.")
                 }
-                    }.padding(24).cinemaArrival() }.task { await monitorRooms() }.onChange(of: session.isOffline) { _, offline in if !offline { Task { await load() } } }
+                    }.padding(.horizontal, 16).padding(.top, 8).cinemaArrival() }.task {
+                        #if DEBUG
+                        if VisualFixtures.active { rooms = VisualFixtures.rooms; return }
+                        #endif
+                        await monitorRooms()
+                    }.onChange(of: session.isOffline) { _, offline in if !offline { Task { await load() } } }
                 }
                 .blur(radius: previewedRoom == nil ? 0 : 17)
                 .allowsHitTesting(previewedRoom == nil)
@@ -679,8 +667,8 @@ struct CreateRoomSheet: View {
     // Stable across a transport retry for this sheet, different for the next
     // user-initiated creation flow.
     @State private var creationRequestID = UUID()
-    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 24) {
-        CinemaHeading(eyebrow: "Новый сеанс", title: "Создать комнату")
+    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 16) {
+        CinemaHeading(title: "Создать комнату")
         Text("Вставь ссылку VK Видео, сайта или выбери файл из галереи.").font(.subheadline).foregroundStyle(.secondary)
         TextField("Ссылка на видео", text: $url, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
             .onChange(of: url) { _, value in
@@ -732,7 +720,7 @@ struct CreateRoomSheet: View {
             loading = true
             Task { await create() }
         } label: { Label(loading ? "Отправка видео…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(CinemaPrimaryButtonStyle()).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading || importingMovie)
-    }.padding(24) } }
+    }.padding(16) } }
         .disabled(loading || importingMovie)
         .presentationDetents([.medium, .large])
         .presentationBackground(.clear)
@@ -3358,6 +3346,7 @@ private struct ReactionPickerBar: View {
 
 struct LiquidAuthView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var register = false
     @State private var nickname = ""
     @State private var username = ""
@@ -3371,28 +3360,22 @@ struct LiquidAuthView: View {
         ZStack {
             AcrylicBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    HStack {
-                        Text("PUSHEEN").font(.caption.weight(.bold)).tracking(3)
-                        Spacer()
-                        Image(systemName: "play.rectangle").foregroundStyle(CinemaPalette.accent)
-                    }.padding(.top, 32)
-                    CinemaHeading(eyebrow: "Кино сближает", title: "На одной\nволне.")
-                        .padding(.top, 24)
-                    Text("Смотри вместе, где бы вы ни были.")
-                        .font(.body).foregroundStyle(CinemaPalette.muted)
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "play.rectangle").font(.title2.weight(.medium))
+                        Text("Pusheen").font(.title2.weight(.semibold))
+                    }.padding(.bottom, 4)
                     AuthModeSwitcher(register: $register) { error = ""; availability = .idle }
-                        .padding(.top, 16)
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
                         if register {
                             GlassField(icon: "person", title: "Имя", text: $nickname)
-                                .transition(.offset(y: -12).combined(with: .opacity))
+                                .transition(.offset(y: -6).combined(with: .opacity))
                         }
                         GlassField(icon: "at", title: "Username", text: $username)
                             .onChange(of: username) { _, value in Task { await validate(value) } }
                         if register && !username.isEmpty {
                             AuthProfilePreview(nickname: nickname, username: username, availability: availability)
-                                .transition(.offset(y: -8).combined(with: .opacity))
+                                .transition(.opacity)
                         }
                         GlassSecureField(title: "Пароль", text: $password)
                         if !error.isEmpty {
@@ -3400,18 +3383,16 @@ struct LiquidAuthView: View {
                                 .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                         }
                         Button { Task { await submit() } } label: {
-                            HStack {
+                            HStack(spacing: 8) {
                                 Text(register ? "Создать аккаунт" : "Войти")
-                                Spacer()
                                 if loading { ProgressView().tint(CinemaPalette.background) }
-                                else { Image(systemName: "arrow.right") }
                             }.frame(maxWidth: .infinity)
-                        }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(loading)
-                    }
-                    .animation(.spring(response: 0.42, dampingFraction: 0.82), value: register)
-                    Text("Общий экран. Своя компания.")
-                        .font(.caption).foregroundStyle(CinemaPalette.muted).padding(.top, 24)
-                }.padding(24).frame(maxWidth: 480).frame(maxWidth: .infinity).cinemaArrival()
+                        }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(loading).padding(.top, 4)
+                    }.animation(.spring(response: 0.36, dampingFraction: 0.86), value: register)
+                        .changeEffect(.shake, value: error, isEnabled: !reduceMotion && !error.isEmpty)
+                }
+                .padding(.horizontal, 20).padding(.top, 72).padding(.bottom, 24)
+                .frame(maxWidth: 380).frame(maxWidth: .infinity).cinemaArrival()
             }.scrollDismissesKeyboard(.interactively)
         }
     }
@@ -3431,7 +3412,7 @@ private struct AuthModeSwitcher: View {
     // making the thumb jump under it.
     @State private var dragStartMode: Bool?
 
-    @ScaledMetric(relativeTo: .body) private var height: CGFloat = 52
+    @ScaledMetric(relativeTo: .body) private var height: CGFloat = 44
 
     var body: some View {
         GeometryReader { proxy in
@@ -3524,7 +3505,7 @@ struct GlassField: View {
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption.weight(.medium)).foregroundStyle(CinemaPalette.muted)
             HStack(spacing: 12) {
                 Image(systemName: icon).foregroundStyle(focused ? CinemaPalette.accent : CinemaPalette.muted)
@@ -3533,9 +3514,9 @@ struct GlassField: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .textContentType(icon == "at" ? .username : icon == "person" ? .nickname : nil)
                     .accessibilityLabel(title)
-            }.padding(16).cinemaSurface(RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(focused ? CinemaPalette.accent : .clear, lineWidth: 1))
-                .scaleEffect(focused && !reduceMotion ? 1.012 : 1)
+            }.font(.subheadline).padding(.horizontal, 12).frame(minHeight: 44).cinemaSurface(RoundedRectangle(cornerRadius: 11))
+                .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? CinemaPalette.accent : .clear, lineWidth: 1))
+                .scaleEffect(focused && !reduceMotion ? 1.006 : 1)
                 .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.72), value: focused)
         }
     }
@@ -3545,16 +3526,16 @@ struct GlassSecureField: View {
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption.weight(.medium)).foregroundStyle(CinemaPalette.muted)
             HStack(spacing: 12) {
                 Image(systemName: "lock").foregroundStyle(focused ? CinemaPalette.accent : CinemaPalette.muted)
                     .frame(width: 20).accessibilityHidden(true)
                 SecureField(title, text: $text).focused($focused).textContentType(.password)
                     .accessibilityLabel(title)
-            }.padding(16).cinemaSurface(RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(focused ? CinemaPalette.accent : .clear, lineWidth: 1))
-                .scaleEffect(focused && !reduceMotion ? 1.012 : 1)
+            }.font(.subheadline).padding(.horizontal, 12).frame(minHeight: 44).cinemaSurface(RoundedRectangle(cornerRadius: 11))
+                .overlay(RoundedRectangle(cornerRadius: 11).stroke(focused ? CinemaPalette.accent : .clear, lineWidth: 1))
+                .scaleEffect(focused && !reduceMotion ? 1.006 : 1)
                 .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.72), value: focused)
         }
     }
@@ -4060,14 +4041,14 @@ private struct PublicProfileScreen: View {
                         } else { Color.clear.frame(width: 44, height: 44) }
                     }
                     ZStack(alignment: .bottomTrailing) {
-                        AvatarView(dataURL: shownAvatar, name: shownName, size: 112, showsBorder: false)
+                        AvatarView(dataURL: shownAvatar, name: shownName, size: 72, showsBorder: false)
                         if presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 17, height: 17)
                                 .overlay(Circle().stroke(Color.black.opacity(0.64), lineWidth: 3))
                         }
                     }
                     VStack(spacing: 3) {
-                        Text(shownName).font(CinemaPalette.display)
+                        Text(shownName).font(.headline)
                         if !shownUsername.isEmpty {
                             Text("@\(shownUsername)").foregroundStyle(.secondary)
                                 .contentShape(Rectangle())
@@ -4282,33 +4263,25 @@ private func compactDuration(_ seconds: Int) -> String {
 struct RoomCard: View {
     let room: Room
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .bottomLeading) {
-                CinemaArtwork(url: room.thumbnailURL.isEmpty ? nil : URL(string: room.thumbnailURL))
-                    .frame(height: 184).clipped()
-                LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
-                HStack {
-                    Label("\(room.membersCount) участников", systemImage: "person.2")
-                        .font(.caption.weight(.medium))
-                    Spacer()
-                    Image(systemName: "play.fill").font(.subheadline)
-                        .frame(width: 44, height: 44).liquidCard(Circle())
-                }.padding(16)
+        HStack(spacing: 12) {
+            CinemaArtwork(url: room.thumbnailURL.isEmpty ? nil : URL(string: room.thumbnailURL))
+                .frame(width: 80, height: 56).clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(room.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                HStack(spacing: 6) {
+                    Image(systemName: "person.2").font(.caption2)
+                    Text("\(room.membersCount)")
+                    Text("·")
+                    Text(room.inviteCode).monospaced()
+                }.font(.caption).foregroundStyle(CinemaPalette.muted)
             }
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(room.title).font(.title3.weight(.semibold)).lineLimit(2)
-                    Text("КОД  \(room.inviteCode)").font(.caption2.monospaced()).tracking(1)
-                        .foregroundStyle(CinemaPalette.muted)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "arrow.up.right").font(.subheadline)
-                    .foregroundStyle(CinemaPalette.muted).accessibilityHidden(true)
-            }.padding(16)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(CinemaPalette.muted).accessibilityHidden(true)
         }
-        .background(CinemaPalette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(CinemaPalette.line, lineWidth: 0.5))
+        .padding(10)
+        .cinemaSurface(RoundedRectangle(cornerRadius: 13))
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
     }
@@ -4435,32 +4408,41 @@ struct ProfileGlassView: View {
         ZStack {
             AcrylicBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    CinemaHeading(eyebrow: "Личный архив", title: "Профиль").padding(.top, 16)
-                    PhotosPicker(selection: $avatarPicker, matching: .images) {
-                        ZStack(alignment: .bottomTrailing) {
-                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 88)
-                            Image(systemName: "camera.fill").font(.caption.weight(.bold)).padding(8).liquidCard(Circle())
-                        }
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        CinemaHeading(title: "Профиль")
+                        Spacer()
+                        Button { withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { edit.toggle() } } label: {
+                            Image(systemName: edit ? "xmark" : "pencil").font(.subheadline)
+                                .frame(width: 44, height: 44).liquidCard(Circle())
+                        }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel(edit ? "Закрыть редактор" : "Редактировать профиль")
                     }
-                    .onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
-                    if !edit {
-                        VStack(spacing: 3) {
-                            Text(session.profile?.nickname ?? "").font(CinemaPalette.display)
-                            Text("@\(session.profile?.username ?? "")").foregroundStyle(.secondary)
+                    HStack(spacing: 14) {
+                        PhotosPicker(selection: $avatarPicker, matching: .images) {
+                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 64)
+                        }.accessibilityLabel("Изменить фото")
+                            .onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(session.profile?.nickname ?? "").font(.headline)
+                            Text("@\(session.profile?.username ?? "")").font(.subheadline).foregroundStyle(CinemaPalette.muted)
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { edit = true } }
+                        Spacer(minLength: 0)
                     }
-                    if edit { ProfileInlineEditor(close: { withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) { edit = false } }).transition(.opacity.combined(with: .move(edge: .top))) }
-                    Divider().overlay(CinemaPalette.line).padding(.vertical, 8)
-                    Text("Твои просмотры").font(CinemaPalette.section)
+                    if edit {
+                        ProfileInlineEditor(close: { withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { edit = false } })
+                            .transition(.opacity.combined(with: .offset(y: -6)))
+                    }
+                    Divider().overlay(CinemaPalette.line)
                     ViewingInsightsPager(stats: session.viewingStats, friends: friends)
-                    Button("Выйти") { session.logout() }.font(.subheadline).buttonStyle(.plain).foregroundStyle(CinemaPalette.muted).frame(minHeight: 44).padding(.top, 8)
-                }.padding(24).cinemaArrival()
+                    Button("Выйти") { session.logout() }.font(.subheadline).buttonStyle(.plain)
+                        .foregroundStyle(CinemaPalette.muted).frame(minHeight: 44)
+                }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 16).cinemaArrival()
             }
         }
         .task {
+            #if DEBUG
+            if VisualFixtures.active { friends = VisualFixtures.friends; return }
+            #endif
             while !Task.isCancelled {
                 await session.refreshViewingStats()
                 if let refreshedFriends = try? await session.api.friends() {
@@ -4481,7 +4463,7 @@ private struct ViewingInsightsPager: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let labels = ["Жанры", "Активность", "Вместе"]
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 16) {
                 ForEach(labels.indices, id: \.self) { index in
                     Button {
@@ -4504,9 +4486,9 @@ private struct ViewingInsightsPager: View {
             }
             Group {
                 switch page {
-                case 0: GenreOnlyCard(stats: stats).frame(minHeight: 260)
-                case 1: ViewingHeatmapCard(daily: stats?.dailySeconds ?? [:], backendMonthIncreasePercentage: stats?.monthIncreasePercentage, backendStreakDays: stats?.currentStreakDays).frame(minHeight: 360)
-                default: SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends).frame(minHeight: 240)
+                case 0: GenreOnlyCard(stats: stats)
+                case 1: ViewingHeatmapCard(daily: stats?.dailySeconds ?? [:], backendMonthIncreasePercentage: stats?.monthIncreasePercentage, backendStreakDays: stats?.currentStreakDays).frame(minHeight: 290)
+                default: SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends)
                 }
             }.id(page).transition(.opacity.combined(with: .offset(y: reduceMotion ? 0 : 8)))
         }
@@ -4563,9 +4545,9 @@ private struct GenreOnlyCard: View {
     var body: some View {
         let genres = (stats?.genres ?? []).sorted { $0.seconds > $1.seconds }
         let total = max(1, genres.reduce(0) { $0 + $1.seconds })
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 14) {
             if genres.isEmpty {
-                CinemaEmptyState(symbol: "film", title: "Твой вкус в кино", detail: "После первого просмотра здесь появятся любимые жанры.")
+                CinemaEmptyState(symbol: "film", title: "Нет данных", detail: "Жанры появятся после просмотра видео.")
             } else {
                 ForEach(genres) { genre in
                     Button {
@@ -4573,7 +4555,7 @@ private struct GenreOnlyCard: View {
                             selectedGenreID = selectedGenreID == genre.id ? nil : genre.id
                         }
                     } label: {
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text(genre.name).font(.subheadline.weight(.medium))
                                 Spacer()
@@ -5060,7 +5042,7 @@ private struct SharedWatchingCard: View {
                     withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) { showsDetail.toggle() }
                 } label: {
                     VStack(spacing: 9) {
-                        AvatarView(dataURL: companion.avatarDataURL, name: companion.nickname, size: 104)
+                        AvatarView(dataURL: companion.avatarDataURL, name: companion.nickname, size: 56)
                             .padding(7)
                             .liquidCard(Circle())
                         Text(showsDetail ? companion.nickname : "Нажми на аватар")
@@ -5077,7 +5059,7 @@ private struct SharedWatchingCard: View {
                 .buttonStyle(.plain)
             } else if let friend = fallbackFriends.first(where: \.isFriend) {
                 VStack(spacing: 8) {
-                    AvatarView(dataURL: friend.avatarDataURL, name: friend.nickname, size: 96)
+                    AvatarView(dataURL: friend.avatarDataURL, name: friend.nickname, size: 56)
                         .padding(5)
                         .liquidCard(Circle())
                     Text(friend.nickname).font(.subheadline.weight(.semibold))
@@ -5594,7 +5576,7 @@ struct JoinRoomSheet: View {
     @State private var code = ""
     @State private var error = ""
     @State private var loading = false
-    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 24) { CinemaHeading(eyebrow: "По приглашению", title: "Войти в комнату"); GlassField(icon: "number", title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button(loading ? "Подключение…" : "Присоединиться") { Task { await join() } }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading) }.padding(24) } }.presentationDetents([.medium, .large]).presentationBackground(.clear).interactiveDismissDisabled(loading) }
+    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 24) { CinemaHeading(title: "Войти в комнату"); GlassField(icon: "number", title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button(loading ? "Подключение…" : "Присоединиться") { Task { await join() } }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading) }.padding(24) } }.presentationDetents([.medium, .large]).presentationBackground(.clear).interactiveDismissDisabled(loading) }
     private func join() async {
         guard !loading else { return }
         loading = true; error = ""; defer { loading = false }
@@ -5625,7 +5607,7 @@ struct ProfileEditSheet: View {
     var body: some View {
         ZStack { AcrylicBackground()
             ScrollView { VStack(alignment: .leading, spacing: 24) {
-                CinemaHeading(eyebrow: "Личный архив", title: "Редактировать")
+                CinemaHeading(title: "Редактировать")
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { ZStack(alignment: .bottomTrailing) { AvatarView(dataURL: avatar, name: nickname, size: 78); Image(systemName: "camera.fill").font(.caption).padding(7).liquidCard(Circle()) } }
                     .onChange(of: selectedPhoto) { _, item in Task { await loadAvatar(item) } }
                 VStack(spacing: 9) {
@@ -5669,7 +5651,7 @@ struct FriendsGlassView: View {
         ZStack { AcrylicBackground()
             VStack(spacing: 15) {
                 HStack {
-                    CinemaHeading(eyebrow: "Твоя компания", title: "Друзья")
+                    CinemaHeading(title: "Друзья")
                     Spacer()
                     if !session.friendRequests.incoming.isEmpty {
                         RequestHeaderButton(symbol: "tray.and.arrow.down.fill", count: session.friendRequests.incoming.count, active: requestFilter == .incoming) {
@@ -5683,7 +5665,6 @@ struct FriendsGlassView: View {
                     }
                     Button { withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { expanded.toggle() }; if expanded { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { searchFocused = true } } else { query = ""; searchFocused = false } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel(expanded ? "Закрыть поиск" : "Найти друзей")
                 }
-                Text("Найди своих. Включайте вместе.").font(.subheadline).foregroundStyle(CinemaPalette.muted).frame(maxWidth: .infinity, alignment: .leading)
                 if expanded {
                     HStack(spacing: 9) { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Username", text: $query).focused($searchFocused).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }
                         .padding(13).liquidCard(Capsule()).transition(.opacity.combined(with: .move(edge: .top)))
@@ -5728,13 +5709,16 @@ struct FriendsGlassView: View {
                                 )
                             }
                         }
-                        if friends.isEmpty && !expanded && requestFilter == nil { CinemaEmptyState(symbol: "person.2", title: "Кино лучше вместе", detail: "Нажми поиск и найди друга по username.") }
+                        if friends.isEmpty && !expanded && requestFilter == nil { CinemaEmptyState(symbol: "person.2", title: "Нет друзей", detail: "Найди пользователя по username.") }
                     }
                 }
-            }.padding(24).cinemaArrival()
+            }.padding(.horizontal, 16).padding(.top, 8).cinemaArrival()
         }
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .task {
+            #if DEBUG
+            if VisualFixtures.active { friends = VisualFixtures.friends; friendsPresenceSnapshotFresh = true; return }
+            #endif
             await session.refreshFriendRequests()
             while !Task.isCancelled {
                 await loadFriends()
@@ -5893,14 +5877,14 @@ private struct FriendSwipeRow: View {
             HStack(spacing: 11) {
                 HStack(spacing: 11) {
                     ZStack(alignment: .bottomTrailing) {
-                        AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48)
+                        AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 42)
                         if presenceIsOnline(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, visible: person.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 10, height: 10)
                                 .overlay(Circle().stroke(Color.black.opacity(0.55), lineWidth: 2))
                         }
                     }
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(person.nickname).bold().lineLimit(1)
+                        Text(person.nickname).font(.subheadline.weight(.semibold)).lineLimit(1)
                         Text("@\(person.username) · \(presenceText(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, lastSeenAgeSeconds: person.lastSeenAgeSeconds, ageAnchor: person.presenceSnapshotReceivedAt, visible: person.activityVisible, now: deviceEnvironment.currentTime))")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -5925,7 +5909,7 @@ private struct FriendSwipeRow: View {
                     .disabled(pending)
                 }
             }
-            .padding(.vertical, 16)
+            .padding(.vertical, 11)
             .padding(.horizontal, 4)
             .background(CinemaPalette.background)
             .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 0.5).padding(.leading, 64) }

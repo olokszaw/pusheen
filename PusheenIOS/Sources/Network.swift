@@ -44,6 +44,14 @@ final class SessionStore: ObservableObject {
     private let cachedViewingStatsKey = "pusheen.cached-viewing-stats"
 
     init() {
+        #if DEBUG
+        if VisualFixtures.active {
+            profile = VisualFixtures.profile
+            viewingStats = VisualFixtures.stats
+            authenticationState = .signedIn
+            return
+        }
+        #endif
         token = UserDefaults.standard.string(forKey: "pusheen.token")
         if let token {
             api.token = token

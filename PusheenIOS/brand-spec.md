@@ -1,79 +1,28 @@
-# Pusheen — Cinema editorial
+# Pusheen — Compact neutral UI
 
-Сдержанный интерфейс для совместного просмотра. Контент определяет композицию:
-обложки в комнатах, люди в друзьях, личная история в профиле. Без декоративных
-иллюстраций, свечений и градиентов под заголовками.
+The interface is an app, with concise functional labels and no promotional copy.
 
-## Визуальная система
+- Neutral dark background (#0C0D0F), surface (#17191C), elevated (#22252A).
+- Light neutral text (#EEF0F3), secondary (#989CA4), controls (#D5DAE2).
+- SF system typography, title3 headers (20 pt at standard Dynamic Type), subheadline content.
+- Page inset 16 pt; list spacing 10; controls retain 44 pt touch targets.
+- Rooms use 80 × 56 pt artwork in compact rows. No large poster tiles.
+- Profile uses a 64 pt avatar alongside the name. Other people's profiles use 72 pt avatars.
+- Forms have labeled 44 pt fields, a 44 pt mode switch, and a 44 pt submit button.
+- No serif headlines, hero sections, marketing slogans, decorative color gradients or coral accent.
+- Existing Liquid Glass navigation and its gestures remain byte-identical to the original source.
+- Spring feedback is short and low amplitude. Reduce Motion disables new effects.
 
-| Роль | Цвет |
-| --- | --- |
-| Фон | `#101011` |
-| Поверхность | `#1C1C1E` |
-| Приподнятая поверхность / отсутствующая обложка | `#27272A` |
-| Основной текст | `#F4EFE7` |
-| Вторичный текст | `#B0AEAB` |
-| Акцент | `#F07A60` |
+## Libraries
 
-Источник истины: `Sources/CinemaDesign.swift`. Численные RGB-токены в Swift
-имеют приоритет над округлёнными HEX-значениями в этой таблице.
+- NukeUI 12.8.0: cached image loading and a short fade.
+- Pow 0.3.1: one short error shake on the authentication form.
+- Exyte ActivityIndicatorView: loading state; existing Lottie handles animated stickers.
 
-- Заголовки: системный serif (New York), Dynamic Type largeTitle, semibold.
-- Текст и элементы управления: системный sans (SF Pro), native text styles.
-- Сетка: 4/8 pt; поля страницы 24, промежутки секций 24, внутренних элементов 8/16.
-- Радиусы: поля и основные кнопки 14, обложки 18, glass-контролы capsule/circle.
-- Минимальная высота новой кнопки: 44; основная кнопка: 52.
-- Opaque surfaces для контента; Liquid Glass для навигации и отдельных контролов.
+## Validation
 
-`PusheenTabs` сохранён дословно, включая native TabView, жесты вкладки профиля,
-быстрый доступ к настройкам и текущую окраску навигации.
-
-## Композиция
-
-- Комнаты: крупный заголовок, видимые действия «Создать» / «По коду», обложки 184 pt,
-  название и код отдельной строкой. Отсутствующая обложка — нейтральный кадр.
-- Вход: название приложения, левое выравнивание, переключение режима, подписанные поля.
-- Друзья: список с разделителями, аватарами, реальным presence и сохранёнными свайпами.
-- Профиль: аватар, имя, личный архив; подписанные переключатели статистики.
-- Жанры: спокойные полосы с процентами и раскрытием времени просмотра.
-- Активность: прежние серверные данные и календарная логика, единый цветовой акцент.
-- Чат, модальные окна и профиль другого пользователя: общие поверхности и цвета.
-
-## Motion
-
-| Действие | Spring response | Damping |
-| --- | --- | --- |
-| Первое появление контента | 0.46 | 0.86 |
-| Нажатие основной кнопки | 0.28 | 0.72 |
-| Фокус поля | 0.32 | 0.72 |
-| Смена режима авторизации / поля | 0.42 | 0.82 |
-| Смена статистики | 0.38 | 0.82 |
-| Раскрытие жанра | 0.36 | 0.80 |
-
-Нажатие меняет только transform/opacity, без перемещения соседних элементов.
-Фокус поля увеличивает его на 1.2%; кнопка сжимается на 2%. Постоянных фоновых
-анимаций нет. Reduce Motion отключает новые пружины; outer transaction охватывает
-также существующие переходы приложения. Загрузка в этом режиме показывает hourglass.
-
-## Изображения и зависимости
-
-- [Nuke 12.8.0](https://github.com/kean/Nuke/tree/12.8.0): NukeUI LazyImage,
-  fade 0.22 s, общий pipeline, дисковый LRU-кэш с лимитом 64 MiB.
-- [Exyte ActivityIndicatorView](https://github.com/exyte/ActivityIndicatorView/tree/41f89372c018decaf965e8dddeb6e5347741beb4):
-  equalizer при загрузке; зависимость закреплена по commit SHA.
-- [Lottie 4.5.2](https://github.com/airbnb/lottie-ios/tree/4.5.2): существующие анимированные стикеры.
-
-Используются настоящие thumbnails комнат, каталога и пользовательские аватары.
-Новые растровые декоративные материалы не добавлены. У новых зависимостей MIT license.
-
-## Проверка
-
-Локально на Windows проверены syntax trees Swift, YAML и закреплённые версии,
-дословное сохранение блока навигации, неизменность 26 существующих async/transport
-методов и `git diff --check`. Контраст новых токенов на фоне и поверхности:
-основной текст >=14.85:1, вторичный >=7.68:1, акцент >=6.19:1.
-
-Эти проверки не подтверждают компиляцию SwiftUI или качество нативного рендера.
-iOS build, simulator screenshots, small phone/landscape/Dynamic Type и полный
-визуальный review остаются до запуска macOS workflow. `CinemaPreviews.swift`
-содержит реальные компоненты с локальными данными, без запросов к backend.
+The native simulator workflow tests authentication, registration, native tab switching,
+and profile sections. It exports actual XCTest screenshot attachments. Signed-in screenshots
+use DEBUG-only local fixtures; Release IPA excludes the fixture file and launch flags.
+The existing IPA workflow runs backend and Swift policy regressions before compiling Release.
+Simulator screenshots and compilation must be checked before delivery of build 34.
