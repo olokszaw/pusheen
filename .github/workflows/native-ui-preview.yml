@@ -1,0 +1,65 @@
+name: Native UI preview
+
+on:
+  push:
+    branches: [codex/cinema-redesign]
+    paths:
+      - PusheenIOS/**
+      - .github/workflows/native-ui-preview.yml
+  workflow_dispatch:
+
+jobs:
+  preview:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build simulator app
+        working-directory: PusheenIOS
+        run: |
+          xcodegen generate
+          set -o pipefail
+          xcodebuild -project Pusheen.xcodeproj -scheme Pusheen \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            PUSHEEN_API_BASE_URL=https://pulse.izanagi.online \
+            SYMROOT=$PWD/simulator-build build 2>&1 | tee simulator-build.log
+      - name: Render native authentication screen
+        working-directory: PusheenIOS
+        run: |
+          device=$(xcrun simctl list devices available --json | python3 -c '
+          import json,sys
+          devices=json.load(sys.stdin)["devices"]
+          iphones=[d for runtime, items in devices.items() if "iOS" in runtime for d in items if d["name"].startswith("iPhone") and d.get("isAvailable")]
+          if not iphones: raise SystemExit("No available iPhone simulator")
+          print(iphones[0]["udid"])
+          ')
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl ui "$device" appearance dark
+          xcrun simctl install "$device" simulator-build/Debug-iphonesimulator/Pusheen.app
+          xcrun simctl launch "$device" online.izanagi.pusheen
+          mkdir -p native-ui-preview
+          sleep 5
+          xcrun simctl io "$device" screenshot native-ui-preview/auth.png
+          xcrun simctl ui "$device" content_size accessibility-extra-extra-extra-large
+          sleep 3
+          xcrun simctl io "$device" screenshot native-ui-preview/auth-large-text.png
+      - name: Upload native screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ui-preview
+          path: PusheenIOS/native-ui-preview/*.png
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload simulator build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-build-log
+          path: PusheenIOS/simulator-build.log
+          if-no-files-found: warn
+          retention-days: 3
