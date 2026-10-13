@@ -39,6 +39,7 @@ jobs:
             SYMROOT=$PWD/simulator-build \
             -only-testing:PusheenUITests/CompactScreenshots/testNativeTabsAndProfileSections \
             -only-testing:PusheenUITests/CompactScreenshots/testLargeTextAndReducedMotion \
+            -only-testing:PusheenUITests/CompactScreenshots/testRoomCreationAndPlaybackLayout \
             test 2>&1 | tee simulator-build.log
       - name: Export native screen attachments
         if: always()

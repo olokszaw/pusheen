@@ -680,73 +680,190 @@ struct CreateRoomSheet: View {
     // Stable across a transport retry for this sheet, different for the next
     // user-initiated creation flow.
     @State private var creationRequestID = UUID()
-    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 16) {
-        HStack { CinemaHeading(title: "Новая комната"); Spacer(); StudioIconButton(symbol: "xmark", label: "Закрыть создание комнаты") { dismiss() } }
-        StudioSection(title: "Источник видео")
-        Text("Ссылка или видео с устройства").font(.subheadline).foregroundStyle(.secondary)
-        StudioField(title: "Ссылка на видео", text: $url)
-            .onChange(of: url) { _, value in
-                if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, movieURL != nil {
-                    selectedMovie = nil
-                    cleanupSelectedMovie()
-                }
-            }
-        Button {
-            showsMoviePicker = true
-        } label: {
-            HStack { Image(systemName: "video.badge.plus"); Text(movieURL == nil ? "Выбрать видео из галереи" : movieURL!.lastPathComponent); Spacer(); if movieURL != nil { Image(systemName: "checkmark.circle.fill").foregroundStyle(.mint) } }
-                .lineLimit(1).padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
+    private enum VideoSource: String, CaseIterable, Identifiable {
+        case link = "Ссылка", gallery = "Галерея", files = "Файлы"
+        var id: String { rawValue }
+        var symbol: String { switch self { case .link: "link"; case .gallery: "photo.on.rectangle"; case .files: "folder" } }
+    }
+    @State private var source: VideoSource = .link
+    @State private var previewImage: UIImage?
+    @State private var previewLoading = false
+    @FocusState private var linkFocused: Bool
+    @Namespace private var sourceSelection
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var motion: Animation? { systemReduceMotion || StudioMotion.previewReduced ? nil : .spring(duration: 0.35, bounce: 0.18) }
+    private var ready: Bool { movieURL != nil || (source == .link && !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+
+    var body: some View {
+        ZStack {
+            AcrylicBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    HStack {
+                        CinemaHeading(title: "Новая комната")
+                        Spacer()
+                        StudioIconButton(symbol: "xmark", label: "Закрыть создание комнаты") { dismiss() }.disabled(loading)
+                    }
+                    sourcePicker
+                    sourceContent
+                        .id(source).transition(.opacity.combined(with: .offset(y: systemReduceMotion ? 0 : 8)))
+                    accessPicker
+                    if !movieError.isEmpty { Label(movieError, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(StudioPalette.danger) }
+                    if !error.isEmpty { Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(StudioPalette.danger) }
+                }.padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 24)
+            }.scrollDismissesKeyboard(.interactively)
         }
-        .buttonStyle(ImmediateGalleryButtonStyle())
+        .safeAreaInset(edge: .bottom, spacing: 0) { creationFooter }
+        .presentationDetents([.large]).presentationDragIndicator(.visible)
+        .presentationBackground(CinemaPalette.background).interactiveDismissDisabled(loading)
         .photosPicker(isPresented: $showsMoviePicker, selection: $selectedMovie, matching: .videos, preferredItemEncoding: .current)
         .onChange(of: selectedMovie) { _, item in
             guard !loading, let item else { return }
             let generation = beginMovieImport()
             movieImportTask = Task { await loadMovie(item, generation: generation) }
         }
-        Button { showsFilePicker = true } label: {
-            HStack { Image(systemName: "folder"); Text("Выбрать видео из файлов"); Spacer() }
-                .padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
-        }
-        .buttonStyle(ImmediateGalleryButtonStyle())
         .fileImporter(isPresented: $showsFilePicker, allowedContentTypes: [.movie], allowsMultipleSelection: false) { result in
             do {
-                guard let source = try result.get().first else { return }
+                guard let chosen = try result.get().first else { return }
                 let generation = beginMovieImport()
-                movieImportTask = Task { await loadFileMovie(source, generation: generation) }
-            } catch { movieError = "Не удалось получить видео: \(error.localizedDescription)" }
+                movieImportTask = Task { await loadFileMovie(chosen, generation: generation) }
+            } catch { movieError = "Не удалось открыть видео" }
         }
-        StudioSection(title: "Доступ")
-        Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
-        if importingMovie { ProgressView("Подготовка выбранного видео…") }
-        if loading {
-            if let uploadProgress {
-                ProgressView(value: uploadProgress)
-                Text(uploadProgress < 1 ? "Отправлено \(Int(uploadProgress * 100))%" : "Видео отправлено. Сервер сохраняет файл…")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else { ProgressView("Подготовка загрузки…") }
-        }
-        if !movieError.isEmpty { Text(movieError).font(.caption).foregroundStyle(.red) }
-        if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
-        Button {
-            // Close the same-run-loop double-tap window before async work is
-            // scheduled. The backend key remains the second safety layer.
-            guard !loading else { return }
-            loading = true
-            Task { await create() }
-        } label: { Label(loading ? "Отправка видео…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(CinemaPrimaryButtonStyle()).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading || importingMovie)
-    }.padding(16) } }
-        .disabled(loading || importingMovie)
-        .presentationDetents([.large])
-        .presentationBackground(CinemaPalette.background)
-        .interactiveDismissDisabled(loading)
+        .task(id: movieURL) { await loadPreview() }
         .onDisappear {
-            importGeneration = UUID()
-            movieImportTask?.cancel()
-            importingMovie = false
+            importGeneration = UUID(); movieImportTask?.cancel(); importingMovie = false
             cleanupSelectedMovie()
         }
     }
+
+    private var sourcePicker: some View {
+        HStack(spacing: 0) {
+            ForEach(VideoSource.allCases) { option in
+                Button {
+                    guard !loading, !importingMovie else { return }
+                    withAnimation(motion) { source = option }
+                    if option == .link { selectedMovie = nil; cleanupSelectedMovie() }
+                } label: {
+                    VStack(spacing: 12) {
+                        Image(systemName: option.symbol).font(.system(size: 20, weight: .regular))
+                        Text(option.rawValue).font(.caption.weight(.semibold)).lineLimit(1)
+                        ZStack {
+                            Rectangle().fill(CinemaPalette.line).frame(height: 1)
+                            if source == option { Capsule().fill(CinemaPalette.ink).frame(height: 2).matchedGeometryEffect(id: "source", in: sourceSelection) }
+                        }
+                    }.foregroundStyle(source == option ? CinemaPalette.ink : CinemaPalette.muted)
+                        .frame(maxWidth: .infinity).padding(.top, 14).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityIdentifier("video-source-\(option == .link ? "link" : option == .gallery ? "gallery" : "files")")
+                    .accessibilityAddTraits(source == option ? .isSelected : [])
+            }
+        }.accessibilityIdentifier("video-source-picker")
+    }
+
+    @ViewBuilder private var sourceContent: some View {
+        if source == .link {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Ссылка на видео").font(.subheadline.weight(.semibold))
+                TextField("https://", text: $url)
+                    .font(.system(.body, design: .monospaced))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    .focused($linkFocused).submitLabel(.done).onSubmit { linkFocused = false }
+                    .accessibilityIdentifier("room-link-input").padding(.vertical, 14)
+                    .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.ink.opacity(0.3)).frame(height: 1) }
+                HStack {
+                    if let host = URL(string: url)?.host { Text(host).font(.caption).foregroundStyle(StudioPalette.data) }
+                    Spacer()
+                    PasteButton(payloadType: String.self) { values in if let value = values.first { url = value } }
+                        .buttonStyle(.borderless).labelStyle(.titleAndIcon).tint(CinemaPalette.ink)
+                        .accessibilityLabel("Вставить ссылку")
+                }
+            }.padding(.vertical, 14)
+        } else {
+            VStack(spacing: 18) {
+                if let previewImage {
+                    Image(uiImage: previewImage).resizable().scaledToFill().frame(height: 172).clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 12)).accessibilityLabel("Превью выбранного видео")
+                } else {
+                    VStack(spacing: 14) {
+                        Image(systemName: "play.rectangle").font(.system(size: 36, weight: .ultraLight)).foregroundStyle(CinemaPalette.muted)
+                        if importingMovie || previewLoading { CinemaLoadingIndicator() }
+                        else { Text(movieURL == nil ? "Видео не выбрано" : "Видео выбрано").font(.subheadline).foregroundStyle(CinemaPalette.muted) }
+                    }.frame(maxWidth: .infinity).frame(minHeight: 150)
+                }
+                if let movieURL { Text(movieURL.lastPathComponent).font(.caption).foregroundStyle(CinemaPalette.muted).lineLimit(1) }
+                Button {
+                    guard !loading, !importingMovie else { return }
+                    if source == .gallery { showsMoviePicker = true } else { showsFilePicker = true }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(movieURL == nil ? "Выбрать видео" : "Заменить видео")
+                        Image(systemName: movieURL == nil ? "plus" : "arrow.triangle.2.circlepath")
+                    }.font(.subheadline.weight(.semibold)).frame(minHeight: 44).padding(.horizontal, 20)
+                        .background(CinemaPalette.elevated, in: Capsule())
+                }.buttonStyle(AlivePressButtonStyle()).accessibilityIdentifier("choose-local-video")
+            }.frame(maxWidth: .infinity)
+        }
+    }
+
+    private var accessPicker: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Кто может присоединиться").font(.caption).foregroundStyle(CinemaPalette.muted)
+            HStack(spacing: 24) {
+                accessOption("Все", symbol: "globe", privateRoom: false)
+                accessOption("По коду", symbol: "lock", privateRoom: true)
+                Spacer(minLength: 0)
+            }
+        }.padding(.top, 8)
+    }
+
+    private func accessOption(_ title: String, symbol: String, privateRoom: Bool) -> some View {
+        Button {
+            guard !loading else { return }
+            withAnimation(motion) { isPrivate = privateRoom }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isPrivate == privateRoom ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isPrivate == privateRoom ? StudioPalette.data : CinemaPalette.muted)
+                Text(title)
+                Image(systemName: symbol).font(.caption).foregroundStyle(CinemaPalette.muted)
+            }.font(.subheadline).frame(minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityIdentifier(privateRoom ? "room-access-private" : "room-access-open")
+            .accessibilityLabel(title).accessibilityAddTraits(isPrivate == privateRoom ? .isSelected : [])
+    }
+
+    private var creationFooter: some View {
+        VStack(spacing: 12) {
+            if loading {
+                if let uploadProgress {
+                    ProgressView(value: uploadProgress).tint(StudioPalette.data)
+                    Text("\(Int(uploadProgress * 100))% загружено").font(.caption).foregroundStyle(CinemaPalette.muted)
+                } else { CinemaLoadingIndicator() }
+            }
+            Button {
+                guard ready, !loading, !importingMovie else { return }
+                loading = true
+                Task { await create() }
+            } label: {
+                HStack { Text(loading ? "Создание…" : "Создать комнату"); Spacer(); Image(systemName: "arrow.right") }
+            }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(!ready || loading || importingMovie)
+                .accessibilityIdentifier("create-room-submit")
+        }.padding(.horizontal, 24).padding(.vertical, 18).background(CinemaPalette.background)
+    }
+
+    private func loadPreview() async {
+        previewImage = nil
+        guard let chosen = movieURL else { previewLoading = false; return }
+        previewLoading = true
+        defer { if movieURL == chosen { previewLoading = false } }
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: chosen))
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 800, height: 450)
+        do {
+            let (image, _) = try await generator.image(at: .zero)
+            guard !Task.isCancelled, movieURL == chosen else { return }
+            previewImage = UIImage(cgImage: image)
+        } catch { }
+    }
+
     private func beginMovieImport() -> UUID {
         movieImportTask?.cancel()
         movieError = ""
@@ -4472,6 +4589,7 @@ struct LegacyFriendsGlassView: View {
 
 struct ProfileGlassView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var edit = false
     @State private var showLogoutConfirmation = false
     @State private var avatarPicker: PhotosPickerItem?
@@ -4504,9 +4622,10 @@ struct ProfileGlassView: View {
                         }
                         Spacer(minLength: 0)
                     }.padding(.vertical, 4)
-                    HStack(alignment: .top, spacing: 16) {
-                        profileMetric(value: compactDuration(session.viewingStats?.watchedSeconds ?? 0), label: "Просмотрено", symbol: "play.rectangle")
-                        profileMetric(value: "\(friends.count)", label: "Друзья", symbol: "person.2")
+                    if typeSize.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 12) { profileMetrics }
+                    } else {
+                        HStack(alignment: .top, spacing: 16) { profileMetrics }
                     }
                     ViewingInsightsPager(stats: session.viewingStats, friends: friends)
                     VStack(spacing: 0) {
@@ -4533,6 +4652,10 @@ struct ProfileGlassView: View {
             }
         }
     }
+    @ViewBuilder private var profileMetrics: some View {
+        profileMetric(value: compactDuration(session.viewingStats?.watchedSeconds ?? 0), label: "Просмотрено", symbol: "play.rectangle")
+        profileMetric(value: "\(friends.count)", label: "Друзья", symbol: "person.2")
+    }
     private func profileMetric(value: String, label: String, symbol: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack { Image(systemName: symbol); Text(label) }.font(.caption).foregroundStyle(CinemaPalette.muted)
@@ -4558,6 +4681,7 @@ struct ProfileGlassView: View {
 private struct ViewingInsightsPager: View {
     let stats: ViewingStats?
     let friends: [FriendProfile]
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var page = 0
     @Namespace private var selection
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
@@ -4565,9 +4689,7 @@ private struct ViewingInsightsPager: View {
     @ScaledMetric(relativeTo: .body) private var genreHeight: CGFloat = 256
     private let titles = ["Жанры", "Активность", "Вместе"]
     private var motion: Animation? { reduceMotion ? nil : .spring(duration: 0.36, bounce: 0.16) }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 0) {
+    @ViewBuilder private var sectionButtons: some View {
                 ForEach(titles.indices, id: \.self) { index in
                     Button { withAnimation(motion) { page = index } } label: {
                         VStack(spacing: 12) {
@@ -4584,6 +4706,13 @@ private struct ViewingInsightsPager: View {
                     }.buttonStyle(.plain).accessibilityIdentifier("stats-\(index)")
                         .accessibilityAddTraits(page == index ? .isSelected : [])
                 }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if typeSize.isAccessibilitySize {
+                VStack(spacing: 4) { sectionButtons }
+            } else {
+                HStack(spacing: 0) { sectionButtons }
             }
             Group {
                 switch page {
@@ -4614,39 +4743,48 @@ private struct TelegramStickerSettingsSheet: View {
     var body: some View {
         ZStack {
             AcrylicBackground()
-            VStack(alignment: .leading, spacing: 15) {
-                HStack { Text("Настройки").font(CinemaPalette.display); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(.plain) }
-                Label("Импортировать стикеры из Telegram", systemImage: "paperplane.fill").font(.headline)
-                ZStack(alignment: .leading) {
-                    if link.isEmpty {
-                        Text("https://t.me/addstickers/...")
-                            .foregroundStyle(Color(uiColor: .placeholderText))
-                            .allowsHitTesting(false)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    HStack {
+                        CinemaHeading(title: "Стикеры")
+                        Spacer()
+                        StudioIconButton(symbol: "xmark", label: "Закрыть стикеры") { dismiss() }
                     }
-                    TextField("", text: $link)
-                        .foregroundStyle(.primary)
-                        .tint(Color(white: 0.62))
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-                .padding(12)
-                .cinemaSurface(RoundedRectangle(cornerRadius: 16))
-                Button { Task { await importPack() } } label: {
-                    HStack { if loading { ProgressView().controlSize(.small) }; Text("Импортировать"); Spacer(); Image(systemName: "square.and.arrow.down") }
-                        .frame(height: 44).padding(.horizontal, 13).cinemaSurface(RoundedRectangle(cornerRadius: 17))
-                }.buttonStyle(.plain).disabled(loading || link.isEmpty)
-                if !statusText.isEmpty { Text(statusText).font(.caption).foregroundStyle(statusText.hasPrefix("Готово") ? .mint : .red) }
-                Spacer()
-            }.padding(20)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Набор из Telegram").font(.subheadline.weight(.semibold))
+                        TextField("t.me/addstickers/…", text: $link)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                            .font(.system(.body, design: .monospaced)).padding(.vertical, 14)
+                            .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.ink.opacity(0.3)).frame(height: 1) }
+                        HStack {
+                            Spacer()
+                            PasteButton(payloadType: String.self) { values in if let value = values.first { link = value } }
+                                .buttonStyle(.borderless).tint(CinemaPalette.ink).accessibilityLabel("Вставить ссылку на стикеры")
+                        }
+                    }
+                    if !statusText.isEmpty {
+                        Label(statusText, systemImage: statusText.hasPrefix("Готово") ? "checkmark.circle" : "exclamationmark.circle")
+                            .font(.caption).foregroundStyle(statusText.hasPrefix("Готово") ? StudioPalette.data : StudioPalette.danger)
+                    }
+                }.padding(24)
+            }.scrollDismissesKeyboard(.interactively)
         }
-        .presentationDetents([.medium, .large]).presentationDragIndicator(.visible).presentationBackground(.clear)
+        .safeAreaInset(edge: .bottom) {
+            Button { Task { await importPack() } } label: {
+                HStack { Text(loading ? "Импорт…" : "Импортировать"); Spacer(); Image(systemName: "arrow.down") }
+            }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(loading || link.isEmpty)
+                .padding(.horizontal, 24).padding(.vertical, 16).background(CinemaPalette.background)
+        }
+        .presentationDetents([.medium, .large]).presentationDragIndicator(.visible).presentationBackground(CinemaPalette.background)
     }
     private func importPack() async {
+        guard !loading else { return }
         loading = true; defer { loading = false }
         do { let pack = try await session.api.importStickerPack(url: link.trimmingCharacters(in: .whitespacesAndNewlines)); statusText = "Готово: \(pack.title)" }
         catch { statusText = error.localizedDescription }
     }
 }
+
 
 private struct GenreOnlyCard: View {
     let stats: ViewingStats?
@@ -4662,6 +4800,7 @@ private struct GenreOnlyCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 GenrePreferenceOrb(genres: genres, selectedGenreID: $selectedGenreID)
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                     .frame(width: hasSingleGenre ? 100 : 146, height: hasSingleGenre ? 100 : 146)
                     .frame(maxWidth: .infinity)
                 GenreLegend(genres: genres, selectedGenreID: $selectedGenreID)
@@ -5558,9 +5697,42 @@ struct JoinRoomSheet: View {
     @State private var code = ""
     @State private var error = ""
     @State private var loading = false
-    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 24) { HStack { CinemaHeading(title: "По приглашению"); Spacer(); StudioIconButton(symbol: "xmark", label: "Закрыть ввод кода") { dismiss() } }; StudioField(title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button(loading ? "Подключение…" : "Присоединиться") { Task { await join() } }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading) }.padding(24) } }.presentationDetents([.medium, .large]).presentationBackground(CinemaPalette.background).interactiveDismissDisabled(loading) }
+    var body: some View {
+        ZStack {
+            AcrylicBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 32) {
+                    HStack {
+                        CinemaHeading(title: "Войти по коду")
+                        Spacer()
+                        StudioIconButton(symbol: "xmark", label: "Закрыть ввод кода") { dismiss() }
+                    }
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Код комнаты").font(.caption).foregroundStyle(CinemaPalette.muted)
+                        HStack(spacing: 12) {
+                            TextField("ABCDE", text: $code).font(.system(.title2, design: .monospaced))
+                                .textInputAutocapitalization(.characters).autocorrectionDisabled().submitLabel(.join)
+                                .onSubmit { Task { await join() } }.accessibilityLabel("Код комнаты")
+                            PasteButton(payloadType: String.self) { values in if let value = values.first { code = value } }
+                                .labelStyle(.iconOnly).buttonStyle(.borderless).tint(CinemaPalette.ink).accessibilityLabel("Вставить код")
+                        }.frame(minHeight: 52).padding(.bottom, 12)
+                            .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.ink.opacity(0.3)).frame(height: 1) }
+                    }
+                    if !error.isEmpty { Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(StudioPalette.danger) }
+                }.padding(24)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            Button { Task { await join() } } label: {
+                HStack { Text(loading ? "Подключение…" : "Присоединиться"); Spacer(); Image(systemName: "arrow.right") }
+            }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading)
+                .padding(.horizontal, 24).padding(.vertical, 16).background(CinemaPalette.background)
+        }
+        .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+        .presentationBackground(CinemaPalette.background).interactiveDismissDisabled(loading)
+    }
     private func join() async {
-        guard !loading else { return }
+        guard !loading, !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         loading = true; error = ""; defer { loading = false }
         do {
             let room = try await session.api.joinRoom(code: code.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -5568,6 +5740,7 @@ struct JoinRoomSheet: View {
         } catch { self.error = error.localizedDescription }
     }
 }
+
 
 struct LegacyProfileEditSheet: View {
     @EnvironmentObject private var session: SessionStore
@@ -5586,24 +5759,84 @@ struct ProfileEditSheet: View {
     @State private var available: Bool?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var error = ""
+    @State private var saving = false
     var body: some View {
-        ZStack { AcrylicBackground()
-            ScrollView { VStack(alignment: .leading, spacing: 24) {
-                HStack { CinemaHeading(title: "Редактировать профиль"); Spacer(); StudioIconButton(symbol: "xmark", label: "Закрыть редактор") { dismiss() } }
-                PhotosPicker(selection: $selectedPhoto, matching: .images) { ZStack(alignment: .bottomTrailing) { AvatarView(dataURL: avatar, name: nickname, size: 78); Image(systemName: "camera.fill").font(.caption).padding(7).liquidCard(Circle()) } }
-                    .onChange(of: selectedPhoto) { _, item in Task { await loadAvatar(item) } }
-                VStack(spacing: 9) {
-                    StudioField(title: "Имя", text: $nickname)
-                    VStack(spacing: 5) { StudioField(title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; HStack { Text("@\(username)").font(.caption).foregroundStyle(.secondary); Spacer(); if !username.isEmpty { Text(available == true ? "Свободен" : "Занят").font(.caption2.weight(.semibold)).foregroundStyle(available == true ? .green : .orange) } } }
-                }
-                if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
-                Button("Сохранить") { Task { await save() } }.buttonStyle(CinemaPrimaryButtonStyle()).accessibilityIdentifier("save-profile")
-            }.padding(24) }
-        }.presentationDetents([.medium, .large]).presentationBackground(CinemaPalette.background).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? ""; avatar = session.profile?.avatarDataUrl ?? "" }
+        ZStack {
+            AcrylicBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 32) {
+                    HStack {
+                        CinemaHeading(title: "Редактировать профиль")
+                        Spacer()
+                        StudioIconButton(symbol: "xmark", label: "Закрыть редактор") { dismiss() }
+                    }
+                    HStack(spacing: 16) {
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            AvatarView(dataURL: avatar, name: nickname, size: 56, showsBorder: false)
+                        }.accessibilityLabel("Изменить фото")
+                            .onChange(of: selectedPhoto) { _, item in Task { await loadAvatar(item) } }
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(nickname.isEmpty ? "Имя" : nickname).font(.headline)
+                            Text("@\(username)").font(.caption).foregroundStyle(CinemaPalette.muted)
+                        }
+                        Spacer()
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            Image(systemName: "camera").font(.body).frame(width: 44, height: 44)
+                        }.accessibilityLabel("Выбрать фотографию")
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Имя").font(.caption).foregroundStyle(CinemaPalette.muted)
+                        TextField("Имя", text: $nickname).font(.body).textContentType(.nickname)
+                            .padding(.vertical, 12).overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 1) }
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Username").font(.caption).foregroundStyle(CinemaPalette.muted)
+                        HStack(spacing: 5) {
+                            Text("@").foregroundStyle(CinemaPalette.muted)
+                            TextField("username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .textContentType(.username).onChange(of: username) { _, value in Task { await checkUsername(value) } }
+                        }.font(.body).padding(.vertical, 12)
+                            .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 1) }
+                        if !username.isEmpty && username != session.profile?.username {
+                            Text(available == nil ? "Проверяем…" : available == true ? "Свободен" : "Занят")
+                                .font(.caption).foregroundStyle(available == true ? StudioPalette.data : CinemaPalette.muted)
+                        }
+                    }
+                    if !error.isEmpty { Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(StudioPalette.danger) }
+                }.padding(24)
+            }.scrollDismissesKeyboard(.interactively)
+        }
+        .safeAreaInset(edge: .bottom) {
+            Button { Task { await save() } } label: {
+                HStack { Text(saving ? "Сохранение…" : "Сохранить"); Spacer(); Image(systemName: "checkmark") }
+            }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(saving).accessibilityIdentifier("save-profile")
+                .padding(.horizontal, 24).padding(.vertical, 16).background(CinemaPalette.background)
+        }
+        .presentationDetents([.large]).presentationDragIndicator(.visible).presentationBackground(CinemaPalette.background)
+        .interactiveDismissDisabled(saving)
+        .onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? ""; avatar = session.profile?.avatarDataUrl ?? "" }
     }
-    private func loadAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; avatar = "data:image/jpeg;base64," + data.base64EncodedString() }
-    private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username, avatar: avatar); dismiss() } catch { self.error = error.localizedDescription } }
+    private func checkUsername(_ value: String) async {
+        available = nil
+        guard !value.isEmpty, value != session.profile?.username else { return }
+        try? await Task.sleep(for: .milliseconds(250))
+        guard username == value else { return }
+        let result = try? await session.api.usernameAvailable(value)
+        guard username == value else { return }
+        available = result
+    }
+    private func loadAvatar(_ item: PhotosPickerItem?) async {
+        guard let item, let data = try? await item.loadTransferable(type: Data.self), selectedPhoto == item else { return }
+        avatar = "data:image/jpeg;base64," + data.base64EncodedString()
+    }
+    private func save() async {
+        guard !saving else { return }
+        saving = true; error = ""; defer { saving = false }
+        do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username, avatar: avatar); dismiss() }
+        catch { self.error = error.localizedDescription }
+    }
 }
+
 
 struct ProfileInlineEditor: View {
     @EnvironmentObject private var session: SessionStore
