@@ -704,10 +704,11 @@ struct CreateRoomSheet: View {
                         Spacer()
                         StudioIconButton(symbol: "xmark", label: "Закрыть создание комнаты") { dismiss() }.disabled(loading)
                     }
-                    sourcePicker
+                    sourcePicker.disabled(loading || importingMovie)
                     sourceContent
+                        .disabled(loading || importingMovie)
                         .id(source).transition(.opacity.combined(with: .offset(y: systemReduceMotion ? 0 : 8)))
-                    accessPicker
+                    accessPicker.disabled(loading)
                     if !movieError.isEmpty { Label(movieError, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(StudioPalette.danger) }
                     if !error.isEmpty { Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(StudioPalette.danger) }
                 }.padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 24)
@@ -756,7 +757,7 @@ struct CreateRoomSheet: View {
                 }.buttonStyle(.plain).accessibilityIdentifier("video-source-\(option == .link ? "link" : option == .gallery ? "gallery" : "files")")
                     .accessibilityAddTraits(source == option ? .isSelected : [])
             }
-        }.accessibilityIdentifier("video-source-picker")
+        }
     }
 
     @ViewBuilder private var sourceContent: some View {
@@ -773,7 +774,7 @@ struct CreateRoomSheet: View {
                     if let host = URL(string: url)?.host { Text(host).font(.caption).foregroundStyle(StudioPalette.data) }
                     Spacer()
                     PasteButton(payloadType: String.self) { values in if let value = values.first { url = value } }
-                        .buttonStyle(.borderless).labelStyle(.titleAndIcon).tint(CinemaPalette.ink)
+                        .buttonStyle(.borderless).labelStyle(.iconOnly).tint(CinemaPalette.ink)
                         .accessibilityLabel("Вставить ссылку")
                 }
             }.padding(.vertical, 14)
