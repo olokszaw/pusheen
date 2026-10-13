@@ -1,5 +1,5 @@
 import SwiftUI
-import Nuke
+import Kingfisher
 
 @main
 struct PusheenApp: App {
@@ -8,11 +8,8 @@ struct PusheenApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        var artworkConfiguration = ImagePipeline.Configuration()
-        let artworkCache = try? DataCache(name: "online.izanagi.pusheen.artwork")
-        artworkCache?.sizeLimit = 64 * 1024 * 1024
-        artworkConfiguration.dataCache = artworkCache
-        ImagePipeline.shared = ImagePipeline(configuration: artworkConfiguration)
+        ImageCache.default.memoryStorage.config.totalCostLimit = 64 * 1024 * 1024
+        ImageCache.default.diskStorage.config.sizeLimit = 128 * 1024 * 1024
         // Start filling the memory/disk Fluent cache during the splash/auth
         // flow instead of waiting until the first emoji is already on screen.
         FluentEmojiCache.shared.warmCommonEmoji()
@@ -21,6 +18,16 @@ struct PusheenApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .transformEnvironment(\.accessibilityReduceMotion) { value in
+                    #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("--ui-fixtures-reduce-motion") { value = true }
+                    #endif
+                }
+                .transformEnvironment(\.dynamicTypeSize) { value in
+                    #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("--ui-fixtures-large-text") { value = .accessibility3 }
+                    #endif
+                }
                 .environmentObject(session)
                 .environmentObject(deviceEnvironment)
                 .tint(CinemaPalette.accent)

@@ -8,7 +8,8 @@ import CoreTransferable
 import UniformTypeIdentifiers
 import WebKit
 import Lottie
-import Pow
+import PopupView
+import HeatmapKit
 
 private struct ImportedRoomMovie: Transferable {
     let url: URL
@@ -38,24 +39,16 @@ struct RootView: View {
             .preferredColorScheme(.dark)
             .foregroundStyle(CinemaPalette.ink)
             .tint(CinemaPalette.accent)
-            .overlay(alignment: .top) {
-                if let status = session.roomInvitationStatusNotice {
-                    RoomInvitationStatusToast(text: status)
-                        .padding(.horizontal, 18).padding(.top, 12)
-                        .transition(.move(edge: .top).combined(with: .opacity)).zIndex(24)
-                } else if let invitation = session.roomInvitationNotice {
-                    RoomInvitationToast(invitation: invitation)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 10)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(22)
-                } else if let request = session.friendRequestNotice {
-                    FriendRequestToast(request: request)
-                        .padding(.horizontal, 18)
-                        .padding(.top, 12)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(20)
+            .popup(isPresented: Binding(get: { session.roomInvitationStatusNotice != nil || session.roomInvitationNotice != nil || session.friendRequestNotice != nil }, set: { _ in })) {
+                Group {
+                    if let status = session.roomInvitationStatusNotice { RoomInvitationStatusToast(text: status) }
+                    else if let invitation = session.roomInvitationNotice { RoomInvitationToast(invitation: invitation) }
+                    else if let request = session.friendRequestNotice { FriendRequestToast(request: request) }
                 }
+            } customize: {
+                $0.type(.floater(verticalPadding: 12, horizontalPadding: 20, useSafeAreaInset: true))
+                    .position(.top).displayMode(.overlay).closeOnTap(false).dragToDismiss(false)
+                    .animation(reduceMotion ? .linear(duration: 0) : .spring(duration: 0.4, bounce: 0.18))
             }
             .fullScreenCover(item: $session.acceptedInvitedRoom) { room in
                 RoomView(room: room, api: session.api, token: session.token ?? "")
@@ -235,6 +228,9 @@ struct HomeView: View {
     private static let roomsCacheKey = "pusheen.cached-rooms"
     @EnvironmentObject private var session: SessionStore
     @State private var rooms: [Room] = []
+    @State private var roomQuery = ""
+    @State private var ownedOnly = false
+    private var visibleRooms: [Room] { rooms.filter { (!ownedOnly || $0.owner == session.profile?.userId) && (roomQuery.isEmpty || $0.title.localizedCaseInsensitiveContains(roomQuery)) } }
     @State private var path = NavigationPath()
     @State private var showCreate = false
     @State private var showJoin = false
@@ -249,23 +245,29 @@ struct HomeView: View {
         NavigationStack(path: $path) {
             ZStack {
                 ZStack { AcrylicBackground()
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 14) {
+                    ScrollView { VStack(alignment: .leading, spacing: 24) {
                 HStack(spacing: 8) {
                     CinemaHeading(title: "Комнаты")
-                    Text("\(rooms.count)").font(.caption.monospacedDigit()).foregroundStyle(CinemaPalette.muted)
                     Spacer()
-                    Button { showJoin = true } label: {
-                        Image(systemName: "number").font(.subheadline.weight(.medium))
-                            .frame(width: 44, height: 44).liquidCard(Circle())
-                    }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel("Войти по коду")
-                    Button { showCreate = true } label: {
-                        Image(systemName: "plus").font(.subheadline.weight(.medium))
-                            .frame(width: 44, height: 44).liquidCard(Circle())
-                    }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel("Создать комнату")
+                    StudioIconButton(symbol: "number", label: "Войти по коду") { showJoin = true }
+                    StudioIconButton(symbol: "plus", label: "Создать комнату") { showCreate = true }
                 }
-                Text("МОИ КОМНАТЫ").font(.system(size: 11, weight: .semibold)).tracking(1.2)
-                    .foregroundStyle(CinemaPalette.muted).padding(.top, 12)
-                ForEach(rooms) { room in
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(CinemaPalette.muted)
+                    TextField("Поиск комнат", text: $roomQuery).font(.subheadline)
+                }.padding(.horizontal, 14).frame(minHeight: 48)
+                    .background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 14))
+                HStack(spacing: 16) {
+                    Button { withAnimation(.snappy) { ownedOnly = false } } label: {
+                        Text("Все · \(rooms.count)").foregroundStyle(ownedOnly ? CinemaPalette.muted : CinemaPalette.ink)
+                    }
+                    Button { withAnimation(.snappy) { ownedOnly = true } } label: {
+                        Text("Созданные мной").foregroundStyle(ownedOnly ? CinemaPalette.ink : CinemaPalette.muted)
+                    }
+                    Spacer()
+                }.font(.caption.weight(.semibold)).buttonStyle(.plain).frame(minHeight: 44)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], alignment: .leading, spacing: 24) {
+                ForEach(visibleRooms) { room in
                     let canSelect = room.owner == session.profile?.userId
                     let selected = selectedRoomIDs.contains(room.id)
                     HStack(spacing: 11) {
@@ -300,10 +302,14 @@ struct HomeView: View {
                             if !isSelectingRooms { previewedRoom = room }
                         }
                 }
-                if rooms.isEmpty {
-                    CinemaEmptyState(symbol: "play.rectangle.on.rectangle", title: "Нет комнат", detail: "Создай комнату или введи код приглашения.")
                 }
-                    }.padding(.horizontal, 16).padding(.top, 8).cinemaArrival() }.task {
+                if visibleRooms.isEmpty {
+                    CinemaEmptyState(symbol: "play.rectangle.on.rectangle", title: roomQuery.isEmpty ? "Добавить видео" : "Ничего не найдено", detail: roomQuery.isEmpty ? "По ссылке или из файлов" : "Измени запрос")
+                    if roomQuery.isEmpty {
+                        Button { showCreate = true } label: { Label("Создать комнату", systemImage: "plus").frame(maxWidth: .infinity) }.buttonStyle(CinemaPrimaryButtonStyle())
+                    }
+                }
+                    }.padding(.horizontal, 20).padding(.top, 8).cinemaArrival() }.task {
                         #if DEBUG
                         if VisualFixtures.active { rooms = VisualFixtures.rooms; return }
                         #endif
@@ -650,6 +656,7 @@ struct MovieSearchSheet: View {
 
 struct CreateRoomSheet: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
     let created: (Room) -> Void
     @State private var url = ""
     @State private var selectedMovie: PhotosPickerItem?
@@ -670,9 +677,10 @@ struct CreateRoomSheet: View {
     // user-initiated creation flow.
     @State private var creationRequestID = UUID()
     var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 16) {
-        CinemaHeading(title: "Создать комнату")
-        Text("Вставь ссылку VK Видео, сайта или выбери файл из галереи.").font(.subheadline).foregroundStyle(.secondary)
-        TextField("Ссылка на видео", text: $url, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
+        HStack { CinemaHeading(title: "Новая комната"); Spacer(); StudioIconButton(symbol: "xmark", label: "Закрыть создание комнаты") { dismiss() } }
+        StudioSection(title: "Источник видео")
+        Text("Ссылка или видео с устройства").font(.subheadline).foregroundStyle(.secondary)
+        StudioField(title: "Ссылка на видео", text: $url)
             .onChange(of: url) { _, value in
                 if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, movieURL != nil {
                     selectedMovie = nil
@@ -704,6 +712,7 @@ struct CreateRoomSheet: View {
                 movieImportTask = Task { await loadFileMovie(source, generation: generation) }
             } catch { movieError = "Не удалось получить видео: \(error.localizedDescription)" }
         }
+        StudioSection(title: "Доступ")
         Toggle("Публичная комната", isOn: Binding(get: { !isPrivate }, set: { isPrivate = !$0 })).padding(12).cinemaSurface(RoundedRectangle(cornerRadius: 17))
         if importingMovie { ProgressView("Подготовка выбранного видео…") }
         if loading {
@@ -724,8 +733,8 @@ struct CreateRoomSheet: View {
         } label: { Label(loading ? "Отправка видео…" : "Создать", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(CinemaPrimaryButtonStyle()).disabled((url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && movieURL == nil) || loading || importingMovie)
     }.padding(16) } }
         .disabled(loading || importingMovie)
-        .presentationDetents([.medium, .large])
-        .presentationBackground(.clear)
+        .presentationDetents([.large])
+        .presentationBackground(CinemaPalette.background)
         .interactiveDismissDisabled(loading)
         .onDisappear {
             importGeneration = UUID()
@@ -872,17 +881,23 @@ struct RoomView: View {
             // subtraction to focus made the room jump to its full height one
             // frame before the keyboard had actually finished closing.
             let roomHeight = max(playerHeight + 180, geometry.size.height - keyboardHeight - 14)
-            let roomShape = RoundedRectangle(cornerRadius: 25, style: .continuous)
+            let roomShape = RoundedRectangle(cornerRadius: 0, style: .continuous)
             ZStack(alignment: .top) { AcrylicBackground().contentShape(Rectangle()).onTapGesture { dismissChatKeyboard() }
                 VStack(spacing: 0) {
+                    HStack(spacing: 10) {
+                        StudioIconButton(symbol: "chevron.left", label: "Назад к комнатам") { leaveRoom() }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(room.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Text("\(model.activeMembers.count) участников").font(.caption).foregroundStyle(CinemaPalette.muted)
+                        }
+                        Spacer(minLength: 0)
+                        StudioIconButton(symbol: "person.2", label: "Участники комнаты") { presentMembers() }
+                    }.padding(.horizontal, 16).padding(.bottom, 10)
                     Group {
                         if let player = model.player {
                             BarePlayerSurface(player: player)
                         } else {
-                            ZStack {
-                                Color.black
-                                CinemaLoadingIndicator()
-                            }
+                            playerPlaceholder
                         }
                     }
                         .frame(height: playerHeight)
@@ -905,8 +920,8 @@ struct RoomView: View {
                         .layoutPriority(2)
                 }
                 .clipShape(roomShape)
-                .cinemaSurface(roomShape)
-                .padding(.horizontal, 7)
+                .background(CinemaPalette.background)
+                .padding(.horizontal, 0)
                 .padding(.top, contentTop)
                 .padding(.bottom, 2)
                 .frame(width: geometry.size.width, height: roomHeight, alignment: .top)
@@ -974,6 +989,21 @@ struct RoomView: View {
                 }
             }
     }
+    @ViewBuilder private var playerPlaceholder: some View {
+        #if DEBUG
+        if VisualFixtures.active {
+            ZStack {
+                Color.black
+                VStack(spacing: 10) {
+                    Image(systemName: "play.circle").font(.system(size: 38, weight: .ultraLight))
+                    Text("Видео комнаты").font(.caption).foregroundStyle(CinemaPalette.muted)
+                }
+            }
+        } else { ZStack { Color.black; CinemaLoadingIndicator() } }
+        #else
+        ZStack { Color.black; CinemaLoadingIndicator() }
+        #endif
+    }
     private func leaveRoom() {
         dismissChatKeyboard()
         dismiss()
@@ -1036,7 +1066,7 @@ struct RoomView: View {
                 .buttonStyle(.plain)
             }
             .padding(7)
-            .liquidCard(Capsule())
+            .background(CinemaPalette.surface, in: Capsule())
             .opacity(model.isOwner ? 1 : 0.62)
         }
         .padding(9)
@@ -2641,7 +2671,7 @@ private struct ImmediateGalleryButtonStyle: ButtonStyle {
     }
 }
 
-private struct AlivePressButtonStyle: ButtonStyle {
+struct AlivePressButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -3165,11 +3195,11 @@ struct NativeMessageBubble: View, Equatable {
     private var bubbleFill: Color {
         if isHighlighted { return CinemaPalette.accent.opacity(0.17) }
         if isStickerMessage { return Color.clear }
-        return isMine ? CinemaPalette.accent.opacity(0.16) : Color.white.opacity(0.055)
+        return isMine ? StudioPalette.data.opacity(0.17) : CinemaPalette.surface
     }
 
     private var bubbleStroke: Color {
-        isHighlighted ? CinemaPalette.accent.opacity(0.72) : Color.white.opacity(isStickerMessage ? 0 : 0.08)
+        isHighlighted ? CinemaPalette.accent.opacity(0.72) : Color.clear
     }
 
     private var replyIndicatorOpacity: Double {
@@ -3232,7 +3262,7 @@ struct NativeMessageBubble: View, Equatable {
             }
             if !sentTime.isEmpty {
                 Text(sentTime)
-                    .font(.system(size: 9, weight: .regular))
+                    .font(.system(size: 10, weight: .regular))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -3242,8 +3272,8 @@ struct NativeMessageBubble: View, Equatable {
         .padding(.horizontal, isStickerMessage ? 5 : 9)
         .padding(.vertical, isStickerMessage ? 3 : 7)
         .frame(width: bubbleWidth, alignment: .leading)
-        .background(bubbleFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(bubbleStroke, lineWidth: isHighlighted ? 1.2 : 1))
+        .background(bubbleFill, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(bubbleStroke, lineWidth: isHighlighted ? 1.2 : 1))
         .overlay(alignment: .leading) { replyIndicator }
         .shadow(color: isHighlighted ? CinemaPalette.accent.opacity(0.24) : Color.clear, radius: 10)
         .offset(x: replyDragOffset)
@@ -3399,7 +3429,9 @@ struct LiquidAuthView: View {
                             }.frame(maxWidth: .infinity)
                         }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(loading).padding(.top, 4)
                     }.animation(.spring(response: 0.36, dampingFraction: 0.86), value: register)
-                        .changeEffect(.shake, value: error, isEnabled: !reduceMotion && !error.isEmpty)
+                        .phaseAnimator([0.0, 1.0, -1.0, 0.0], trigger: error) { content, phase in
+                            content.offset(x: reduceMotion ? 0 : phase * 4)
+                        } animation: { _ in .snappy(duration: 0.08) }
                 }
                 .padding(.horizontal, 24).padding(.top, 40).padding(.bottom, 24)
                 .frame(maxWidth: 380).frame(maxWidth: .infinity).cinemaArrival()
@@ -4038,7 +4070,7 @@ private struct PublicProfileScreen: View {
             ScrollView {
                 VStack(spacing: 14) {
                     HStack {
-                        Button(action: close) { Image(systemName: "xmark").font(.subheadline.bold()).frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(.plain)
+                        Button(action: close) { Image(systemName: "xmark").font(.subheadline.bold()).frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(.plain).accessibilityLabel("Закрыть профиль пользователя")
                         Spacer()
                         Text("Профиль").font(.headline)
                         Spacer()
@@ -4053,14 +4085,15 @@ private struct PublicProfileScreen: View {
                             .accessibilityLabel("Удалить из друзей")
                         } else { Color.clear.frame(width: 44, height: 44) }
                     }
+                    HStack(alignment: .center, spacing: 16) {
                     ZStack(alignment: .bottomTrailing) {
-                        AvatarView(dataURL: shownAvatar, name: shownName, size: 72, showsBorder: false)
+                        AvatarView(dataURL: shownAvatar, name: shownName, size: 60, showsBorder: false)
                         if presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 17, height: 17)
                                 .overlay(Circle().stroke(Color.black.opacity(0.64), lineWidth: 3))
                         }
                     }
-                    VStack(spacing: 3) {
+                    VStack(alignment: .leading, spacing: 5) {
                         Text(shownName).font(.headline)
                         if !shownUsername.isEmpty {
                             Text("@\(shownUsername)").foregroundStyle(.secondary)
@@ -4082,6 +4115,8 @@ private struct PublicProfileScreen: View {
                         Text(presenceText(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, lastSeenAgeSeconds: profile?.lastSeenAgeSeconds, ageAnchor: profile?.presenceSnapshotReceivedAt, visible: profile?.activityVisible, now: deviceEnvironment.currentTime))
                             .font(.caption).foregroundStyle(presenceIsOnline(isOnline: profile?.isOnline, lastSeen: profile?.lastSeen, visible: profile?.activityVisible) ? CinemaPalette.accent.opacity(0.86) : Color.secondary).padding(.top, 2)
                     }
+                    Spacer(minLength: 0)
+                    }
                     if let loaded = profile, loaded.userId != session.profile?.userId, !loaded.isFriend {
                         Button { Task { await toggleFriend(loaded) } } label: {
                             Label("Добавить в друзья", systemImage: "person.badge.plus")
@@ -4090,7 +4125,7 @@ private struct PublicProfileScreen: View {
                         .buttonStyle(.plain).liquidCard(Capsule()).disabled(friendshipBusy)
                     }
                     if let stats = profile?.stats {
-                        HStack(spacing: 9) {
+                        VStack(spacing: 0) {
                             fullMetric("play.rectangle.fill", compactDuration(stats.watchedSeconds), "просмотры", context: .views)
                             fullMetric("clock.fill", compactDuration(stats.appSeconds), "в приложении", context: .appTime)
                             fullMetric("film.fill", compactDuration(stats.longestMovieSeconds), "макс. фильм", context: .longestMovie)
@@ -4135,6 +4170,13 @@ private struct PublicProfileScreen: View {
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.84), value: context)
         .task(id: user.id) {
+            #if DEBUG
+            if VisualFixtures.active {
+                profile = PublicUserProfile(userId: user.id, username: user.username, nickname: user.nickname, avatarDataURL: user.avatarDataURL, isFriend: true, analyticsVisible: true, stats: VisualFixtures.stats, isOnline: true, lastSeen: nil, lastSeenAgeSeconds: nil, activityVisible: true, nowWatching: nil)
+                loading = false
+                return
+            }
+            #endif
             while !Task.isCancelled {
                 await load()
                 try? await Task.sleep(for: .milliseconds(1200))
@@ -4143,11 +4185,12 @@ private struct PublicProfileScreen: View {
     }
 
     private func fullMetric(_ icon: String, _ value: String, _ title: String, context: ProfileContext) -> some View {
-        VStack(spacing: 5) {
-            Image(systemName: icon).foregroundStyle(CinemaPalette.accent)
-            Text(value).font(.caption.weight(.bold)).lineLimit(1)
-            Text(title).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
-        }.frame(maxWidth: .infinity).padding(.vertical, 11).cinemaSurface(RoundedRectangle(cornerRadius: 17))
+        HStack(spacing: 12) {
+            Image(systemName: icon).foregroundStyle(CinemaPalette.muted).frame(width: 24)
+            Text(title).font(.subheadline).foregroundStyle(CinemaPalette.muted)
+            Spacer(minLength: 0)
+            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit()
+        }.padding(.vertical, 14).overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 1) }
             .contentShape(RoundedRectangle(cornerRadius: 17))
             .onLongPressGesture(minimumDuration: 0.42, maximumDistance: 8) { showContext(context) }
     }
@@ -4276,39 +4319,25 @@ private func compactDuration(_ seconds: Int) -> String {
 struct RoomCard: View {
     let room: Room
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 14) {
-                CinemaArtwork(url: room.thumbnailURL.isEmpty ? nil : URL(string: room.thumbnailURL))
-                    .frame(width: 112, height: 76).clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(alignment: .bottomTrailing) {
-                        Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white).frame(width: 24, height: 24)
-                            .background(.black.opacity(0.55), in: Circle()).padding(6)
-                    }
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(room.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                    Text(room.ownerName).font(.caption).foregroundStyle(CinemaPalette.muted).lineLimit(1)
-                    if room.playback?.isPlaying == true {
-                        Label("Идёт просмотр", systemImage: "play.circle.fill")
-                            .font(.caption2.weight(.medium)).foregroundStyle(CinemaPalette.accent)
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }.padding(12)
-            HStack(spacing: 6) {
-                Image(systemName: "person.2").font(.caption2)
-                Text("\(room.membersCount)")
-                Spacer()
-                Text("#\(room.inviteCode)").monospaced()
-                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
+        VStack(alignment: .leading, spacing: 10) {
+            CinemaArtwork(url: room.thumbnailURL.isEmpty ? nil : URL(string: room.thumbnailURL))
+                .frame(height: 112).frame(maxWidth: .infinity).clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .overlay(alignment: .bottomLeading) {
+                    HStack(spacing: 5) {
+                        Image(systemName: room.playback?.isPlaying == true ? "play.fill" : "person.2")
+                        Text(room.playback?.isPlaying == true ? "Смотрят" : "\(room.membersCount)")
+                    }.font(.caption2.weight(.semibold)).padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(.black.opacity(0.55), in: Capsule()).padding(9)
+                }
+            Text(room.title).font(.subheadline.weight(.semibold)).lineLimit(2).frame(minHeight: 36, alignment: .topLeading)
+            HStack(spacing: 5) {
+                Text(room.ownerName).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold))
             }.font(.caption).foregroundStyle(CinemaPalette.muted)
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .background(.white.opacity(0.025))
-        }
-        .cinemaSurface(RoundedRectangle(cornerRadius: 18))
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
     }
 }
 
@@ -4427,214 +4456,133 @@ struct LegacyFriendsGlassView: View {
 struct ProfileGlassView: View {
     @EnvironmentObject private var session: SessionStore
     @State private var edit = false
+    @State private var showLogoutConfirmation = false
     @State private var avatarPicker: PhotosPickerItem?
     @State private var friends: [FriendProfile] = []
     var body: some View {
         ZStack {
             AcrylicBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 24) {
                     HStack {
                         CinemaHeading(title: "Профиль")
                         Spacer()
-                        Button { withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { edit.toggle() } } label: {
-                            Image(systemName: edit ? "xmark" : "pencil").font(.subheadline)
-                                .frame(width: 44, height: 44).liquidCard(Circle())
-                        }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel(edit ? "Закрыть редактор" : "Редактировать профиль")
+                        StudioIconButton(symbol: "pencil", label: "Редактировать профиль") { edit = true }
+                        Menu {
+                            Button("Редактировать профиль", systemImage: "pencil") { edit = true }
+                            Button("Выйти из аккаунта", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) { showLogoutConfirmation = true }
+                        } label: {
+                            Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                                .background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 14))
+                        }.accessibilityLabel("Меню профиля").accessibilityIdentifier("profile-menu")
                     }
-                    VStack(alignment: .leading, spacing: 20) {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 16) {
                         PhotosPicker(selection: $avatarPicker, matching: .images) {
-                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 68)
+                            AvatarView(dataURL: session.profile?.avatarDataUrl ?? "", name: session.profile?.nickname ?? "?", size: 60, showsBorder: false)
                         }.accessibilityLabel("Изменить фото")
                             .onChange(of: avatarPicker) { _, item in Task { await updateAvatar(item) } }
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(session.profile?.nickname ?? "").font(.title3.weight(.semibold))
+                            Text(session.profile?.nickname ?? "").font(.system(.title2).weight(.semibold))
                             Text("@\(session.profile?.username ?? "")").font(.subheadline).foregroundStyle(CinemaPalette.muted)
                         }
                         Spacer(minLength: 0)
-                    }
-                    HStack(spacing: 0) {
+                    }.padding(.vertical, 4)
+                    HStack(alignment: .top, spacing: 16) {
                         profileMetric(value: compactDuration(session.viewingStats?.watchedSeconds ?? 0), label: "Просмотрено", symbol: "play.rectangle")
-                        Rectangle().fill(CinemaPalette.line).frame(width: 1, height: 30).padding(.horizontal, 20)
                         profileMetric(value: "\(friends.count)", label: "Друзья", symbol: "person.2")
                     }
-                    }.padding(18).cinemaSurface(RoundedRectangle(cornerRadius: 24))
-                    if edit {
-                        ProfileInlineEditor(close: { withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { edit = false } })
-                            .transition(.opacity.combined(with: .offset(y: -6)))
-                    }
-                    Text("СТАТИСТИКА").font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(CinemaPalette.muted)
                     ViewingInsightsPager(stats: session.viewingStats, friends: friends)
-                    Button("Выйти") { session.logout() }.font(.subheadline).buttonStyle(.plain)
-                        .foregroundStyle(CinemaPalette.muted).frame(minHeight: 44)
-                }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 16).cinemaArrival()
+                    VStack(spacing: 0) {
+                        profileFact("В приложении", value: compactDuration(session.viewingStats?.appSeconds ?? 0), symbol: "clock")
+                        Divider().overlay(CinemaPalette.line)
+                        profileFact("Самый долгий просмотр", value: compactDuration(session.viewingStats?.longestMovieSeconds ?? 0), symbol: "film")
+                    }
+                }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24).cinemaArrival()
             }
+        }
+        .sheet(isPresented: $edit) { ProfileEditSheet() }
+        .confirmationDialog("Выйти из аккаунта?", isPresented: $showLogoutConfirmation, titleVisibility: .visible) {
+            Button("Выйти", role: .destructive) { session.logout() }
+            Button("Отмена", role: .cancel) { }
         }
         .task {
             #if DEBUG
-            if VisualFixtures.active { friends = VisualFixtures.friends; return }
+            if VisualFixtures.active { friends = VisualFixtures.emptyFriends ? [] : VisualFixtures.friends; return }
             #endif
             while !Task.isCancelled {
                 await session.refreshViewingStats()
-                if let refreshedFriends = try? await session.api.friends() {
-                    friends = refreshedFriends
-                }
+                if let refreshedFriends = try? await session.api.friends() { friends = refreshedFriends }
                 try? await Task.sleep(for: .seconds(5))
             }
         }
     }
     private func profileMetric(value: String, label: String, symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(label, systemImage: symbol).font(.caption).foregroundStyle(CinemaPalette.muted)
-            Text(value).font(.title3.weight(.semibold)).monospacedDigit()
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack { Image(systemName: symbol); Text(label) }.font(.caption).foregroundStyle(CinemaPalette.muted)
+            Text(value).font(.system(.title2).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            .background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 16))
     }
-    private func updateAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self), let profile = session.profile else { return }; let value = "data:image/jpeg;base64," + data.base64EncodedString(); session.profile = try? await session.api.updateProfile(nickname: profile.nickname, username: profile.username, avatar: value) }
+    private func profileFact(_ title: String, value: String, symbol: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).foregroundStyle(CinemaPalette.muted).frame(width: 20)
+            Text(title).foregroundStyle(CinemaPalette.muted)
+            Spacer(minLength: 4)
+            Text(value).monospacedDigit()
+        }.font(.caption).padding(.vertical, 15)
+    }
+    private func updateAvatar(_ item: PhotosPickerItem?) async {
+        guard let item, let data = try? await item.loadTransferable(type: Data.self), let profile = session.profile else { return }
+        let value = "data:image/jpeg;base64," + data.base64EncodedString()
+        session.profile = try? await session.api.updateProfile(nickname: profile.nickname, username: profile.username, avatar: value)
+    }
 }
 
 private struct ViewingInsightsPager: View {
     let stats: ViewingStats?
     let friends: [FriendProfile]
     @State private var page = 0
-    @State private var indicatorPressed = false
-    @GestureState private var dragTranslation: CGFloat = 0
-
-    private var pages: [AnyView] {
-        [
-            AnyView(GenreOnlyCard(stats: stats)),
-            AnyView(ViewingHeatmapCard(
-                daily: stats?.dailySeconds ?? [:],
-                backendMonthIncreasePercentage: stats?.monthIncreasePercentage,
-                backendStreakDays: stats?.currentStreakDays
-            )),
-            AnyView(SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends)),
-        ]
-    }
-
-    private var pageHeight: CGFloat {
-        if page == 1 { return 360 }
-        if page == 0 { return stats?.genres.count == 1 ? 154 : 256 }
-        return 238
-    }
-
-    private var indicatorHeight: CGFloat {
-        page == 0 && stats?.genres.count == 1 ? 22 : 30
-    }
-
+    @Namespace private var selection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .body) private var genreHeight: CGFloat = 256
+    private let titles = ["Жанры", "Активность", "Вместе"]
+    private var motion: Animation? { reduceMotion ? nil : .spring(duration: 0.36, bounce: 0.16) }
     var body: some View {
-        VStack(spacing: page == 0 && stats?.genres.count == 1 ? 6 : 10) {
-            GeometryReader { proxy in
-                let width = max(1, proxy.size.width)
-                let isHorizontalDrag = abs(dragTranslation) > 0
-                HStack(spacing: 0) {
-                    ForEach(pages.indices, id: \.self) { index in
-                        pages[index]
-                            .frame(width: width, height: proxy.size.height, alignment: .topLeading)
-                            .clipped()
-                    }
-                }
-                // A real interactive offset fixes the old UIPageViewController
-                // bounce: returning the finger right now follows it continuously
-                // instead of waiting for the system pager to settle first.
-                .offset(x: -CGFloat(page) * width + dragTranslation)
-                .animation(isHorizontalDrag ? nil : .interactiveSpring(response: 0.36, dampingFraction: 0.88, blendDuration: 0.06), value: page)
-                .frame(width: width, alignment: .leading)
-                .clipped()
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 8)
-                        .updating($dragTranslation) { value, state, _ in
-                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                            let proposed = value.translation.width
-                            let atLeadingEdge = page == 0 && proposed > 0
-                            let atTrailingEdge = page == pages.count - 1 && proposed < 0
-                            // Keep a small elastic edge only; it cannot make a
-                            // reverse swipe appear stuck at either end.
-                            state = (atLeadingEdge || atTrailingEdge) ? proposed * 0.16 : proposed
-                        }
-                        .onEnded { value in
-                            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                            let predicted = value.predictedEndTranslation.width
-                            let threshold = width * 0.18
-                            var next = page
-                            if predicted < -threshold { next += 1 }
-                            if predicted > threshold { next -= 1 }
-                            next = min(max(next, 0), pages.count - 1)
-                            guard next != page else { return }
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.82)
-                            withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.88, blendDuration: 0.06)) {
-                                page = next
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 0) {
+                ForEach(titles.indices, id: \.self) { index in
+                    Button { withAnimation(motion) { page = index } } label: {
+                        VStack(spacing: 12) {
+                            Text(titles[index]).font(.subheadline.weight(page == index ? .semibold : .regular))
+                                .foregroundStyle(page == index ? CinemaPalette.ink : CinemaPalette.muted)
+                            ZStack {
+                                Rectangle().fill(CinemaPalette.line).frame(height: 1)
+                                if page == index {
+                                    Capsule().fill(CinemaPalette.ink).frame(height: 2)
+                                        .matchedGeometryEffect(id: "selected-section", in: selection)
+                                }
                             }
-                        }
-                )
-            }
-            .frame(height: pageHeight)
-            .animation(.interactiveSpring(response: 0.36, dampingFraction: 0.88), value: pageHeight)
-
-            GeometryReader { proxy in
-                HStack(spacing: 6) {
-                    ForEach(pages.indices, id: \.self) { index in
-                        Capsule()
-                            .fill(index == page ? Color.primary.opacity(0.72) : Color.white.opacity(0.16))
-                            .frame(width: index == page ? 20 : 8, height: 8)
-                    }
+                        }.frame(maxWidth: .infinity).frame(minHeight: 44)
+                    }.buttonStyle(.plain).accessibilityIdentifier("stats-\(index)")
+                        .accessibilityAddTraits(page == index ? .isSelected : [])
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scaleEffect(indicatorPressed ? 1.11 : 1)
-                .shadow(color: indicatorPressed ? Color.white.opacity(0.14) : .clear, radius: 6)
-                .contentShape(Rectangle())
-                .highPriorityGesture(indicatorScrubGesture(width: proxy.size.width))
-                .simultaneousGesture(
-                    SpatialTapGesture().onEnded { value in
-                        updateIndicatorPage(at: value.location.x, width: proxy.size.width)
-                    }
-                )
             }
-            .frame(width: 58, height: indicatorHeight)
-            .animation(.interactiveSpring(response: 0.28, dampingFraction: 0.76), value: indicatorPressed)
-            .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.80), value: page)
-        }
-        .padding(15)
-        .liquidCard(RoundedRectangle(cornerRadius: 26))
-        .accessibilityLabel("Страницы статистики")
-    }
-
-    private func indicatorScrubGesture(width: CGFloat) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.22, maximumDistance: 16)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
-            .onChanged { value in
-                switch value {
-                case .first(true):
-                    guard !indicatorPressed else { return }
-                    indicatorPressed = true
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.80)
-                case .second(true, let drag):
-                    if !indicatorPressed { indicatorPressed = true }
-                    guard let drag else { return }
-                    updateIndicatorPage(at: drag.location.x, width: width)
+            Group {
+                switch page {
+                case 0:
+                    GenreOnlyCard(stats: stats)
+                        .frame(height: stats?.genres.count == 1 ? genreHeight * 0.61 : genreHeight)
+                        .padding(15).liquidCard(RoundedRectangle(cornerRadius: 26))
+                case 1:
+                    ViewingHeatmapCard(daily: stats?.dailySeconds ?? [:], backendMonthIncreasePercentage: stats?.monthIncreasePercentage, backendStreakDays: stats?.currentStreakDays)
                 default:
-                    break
+                    SharedWatchingCard(companion: stats?.topCompanion, fallbackFriends: friends)
                 }
-            }
-            .onEnded { value in
-                if case .second(true, let drag) = value, let drag {
-                    updateIndicatorPage(at: drag.location.x, width: width)
-                }
-                withAnimation(.interactiveSpring(response: 0.28, dampingFraction: 0.8)) {
-                    indicatorPressed = false
-                }
-            }
-    }
-
-    private func updateIndicatorPage(at x: CGFloat, width: CGFloat) {
-        guard width > 0, !pages.isEmpty else { return }
-        let normalized = min(0.999, max(0, x / width))
-        let target = min(pages.count - 1, Int(normalized * CGFloat(pages.count)))
-        guard target != page else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.88)
-        withAnimation(.interactiveSpring(response: 0.3, dampingFraction: 0.82, blendDuration: 0.04)) {
-            page = target
+            }.id(page).transition(.opacity.combined(with: .offset(x: reduceMotion ? 0 : 8)))
+                .simultaneousGesture(DragGesture(minimumDistance: 35).onEnded { value in
+                    guard abs(value.translation.width) > abs(value.translation.height) * 1.4 else { return }
+                    withAnimation(motion) { page = min(2, max(0, page + (value.translation.width < 0 ? 1 : -1))) }
+                })
         }
     }
 }
@@ -4713,212 +4661,99 @@ private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
     let backendMonthIncreasePercentage: Int?
     let backendStreakDays: Int?
-    private let calendar = Calendar.current
-    private static let detailFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
-        formatter.dateFormat = "d MMMM"
-        return formatter
-    }()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedDay: Date?
     @State private var visibleMonths = 3
-    @State private var pinchScale: CGFloat = 1
-
+    private let calendar = Calendar.current
     private var today: Date { calendar.startOfDay(for: Date()) }
-    private var calendarLayout: ActivityCalendarLayout {
-        ActivityCalendarLayout(today: today, visibleMonths: visibleMonths, calendar: calendar)
+    private var layout: ActivityCalendarLayout { ActivityCalendarLayout(today: today, visibleMonths: visibleMonths, calendar: calendar) }
+    private var firstDay: Date { layout.displayedDays.first ?? today }
+    private var contributions: [Date: Double] {
+        Dictionary(uniqueKeysWithValues: layout.displayedDays.map { ($0, Double(daily[key($0)] ?? 0)) })
     }
-    private var allVisibleDays: [Date] { calendarLayout.displayedDays }
-    private var highlightedDay: Date { selectedDay ?? latestActiveDay ?? today }
-    private var latestActiveDay: Date? {
-        allVisibleDays.last(where: { (daily[dayKey(for: $0)] ?? 0) > 0 })
-    }
-    private var streakDays: Int {
+    private var highlighted: Date { selectedDay ?? layout.displayedDays.last(where: { (daily[key($0)] ?? 0) > 0 }) ?? today }
+    private var total: Int { layout.displayedDays.reduce(0) { $0 + (daily[key($1)] ?? 0) } }
+    private var change: Int { backendMonthIncreasePercentage ?? ActivityCalendarLayout.monthIncreasePercentage(daily: daily, today: today, calendar: calendar) }
+    private var streak: Int {
         if let backendStreakDays { return backendStreakDays }
-        var count = 0
+        var days = 0
         var cursor = today
-        while daily[dayKey(for: cursor)] ?? 0 > 0 {
-            count += 1
+        while (daily[key(cursor)] ?? 0) > 0 {
+            days += 1
             guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
             cursor = previous
         }
-        return count
+        return days
     }
-    private var monthIncreasePercentage: Int {
-        if let backendMonthIncreasePercentage { return backendMonthIncreasePercentage }
-        return ActivityCalendarLayout.monthIncreasePercentage(
-            daily: daily,
-            today: today,
-            calendar: calendar
-        )
+    private var colors: [Color] {
+        [CinemaPalette.elevated, StudioPalette.data.opacity(0.25), StudioPalette.data.opacity(0.5), StudioPalette.data.opacity(0.75), StudioPalette.data]
     }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 13) {
-                Image(systemName: "chart.bar.xaxis")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(CinemaPalette.accent)
-                    .frame(width: 34, height: 34)
-                    .background(CinemaPalette.accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(CinemaPalette.accent.opacity(0.30), lineWidth: 1))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Активность").font(.headline.bold())
-                    Text(visibleMonths == 1 ? "Последний месяц" : "Последние 3 месяца").font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(compactDuration(total)).font(.system(.title2).weight(.semibold)).monospacedDigit()
+                    Text("За выбранный период").font(.caption).foregroundStyle(CinemaPalette.muted)
                 }
                 Spacer()
-                HStack(spacing: 5) {
-                    Image(systemName: "flame.fill").font(.subheadline).foregroundStyle(CinemaPalette.accent)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("\(streakDays) дней подряд").font(.caption2.weight(.bold)).foregroundStyle(CinemaPalette.accent)
-                        Text("Текущая серия").font(.system(size: 9)).foregroundStyle(.secondary)
+                HStack(spacing: 2) {
+                    ForEach([1, 3], id: \.self) { months in
+                        Button {
+                            withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) { visibleMonths = months; selectedDay = nil }
+                        } label: {
+                            Text("\(months) мес.").font(.caption.weight(.medium)).padding(.horizontal, 10).frame(minHeight: 44)
+                                .background(visibleMonths == months ? CinemaPalette.elevated : .clear, in: RoundedRectangle(cornerRadius: 10))
+                        }.buttonStyle(.plain).accessibilityIdentifier("heatmap-months-\(months)")
+                            .accessibilityAddTraits(visibleMonths == months ? .isSelected : [])
                     }
                 }
-                .padding(.horizontal, 8).padding(.vertical, 6)
-                .background(CinemaPalette.accent.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.8))
             }
-
-            HStack(spacing: 7) {
-                Image(systemName: "calendar")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(CinemaPalette.accent)
-                    .frame(width: 26, height: 26)
-                    .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                Text(Self.detailFormatter.string(from: highlightedDay)).font(.caption.weight(.bold)).foregroundStyle(CinemaPalette.accent)
-                Text("•").foregroundStyle(CinemaPalette.muted)
-                Text(durationText(for: highlightedDay)).font(.caption.weight(.semibold))
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(CinemaPalette.accent.opacity(0.25), lineWidth: 0.9))
-
             GeometryReader { proxy in
-                let layout = calendarLayout
-                let columns = layout.columns
-                let weekdayWidth: CGFloat = 25
-                let weekdayGap: CGFloat = 9
-                let columnGap: CGFloat = 4
-                let totalColumns = max(1, columns.count)
-                let widthLimitedCell = (proxy.size.width - weekdayWidth - weekdayGap - CGFloat(totalColumns - 1) * columnGap) / CGFloat(totalColumns)
-                let rowGap: CGFloat = 4
-                let captionHeight: CGFloat = 15
-                let heightLimitedCell = (proxy.size.height - captionHeight - 7 - (6 * rowGap)) / 7
-                let cell = max(9, min(22, widthLimitedCell, heightLimitedCell))
-
-                HStack(alignment: .top, spacing: weekdayGap) {
-                    VStack(alignment: .leading, spacing: rowGap) {
-                        ForEach(["пн", "вт", "ср", "чт", "пт", "сб", "вс"], id: \.self) { day in
-                            Text(day)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .frame(width: weekdayWidth, height: cell, alignment: .leading)
-                        }
+                let count = max(1, layout.columns.count)
+                let cell = max(8, min(26, (proxy.size.width - 26 - CGFloat(count - 1) * 4) / CGFloat(count)))
+                CalendarHeatmap(contributions: contributions, dateRange: firstDay...today)
+                    .cellSize(cell).cellSpacing(4).cellCornerRadius(3)
+                    .levels(colors).thresholds([1, 1800, 3600, 7200])
+                    .firstWeekday(.monday).showMonthLabels(true).showWeekdayLabels(true)
+                    .scrollEnabled(false).todayHighlightColor(CinemaPalette.ink.opacity(0.75))
+                    .onCellTap { day, _ in
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { selectedDay = day }
+                        UISelectionFeedbackGenerator().selectionChanged()
                     }
-
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack(alignment: .top, spacing: columnGap) {
-                            ForEach(columns.indices, id: \.self) { column in
-                                VStack(spacing: rowGap) {
-                                    ForEach(columns[column]) { item in
-                                        RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous)
-                                            .fill(item.isSelectable ? tileGradient(for: item.date) : inactiveTileGradient)
-                                            .frame(width: cell, height: cell)
-                                            .overlay {
-                                                if item.isSelectable && calendar.isDate(item.date, inSameDayAs: highlightedDay) {
-                                                    RoundedRectangle(cornerRadius: max(3, cell * 0.24), style: .continuous)
-                                                        .stroke(.white, lineWidth: 1.7)
-                                                        .shadow(color: CinemaPalette.accent.opacity(0.75), radius: 4)
-                                                }
-                                            }
-                                            .contentShape(Rectangle())
-                                            .onTapGesture {
-                                                if item.isSelectable { select(item.date) }
-                                            }
-                                    }
-                                }
-                            }
-                        }
-
-                        HStack(alignment: .top, spacing: columnGap) {
-                            ForEach(columns.indices, id: \.self) { column in
-                                let label = layout.monthMarkers.first(where: { $0.column == column })?.label
-                                Text(label ?? "")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    .frame(width: cell, height: captionHeight, alignment: .leading)
-                            }
-                        }
-                    }
+                    .tooltipOnTap { day, value in "\(day.formatted(.dateTime.day().month().locale(Locale(identifier: "ru_RU")))) · \(compactDuration(Int(value)))" }
+                    .accessibilityCellLabel { day, value in "\(day.formatted(date: .complete, time: .omitted)), просмотрено \(compactDuration(Int(value)))" }
+                    .environment(\.locale, Locale(identifier: "ru_RU"))
+            }.frame(height: visibleMonths == 1 ? 235 : 190)
+                .accessibilityIdentifier("viewing-heatmap")
+            HStack(spacing: 5) {
+                Text("Меньше").padding(.trailing, 3)
+                ForEach(colors.indices, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 2).fill(colors[index]).frame(width: 10, height: 10).accessibilityHidden(true)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .scaleEffect(pinchScale, anchor: .center)
-            }
-            .frame(height: 172)
-
-            HStack(spacing: 8) {
-                Image(systemName: "chart.line.uptrend.xyaxis").foregroundStyle(CinemaPalette.accent).font(.caption.weight(.bold))
-                (
-                    Text("В этом месяце активность выше на ")
-                        .foregroundColor(.secondary)
-                    + Text("\(monthIncreasePercentage)%")
-                        .foregroundColor(CinemaPalette.accent)
-                        .fontWeight(.semibold)
-                    + Text(", чем в прошлом")
-                        .foregroundColor(.secondary)
-                )
-                    .font(.caption)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 2)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .simultaneousGesture(heatmapMagnification)
+                Text("Больше").padding(.leading, 3)
+                Spacer()
+            }.font(.caption2).foregroundStyle(CinemaPalette.muted)
+            HStack {
+                Text(highlighted.formatted(.dateTime.day().month(.wide).locale(Locale(identifier: "ru_RU")))).foregroundStyle(CinemaPalette.muted)
+                Spacer()
+                Text((daily[key(highlighted)] ?? 0) == 0 ? "Нет просмотров" : compactDuration(daily[key(highlighted)] ?? 0))
+                    .monospacedDigit().contentTransition(.numericText())
+            }.font(.subheadline).padding(.vertical, 12)
+                .overlay(alignment: .top) { Rectangle().fill(CinemaPalette.line).frame(height: 1) }
+            HStack {
+                Label("\(streak) дн. подряд", systemImage: "flame").foregroundStyle(CinemaPalette.muted)
+                Spacer()
+                Text(change == 0 ? "Без изменений" : "\(change > 0 ? "+" : "")\(change)% за месяц")
+                    .foregroundStyle(change > 0 ? StudioPalette.data : CinemaPalette.muted)
+            }.font(.caption)
+        }.padding(16).background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 18))
+            .simultaneousGesture(MagnificationGesture().onEnded { value in
+                withAnimation(reduceMotion ? nil : .snappy) { visibleMonths = value > 1.1 ? 1 : value < 0.9 ? 3 : visibleMonths }
+            })
     }
-
-    private func select(_ day: Date) {
-        guard selectedDay.map({ !calendar.isDate($0, inSameDayAs: day) }) ?? true else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.9)
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { selectedDay = day }
-    }
-    private func color(for day: Date) -> Color {
-        let seconds = daily[dayKey(for: day)] ?? 0
-        guard seconds > 0 else { return .white.opacity(0.10) }
-        return CinemaPalette.accent.opacity(0.22 + 0.72 * min(1, Double(seconds) / 10_800))
-    }
-    private func tileGradient(for day: Date) -> LinearGradient {
-        let base = color(for: day)
-        return LinearGradient(colors: [base, base], startPoint: .top, endPoint: .bottom)
-    }
-    private var inactiveTileGradient: LinearGradient {
-        LinearGradient(
-            colors: [.white.opacity(0.035), .white.opacity(0.055)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-    private func dayKey(for day: Date) -> String {
+    private func key(_ day: Date) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: day)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
-    }
-    private func durationText(for day: Date) -> String {
-        let minutes = (daily[dayKey(for: day)] ?? 0) / 60
-        return minutes == 0 ? "активности нет" : minutes >= 60 ? "\(minutes / 60) ч \(minutes % 60) мин" : "\(minutes) мин"
-    }
-    private var heatmapMagnification: some Gesture {
-        MagnificationGesture()
-            .onChanged { pinchScale = min(1.16, max(0.86, $0)) }
-            .onEnded { value in
-                let next = value > 1.04 ? 1 : value < 0.96 ? 3 : visibleMonths
-                if next != visibleMonths { UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 1) }
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) { visibleMonths = next; selectedDay = nil; pinchScale = 1 }
-            }
     }
 }
 
@@ -5165,40 +5000,20 @@ private struct SharedWatchingCard: View {
     @State private var showsDetail = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
+        VStack(alignment: .leading, spacing: 20) {
+            StudioSection(title: "Совместные просмотры")
             if let companion {
-                Button {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.86)
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) { showsDetail.toggle() }
-                } label: {
-                    VStack(spacing: 9) {
-                        AvatarView(dataURL: companion.avatarDataURL, name: companion.nickname, size: 56)
-                            .padding(7)
-                            .liquidCard(Circle())
-                        Text(showsDetail ? companion.nickname : "Нажми на аватар")
-                            .font(.subheadline.weight(.semibold))
-                        if showsDetail {
-                            Text("@\(companion.username) · \(formattedHours(companion.seconds)) вместе")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        }
+                HStack(spacing: 14) {
+                    AvatarView(dataURL: companion.avatarDataURL, name: companion.nickname, size: 52, showsBorder: false)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(companion.nickname).font(.headline)
+                        Text("@\(companion.username)").font(.caption).foregroundStyle(CinemaPalette.muted)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                }
-                .buttonStyle(.plain)
-            } else if let friend = fallbackFriends.first(where: \.isFriend) {
-                VStack(spacing: 8) {
-                    AvatarView(dataURL: friend.avatarDataURL, name: friend.nickname, size: 56)
-                        .padding(5)
-                        .liquidCard(Circle())
-                    Text(friend.nickname).font(.subheadline.weight(.semibold))
-                    Text("Совместные часы появятся после общего просмотра").font(.caption2).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
+                    Spacer(minLength: 0)
+                    Text(formattedHours(companion.seconds)).font(.subheadline.weight(.semibold)).monospacedDigit()
+                }.padding(16).background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 16))
             } else {
-                ContentUnavailableView("Добавь друга", systemImage: "person.badge.plus", description: Text("Здесь появится человек, с которым вы чаще всего смотрите вместе."))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                CinemaEmptyState(symbol: "person.2", title: "Нет совместных просмотров", detail: "Статистика появится после просмотра с друзьями")
             }
         }
     }
@@ -5702,11 +5517,12 @@ struct EmojiFlowLayout: Layout {
 
 struct JoinRoomSheet: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
     let joined: (Room) -> Void
     @State private var code = ""
     @State private var error = ""
     @State private var loading = false
-    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 24) { CinemaHeading(title: "Войти в комнату"); GlassField(icon: "number", title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button(loading ? "Подключение…" : "Присоединиться") { Task { await join() } }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading) }.padding(24) } }.presentationDetents([.medium, .large]).presentationBackground(.clear).interactiveDismissDisabled(loading) }
+    var body: some View { ZStack { AcrylicBackground(); ScrollView { VStack(alignment: .leading, spacing: 24) { HStack { CinemaHeading(title: "По приглашению"); Spacer(); StudioIconButton(symbol: "xmark", label: "Закрыть ввод кода") { dismiss() } }; StudioField(title: "Код комнаты", text: $code); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; Button(loading ? "Подключение…" : "Присоединиться") { Task { await join() } }.buttonStyle(CinemaPrimaryButtonStyle()).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading) }.padding(24) } }.presentationDetents([.medium, .large]).presentationBackground(CinemaPalette.background).interactiveDismissDisabled(loading) }
     private func join() async {
         guard !loading else { return }
         loading = true; error = ""; defer { loading = false }
@@ -5737,17 +5553,17 @@ struct ProfileEditSheet: View {
     var body: some View {
         ZStack { AcrylicBackground()
             ScrollView { VStack(alignment: .leading, spacing: 24) {
-                CinemaHeading(title: "Редактировать")
+                HStack { CinemaHeading(title: "Редактировать профиль"); Spacer(); StudioIconButton(symbol: "xmark", label: "Закрыть редактор") { dismiss() } }
                 PhotosPicker(selection: $selectedPhoto, matching: .images) { ZStack(alignment: .bottomTrailing) { AvatarView(dataURL: avatar, name: nickname, size: 78); Image(systemName: "camera.fill").font(.caption).padding(7).liquidCard(Circle()) } }
                     .onChange(of: selectedPhoto) { _, item in Task { await loadAvatar(item) } }
                 VStack(spacing: 9) {
-                    GlassField(icon: "person", title: "Имя", text: $nickname)
-                    VStack(spacing: 5) { GlassField(icon: "at", title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; HStack { Text("@\(username)").font(.caption).foregroundStyle(.secondary); Spacer(); if !username.isEmpty { Text(available == true ? "Свободен" : "Занят").font(.caption2.weight(.semibold)).foregroundStyle(available == true ? .green : .orange) } } }
+                    StudioField(title: "Имя", text: $nickname)
+                    VStack(spacing: 5) { StudioField(title: "Username", text: $username).onChange(of: username) { _, value in Task { available = try? await session.api.usernameAvailable(value) } }; HStack { Text("@\(username)").font(.caption).foregroundStyle(.secondary); Spacer(); if !username.isEmpty { Text(available == true ? "Свободен" : "Занят").font(.caption2.weight(.semibold)).foregroundStyle(available == true ? .green : .orange) } } }
                 }
                 if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
-                Button("Готово") { Task { await save() } }.buttonStyle(CinemaPrimaryButtonStyle())
+                Button("Сохранить") { Task { await save() } }.buttonStyle(CinemaPrimaryButtonStyle()).accessibilityIdentifier("save-profile")
             }.padding(24) }
-        }.presentationDetents([.medium, .large]).presentationBackground(.clear).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? ""; avatar = session.profile?.avatarDataUrl ?? "" }
+        }.presentationDetents([.medium, .large]).presentationBackground(CinemaPalette.background).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? ""; avatar = session.profile?.avatarDataUrl ?? "" }
     }
     private func loadAvatar(_ item: PhotosPickerItem?) async { guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }; avatar = "data:image/jpeg;base64," + data.base64EncodedString() }
     private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username, avatar: avatar); dismiss() } catch { self.error = error.localizedDescription } }
@@ -5759,7 +5575,7 @@ struct ProfileInlineEditor: View {
     @State private var nickname = ""
     @State private var username = ""
     @State private var error = ""
-    var body: some View { VStack(spacing: 10) { GlassField(icon: "person", title: "Nickname", text: $nickname); GlassField(icon: "at", title: "Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled(); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; HStack { Button("Отмена", action: close).buttonStyle(.bordered); Button("Готово") { Task { await save() } }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 11).liquidCard(Capsule()) } }.padding(14).cinemaSurface(RoundedRectangle(cornerRadius: 22)).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" } }
+    var body: some View { VStack(spacing: 10) { StudioField(title: "Имя", text: $nickname); StudioField(title: "Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled(); if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }; HStack { Button("Отмена", action: close).buttonStyle(.bordered); Button("Готово") { Task { await save() } }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 11).liquidCard(Capsule()) } }.padding(14).cinemaSurface(RoundedRectangle(cornerRadius: 22)).onAppear { nickname = session.profile?.nickname ?? ""; username = session.profile?.username ?? "" } }
     private func save() async { do { session.profile = try await session.api.updateProfile(nickname: nickname, username: username); close() } catch { self.error = error.localizedDescription } }
 }
 
@@ -5767,131 +5583,157 @@ private enum FriendRequestFilter { case incoming, outgoing }
 
 struct FriendsGlassView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
     @State private var query = ""
     @State private var friends: [FriendProfile] = []
     @State private var results: [FriendProfile] = []
+    @State private var searching = false
     @State private var requestFilter: FriendRequestFilter?
     @State private var profilePreview: UserProfileReference?
     @State private var fullProfile: UserProfileReference?
     @State private var friendsPresenceSnapshotFresh = false
     @State private var lastFriendsRefreshAt: Date?
     @FocusState private var searchFocused: Bool
+    private var onlineCount: Int {
+        friends.filter { presenceIsOnline(isOnline: friendsPresenceSnapshotFresh ? $0.isOnline : false, lastSeen: $0.lastSeen, visible: $0.activityVisible) }.count
+    }
     var body: some View {
-        ZStack { AcrylicBackground()
-            VStack(spacing: 15) {
-                HStack {
-                    CinemaHeading(title: "Друзья")
-                    Text("\(friends.count)").font(.caption.monospacedDigit())
-                        .foregroundStyle(CinemaPalette.muted)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(CinemaPalette.elevated, in: Capsule())
-                    Spacer()
-                    if !session.friendRequests.incoming.isEmpty {
-                        RequestHeaderButton(symbol: "tray.and.arrow.down.fill", count: session.friendRequests.incoming.count, active: requestFilter == .incoming) {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) { requestFilter = requestFilter == .incoming ? nil : .incoming }
-                        }
-                    }
-                    if !session.friendRequests.outgoing.isEmpty {
-                        RequestHeaderButton(symbol: "paperplane.fill", count: nil, active: requestFilter == .outgoing) {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) { requestFilter = requestFilter == .outgoing ? nil : .outgoing }
-                        }
-                    }
-                    Button { withAnimation(.spring(response: 0.36, dampingFraction: 0.86)) { expanded.toggle() }; if expanded { DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { searchFocused = true } } else { query = ""; searchFocused = false } } label: { Image(systemName: expanded ? "xmark" : "magnifyingglass").frame(width: 44, height: 44).liquidCard(Circle()) }.buttonStyle(AlivePressButtonStyle()).accessibilityLabel(expanded ? "Закрыть поиск" : "Найти друзей")
-                }
-                if expanded {
-                    HStack(spacing: 9) { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Username", text: $query).focused($searchFocused).textInputAutocapitalization(.never).autocorrectionDisabled().onChange(of: query) { _, _ in Task { await search() } } }
-                        .padding(13).liquidCard(Capsule()).transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                if !expanded && requestFilter == nil {
+        ZStack {
+            AcrylicBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
                     HStack {
-                        Text("МОИ ДРУЗЬЯ").font(.system(size: 11, weight: .semibold)).tracking(1.2)
+                        CinemaHeading(title: "Друзья")
                         Spacer()
-                        let onlineCount = friends.filter { presenceIsOnline(isOnline: friendsPresenceSnapshotFresh ? $0.isOnline : false, lastSeen: $0.lastSeen, visible: $0.activityVisible) }.count
-                        if onlineCount > 0 {
-                            Text("\(onlineCount) в сети").font(.caption)
+                        Text("\(friends.count)").font(.subheadline.monospacedDigit()).foregroundStyle(CinemaPalette.muted)
+                    }.frame(minHeight: 44)
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(CinemaPalette.muted)
+                        if expanded {
+                            TextField("Username", text: $query).focused($searchFocused)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .accessibilityIdentifier("friend-search-field")
+                            Button { withAnimation(reduceMotion ? nil : .snappy) { expanded = false; query = ""; searchFocused = false } } label: {
+                                Image(systemName: "xmark").frame(width: 36, height: 44)
+                            }.accessibilityLabel("Закрыть поиск")
+                        } else {
+                            Button(action: openSearch) {
+                                HStack { Text("Найти по username").foregroundStyle(CinemaPalette.muted); Spacer(); Image(systemName: "plus").foregroundStyle(CinemaPalette.ink) }
+                                    .frame(minHeight: 48).contentShape(Rectangle())
+                            }.accessibilityLabel("Найти друзей").accessibilityIdentifier("friend-search-button")
                         }
-                    }.foregroundStyle(CinemaPalette.muted).padding(.top, 12)
-                }
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        if !session.friendRequests.incoming.isEmpty && requestFilter == .incoming {
+                    }.font(.subheadline).padding(.horizontal, 14)
+                        .background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 14))
+                        .buttonStyle(.plain)
+                    if !session.friendRequests.incoming.isEmpty || !session.friendRequests.outgoing.isEmpty {
+                        HStack(spacing: 10) {
+                            requestButton("Входящие", count: session.friendRequests.incoming.count, filter: .incoming)
+                            requestButton("Отправленные", count: session.friendRequests.outgoing.count, filter: .outgoing)
+                        }
+                    }
+                    if !expanded && !friends.isEmpty && requestFilter == nil {
+                        StudioSection(title: "Все друзья", detail: onlineCount > 0 ? "\(onlineCount) в сети" : "")
+                    }
+                    LazyVStack(spacing: 12) {
+                        if requestFilter == .incoming {
                             FriendRequestSection(title: "Входящие", requests: session.friendRequests.incoming, incoming: true) { request, accept in
-                                await session.respond(to: request, accept: accept)
-                                await loadFriends()
+                                await session.respond(to: request, accept: accept); await loadFriends()
                             }
-                        }
-                        if !session.friendRequests.outgoing.isEmpty && requestFilter == .outgoing {
-                            FriendRequestSection(title: "Отправленные", requests: session.friendRequests.outgoing, incoming: false) { request, _ in
-                                await session.cancel(request)
-                            }
-                        }
-                        if requestFilter == nil {
+                        } else if requestFilter == .outgoing {
+                            FriendRequestSection(title: "Отправленные", requests: session.friendRequests.outgoing, incoming: false) { request, _ in await session.cancel(request) }
+                        } else {
                             ForEach(expanded && !query.isEmpty ? results : friends) { person in
-                                FriendSwipeRow(
-                                person: person,
-                                showAdd: expanded && !person.isFriend,
-                                pending: session.friendRequests.outgoing.contains { $0.userId == person.userId },
-                                presenceSnapshotFresh: friendsPresenceSnapshotFresh,
-                                preview: { profilePreview = UserProfileReference(person) },
-                                openProfile: { fullProfile = UserProfileReference(person) },
-                                add: {
-                                    try? await session.api.addFriend(username: person.username)
-                                    await session.refreshFriendRequests()
-                                    await search()
-                                },
-                                remove: {
-                                    do {
-                                        try await session.api.removeFriend(username: person.username)
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
-                                            friends.removeAll { $0.id == person.id }
-                                        }
-                                    } catch {
-                                        // Keep the person visible if the server rejected the request.
-                                    }
-                                }
-                                )
+                                FriendSwipeRow(person: person, showAdd: expanded && !person.isFriend,
+                                    pending: session.friendRequests.outgoing.contains { $0.userId == person.userId },
+                                    presenceSnapshotFresh: friendsPresenceSnapshotFresh,
+                                    preview: { profilePreview = UserProfileReference(person) },
+                                    openProfile: { fullProfile = UserProfileReference(person) },
+                                    add: {
+                                        try? await session.api.addFriend(username: person.username)
+                                        await session.refreshFriendRequests(); await search()
+                                    }, remove: {
+                                        do {
+                                            try await session.api.removeFriend(username: person.username)
+                                            withAnimation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.12)) { friends.removeAll { $0.id == person.id } }
+                                        } catch { }
+                                    })
                             }
+                            if friends.isEmpty && !expanded {
+                                VStack(spacing: 0) {
+                                    Image(systemName: "person.crop.circle.badge.plus")
+                                        .font(.system(size: 42, weight: .ultraLight)).foregroundStyle(CinemaPalette.muted)
+                                        .frame(height: 76).accessibilityHidden(true)
+                                    Text("Добавить друзей").font(.headline).padding(.top, 12)
+                                    Text("Поиск по username").font(.subheadline).foregroundStyle(CinemaPalette.muted).padding(.top, 7)
+                                    Button(action: openSearch) { Label("Найти пользователя", systemImage: "magnifyingglass") }
+                                        .buttonStyle(CinemaPrimaryButtonStyle()).padding(.top, 24)
+                                        .accessibilityIdentifier("empty-friends-search")
+                                }.frame(maxWidth: .infinity).padding(.top, 48).padding(.bottom, 24).cinemaArrival()
+                            } else if expanded && !query.isEmpty && results.isEmpty && !searching {
+                                CinemaEmptyState(symbol: "magnifyingglass", title: "Никого не найдено", detail: "Проверь username")
+                            }
+                            if searching { CinemaLoadingIndicator().padding(.vertical, 20) }
                         }
-                        if friends.isEmpty && !expanded && requestFilter == nil { CinemaEmptyState(symbol: "person.2", title: "Нет друзей", detail: "Найди пользователя по username.") }
-                    }.background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 20))
-                        .clipShape(RoundedRectangle(cornerRadius: 20))
-                }
-            }.padding(.horizontal, 16).padding(.top, 8).cinemaArrival()
+                    }
+                }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24).cinemaArrival()
+            }.scrollDismissesKeyboard(.interactively)
         }
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
+        .task(id: query) {
+            guard expanded else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            await search()
+        }
         .task {
             #if DEBUG
-            if VisualFixtures.active { friends = VisualFixtures.friends; friendsPresenceSnapshotFresh = true; return }
+            if VisualFixtures.active { friends = VisualFixtures.emptyFriends ? [] : VisualFixtures.friends; friendsPresenceSnapshotFresh = true; return }
             #endif
             await session.refreshFriendRequests()
-            while !Task.isCancelled {
-                await loadFriends()
-                try? await Task.sleep(for: .seconds(3))
-            }
+            while !Task.isCancelled { await loadFriends(); try? await Task.sleep(for: .seconds(3)) }
         }
         .onChange(of: session.friendRequests) { _, _ in Task { await loadFriends() } }
     }
+    private func openSearch() {
+        withAnimation(reduceMotion ? nil : .spring(duration: 0.34, bounce: 0.18)) { expanded = true; requestFilter = nil }
+        searchFocused = true
+    }
+    private func requestButton(_ title: String, count: Int, filter: FriendRequestFilter) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : .snappy) { requestFilter = requestFilter == filter ? nil : filter; expanded = false; searchFocused = false }
+        } label: {
+            HStack(spacing: 6) { Text(title); Text("\(count)").monospacedDigit().foregroundStyle(CinemaPalette.muted) }
+                .font(.caption.weight(.medium)).padding(.horizontal, 12).frame(minHeight: 44)
+                .background(requestFilter == filter ? CinemaPalette.elevated : CinemaPalette.surface, in: Capsule())
+        }.buttonStyle(.plain)
+    }
     private func loadFriends() async {
-        // A transient tunnel error must not erase the list or freeze it on the
-        // last offline label. Replace the list only after a valid response, but
-        // expire a previously green presence snapshot if refreshing has failed
-        // for longer than the backend TTL.
+        #if DEBUG
+        if VisualFixtures.active { return }
+        #endif
         do {
             let refreshed = try await session.api.friends()
-            if friends.map(\.id) == refreshed.map(\.id) {
-                friends = refreshed
-            } else {
-                withAnimation(.easeInOut(duration: 0.22)) { friends = refreshed }
-            }
-            lastFriendsRefreshAt = Date()
-            friendsPresenceSnapshotFresh = true
+            if friends.map(\.id) == refreshed.map(\.id) { friends = refreshed }
+            else { withAnimation(reduceMotion ? nil : .snappy) { friends = refreshed } }
+            lastFriendsRefreshAt = Date(); friendsPresenceSnapshotFresh = true
         } catch {
             let age = lastFriendsRefreshAt.map { Date().timeIntervalSince($0) } ?? .infinity
             if age > 18 { friendsPresenceSnapshotFresh = false }
         }
     }
-    private func search() async { results = (try? await session.api.friends(query: query)) ?? [] }
+    private func search() async {
+        let requested = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requested.isEmpty else { results = []; searching = false; return }
+        searching = true
+        defer { if query.trimmingCharacters(in: .whitespacesAndNewlines) == requested { searching = false } }
+        #if DEBUG
+        if VisualFixtures.active { results = VisualFixtures.friends.filter { $0.username.contains(requested) }; return }
+        #endif
+        let found = (try? await session.api.friends(query: requested)) ?? []
+        guard !Task.isCancelled, query.trimmingCharacters(in: .whitespacesAndNewlines) == requested else { return }
+        withAnimation(reduceMotion ? nil : .snappy) { results = found }
+    }
 }
 
 private struct RequestHeaderButton: View {
@@ -6022,7 +5864,7 @@ private struct FriendSwipeRow: View {
             HStack(spacing: 11) {
                 HStack(spacing: 11) {
                     ZStack(alignment: .bottomTrailing) {
-                        AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 42)
+                        AvatarView(dataURL: person.avatarDataURL, name: person.nickname, size: 48, showsBorder: false)
                         if presenceIsOnline(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, visible: person.activityVisible) {
                             Circle().fill(Color(red: 0.32, green: 0.70, blue: 0.54)).frame(width: 10, height: 10)
                                 .overlay(Circle().stroke(Color.black.opacity(0.55), lineWidth: 2))
@@ -6030,14 +5872,16 @@ private struct FriendSwipeRow: View {
                     }
                     VStack(alignment: .leading, spacing: 3) {
                         Text(person.nickname).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text("@\(person.username) · \(presenceText(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, lastSeenAgeSeconds: person.lastSeenAgeSeconds, ageAnchor: person.presenceSnapshotReceivedAt, visible: person.activityVisible, now: deviceEnvironment.currentTime))")
+                        Text("@\(person.username)")
+                            .font(.caption).foregroundStyle(CinemaPalette.muted)
+                        Text(presenceText(isOnline: presenceSnapshotFresh ? person.isOnline : false, lastSeen: person.lastSeen, lastSeenAgeSeconds: person.lastSeenAgeSeconds, ageAnchor: person.presenceSnapshotReceivedAt, visible: person.activityVisible, now: deviceEnvironment.currentTime))
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { preview() }
                 .contextMenu {
-                    Button("Профиль", systemImage: "person.crop.circle") { openProfile() }
+                    Button("Профиль", systemImage: "person.crop.circle") { openProfile() }.accessibilityIdentifier("open-friend-profile")
                     if person.isFriend {
                         Button("Удалить из друзей", systemImage: "person.badge.minus", role: .destructive) { requestDeleteConfirmation() }
                     } else if !pending {
@@ -6055,9 +5899,9 @@ private struct FriendSwipeRow: View {
                 }
             }
             .padding(.vertical, 11)
-            .padding(.horizontal, 14)
-            .background(CinemaPalette.surface)
-            .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 0.5).padding(.leading, 64) }
+            .padding(.horizontal, 2)
+            .background(CinemaPalette.background)
+            .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 0.5).padding(.leading, 60) }
             .offset(x: offset)
             .contentShape(RoundedRectangle(cornerRadius: 20))
             .zIndex(1)

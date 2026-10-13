@@ -19,6 +19,7 @@ jobs:
       - name: Test and capture native screens
         working-directory: PusheenIOS
         run: |
+          swiftc -frontend -parse Sources/*.swift UITests/*.swift
           xcodegen generate
           device=$(xcrun simctl list devices available --json | python3 -c '
           import json,sys

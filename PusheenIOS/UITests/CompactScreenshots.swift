@@ -8,7 +8,13 @@ final class CompactScreenshots: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
-
+    private func fixtures(_ extra: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-fixtures"] + extra
+        app.launch()
+        XCTAssertTrue(app.buttons["Друзья"].waitForExistence(timeout: 10))
+        return app
+    }
     func testAuthenticationAndRegistration() {
         let app = XCUIApplication()
         app.launch()
@@ -19,36 +25,77 @@ final class CompactScreenshots: XCTestCase {
         XCTAssertTrue(app.buttons["Создать аккаунт"].waitForExistence(timeout: 5))
         capture(app, "registration-compact")
     }
-
     func testNativeTabsAndProfileSections() {
-        let app = XCUIApplication()
-        app.launchArguments = ["--ui-fixtures"]
-        app.launch()
-        XCTAssertTrue(app.buttons["Друзья"].waitForExistence(timeout: 10))
+        let app = fixtures()
         capture(app, "rooms-compact")
         app.buttons["Друзья"].tap()
-        XCTAssertTrue(app.buttons["Найти друзей"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["friend-search-button"].waitForExistence(timeout: 5))
         capture(app, "friends-compact")
         app.buttons["Профиль"].tap()
-        XCTAssertTrue(app.buttons["Редактировать профиль"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["profile-menu"].waitForExistence(timeout: 5))
         capture(app, "profile-compact")
-        let heading = app.staticTexts["СТАТИСТИКА"]
-        XCTAssertTrue(heading.waitForExistence(timeout: 5))
-        // The original pager's accessibility label propagates to its children.
-        // Anchor the gesture to the independent, visible section heading.
-        let origin = app.coordinate(withNormalizedOffset: .zero)
-        let gestureY = heading.frame.maxY + 75
-        let start = origin.withOffset(CGVector(dx: app.frame.width * 0.82, dy: gestureY))
-        let finish = origin.withOffset(CGVector(dx: app.frame.width * 0.18, dy: gestureY))
-        start.press(forDuration: 0.05, thenDragTo: finish)
-        let activity = app.images["chart.bar.xaxis"]
-        XCTAssertLessThan(activity.frame.maxX, app.frame.maxX)
-        XCTAssertGreaterThan(activity.frame.minX, app.frame.minX)
+        app.buttons["stats-1"].tap()
+        XCTAssertTrue(app.buttons["heatmap-months-1"].waitForExistence(timeout: 5))
         capture(app, "activity-compact")
-        start.press(forDuration: 0.05, thenDragTo: finish)
-        let companion = app.staticTexts["Нажми на аватар"]
-        XCTAssertLessThan(companion.frame.maxX, app.frame.maxX)
-        XCTAssertGreaterThan(companion.frame.minX, app.frame.minX)
+        app.buttons["heatmap-months-1"].tap()
+        capture(app, "activity-month")
+        app.buttons["stats-2"].tap()
+        XCTAssertTrue(app.staticTexts["Совместные просмотры"].waitForExistence(timeout: 5))
         capture(app, "together-compact")
+        app.buttons["stats-0"].tap()
+        app.buttons["profile-menu"].tap()
+        XCTAssertTrue(app.buttons["Выйти из аккаунта"].waitForExistence(timeout: 5))
+        capture(app, "profile-menu")
+        app.buttons["Выйти из аккаунта"].tap()
+        XCTAssertTrue(app.buttons["Отмена"].waitForExistence(timeout: 5))
+        app.buttons["Отмена"].tap()
+        XCTAssertTrue(app.buttons["profile-menu"].exists)
+        app.buttons["Редактировать профиль"].tap()
+        XCTAssertTrue(app.buttons["save-profile"].waitForExistence(timeout: 5))
+        capture(app, "profile-editor")
+        app.buttons["Закрыть редактор"].tap()
+        XCTAssertTrue(app.buttons["profile-menu"].waitForExistence(timeout: 5))
+    }
+    func testEmptyFriendsSearch() {
+        let app = fixtures(["--ui-fixtures-empty-friends"])
+        app.buttons["Друзья"].tap()
+        let search = app.buttons["empty-friends-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        capture(app, "friends-empty")
+        search.tap()
+        let field = app.textFields["friend-search-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("nobody_here")
+        XCTAssertTrue(app.staticTexts["Никого не найдено"].waitForExistence(timeout: 5))
+        capture(app, "friends-search-empty")
+        app.buttons["Закрыть поиск"].tap()
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+    }
+    func testRoomCreationAndPlaybackLayout() {
+        let app = fixtures()
+        app.buttons["Создать комнату"].tap()
+        XCTAssertTrue(app.staticTexts["Источник видео"].waitForExistence(timeout: 5))
+        capture(app, "create-room")
+        app.buttons["Закрыть создание комнаты"].tap()
+        app.buttons["Войти по коду"].tap()
+        XCTAssertTrue(app.textFields["Код комнаты"].waitForExistence(timeout: 5))
+        capture(app, "join-room")
+        app.buttons["Закрыть ввод кода"].tap()
+        app.staticTexts["Вечерний просмотр"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Участники комнаты"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Я готов"].waitForExistence(timeout: 5))
+        capture(app, "player-chat")
+        app.buttons["Назад к комнатам"].tap()
+        XCTAssertTrue(app.buttons["Создать комнату"].waitForExistence(timeout: 5))
+    }
+    func testLargeTextAndReducedMotion() {
+        let app = fixtures(["--ui-fixtures-empty-friends", "--ui-fixtures-reduce-motion", "--ui-fixtures-large-text"])
+        app.buttons["Друзья"].tap()
+        XCTAssertTrue(app.buttons["empty-friends-search"].waitForExistence(timeout: 5))
+        capture(app, "friends-large-text")
+        app.buttons["Профиль"].tap()
+        XCTAssertTrue(app.buttons["profile-menu"].waitForExistence(timeout: 5))
+        capture(app, "profile-large-text")
     }
 }
