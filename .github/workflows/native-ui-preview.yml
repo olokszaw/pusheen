@@ -37,7 +37,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             PUSHEEN_API_BASE_URL=https://pulse.izanagi.online \
             SYMROOT=$PWD/simulator-build \
-            -only-testing:PusheenUITests/CompactScreenshots/testRoomCreationAndPlaybackLayout \
+            -only-testing:PusheenUITests/CompactScreenshots/testNativeTabsAndProfileSections \
             test 2>&1 | tee simulator-build.log
       - name: Export native screen attachments
         if: always()

@@ -4682,39 +4682,37 @@ struct ProfileGlassView: View {
 private struct ViewingInsightsPager: View {
     let stats: ViewingStats?
     let friends: [FriendProfile]
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var page = 0
-    @Namespace private var selection
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     @ScaledMetric(relativeTo: .body) private var genreHeight: CGFloat = 256
     private let titles = ["Жанры", "Активность", "Вместе"]
     private var motion: Animation? { reduceMotion ? nil : .spring(duration: 0.36, bounce: 0.16) }
-    @ViewBuilder private var sectionButtons: some View {
-                ForEach(titles.indices, id: \.self) { index in
-                    Button { withAnimation(motion) { page = index } } label: {
-                        VStack(spacing: 12) {
-                            Text(titles[index]).font(.subheadline.weight(page == index ? .semibold : .regular))
-                                .foregroundStyle(page == index ? CinemaPalette.ink : CinemaPalette.muted)
-                            ZStack {
-                                Rectangle().fill(CinemaPalette.line).frame(height: 1)
-                                if page == index {
-                                    Capsule().fill(CinemaPalette.ink).frame(height: 2)
-                                        .matchedGeometryEffect(id: "selected-section", in: selection)
-                                }
-                            }
-                        }.frame(maxWidth: .infinity).frame(minHeight: 44).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityIdentifier("stats-\(index)")
-                        .accessibilityAddTraits(page == index ? .isSelected : [])
-                }
+    private var pageIndicator: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<3, id: \.self) { index in
+                Button { withAnimation(motion) { page = index } } label: {
+                    Color.clear.frame(maxWidth: .infinity).frame(height: 30)
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .accessibilityLabel(titles[index])
+                    .accessibilityIdentifier("stats-\(index)")
+                    .accessibilityAddTraits(page == index ? .isSelected : [])
+            }
+        }.frame(width: 58)
+            .overlay {
+                HStack(spacing: 6) {
+                    ForEach(0..<3, id: \.self) { index in
+                        Capsule()
+                            .fill(index == page ? Color.primary.opacity(0.72) : Color.white.opacity(0.16))
+                            .frame(width: index == page ? 20 : 8, height: 8)
+                    }
+                }.allowsHitTesting(false).accessibilityHidden(true)
+            }
+            .animation(motion, value: page)
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            if typeSize.isAccessibilitySize {
-                VStack(spacing: 4) { sectionButtons }
-            } else {
-                HStack(spacing: 0) { sectionButtons }
-            }
+        VStack(alignment: .leading, spacing: 10) {
             Group {
                 switch page {
                 case 0:
@@ -4731,6 +4729,7 @@ private struct ViewingInsightsPager: View {
                     guard abs(value.translation.width) > abs(value.translation.height) * 1.4 else { return }
                     withAnimation(motion) { page = min(2, max(0, page + (value.translation.width < 0 ? 1 : -1))) }
                 })
+            pageIndicator.frame(maxWidth: .infinity)
         }
     }
 }
