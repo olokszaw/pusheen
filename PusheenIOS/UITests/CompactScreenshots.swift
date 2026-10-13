@@ -57,6 +57,7 @@ final class CompactScreenshots: XCTestCase {
         XCTAssertTrue(app.buttons["Отмена"].waitForExistence(timeout: 5))
         app.buttons["Отмена"].tap()
         XCTAssertTrue(app.buttons["profile-menu"].exists)
+        capture(app, "profile-after-cancel")
         app.buttons["Редактировать профиль"].tap()
         XCTAssertTrue(app.buttons["save-profile"].waitForExistence(timeout: 5))
         capture(app, "profile-editor")

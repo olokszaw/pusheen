@@ -4480,7 +4480,7 @@ struct ProfileGlassView: View {
         ZStack {
             AcrylicBackground()
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 20) {
                     HStack {
                         CinemaHeading(title: "Профиль")
                         Spacer()
@@ -4515,10 +4515,10 @@ struct ProfileGlassView: View {
                         profileFact("Самый долгий просмотр", value: compactDuration(session.viewingStats?.longestMovieSeconds ?? 0), symbol: "film")
                     }
                 }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24).cinemaArrival()
-            }
+            }.safeAreaPadding(.bottom, 70)
         }
         .sheet(isPresented: $edit) { ProfileEditSheet() }
-        .confirmationDialog("Выйти из аккаунта?", isPresented: $showLogoutConfirmation, titleVisibility: .visible) {
+        .alert("Выйти из аккаунта?", isPresented: $showLogoutConfirmation) {
             Button("Выйти", role: .destructive) { session.logout() }
             Button("Отмена", role: .cancel) { }
         }
@@ -4534,10 +4534,10 @@ struct ProfileGlassView: View {
         }
     }
     private func profileMetric(value: String, label: String, symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack { Image(systemName: symbol); Text(label) }.font(.caption).foregroundStyle(CinemaPalette.muted)
-            Text(value).font(.system(.title2).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            Text(value).font(.system(.title3).weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
             .background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 16))
     }
     private func profileFact(_ title: String, value: String, symbol: String) -> some View {
@@ -4580,7 +4580,7 @@ private struct ViewingInsightsPager: View {
                                         .matchedGeometryEffect(id: "selected-section", in: selection)
                                 }
                             }
-                        }.frame(maxWidth: .infinity).frame(minHeight: 44)
+                        }.frame(maxWidth: .infinity).frame(minHeight: 44).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityIdentifier("stats-\(index)")
                         .accessibilityAddTraits(page == index ? .isSelected : [])
                 }
@@ -4708,7 +4708,7 @@ private struct ViewingHeatmapCard: View {
         [CinemaPalette.elevated, StudioPalette.data.opacity(0.25), StudioPalette.data.opacity(0.5), StudioPalette.data.opacity(0.75), StudioPalette.data]
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(compactDuration(total)).font(.system(.title2).weight(.semibold)).monospacedDigit()
@@ -4729,7 +4729,7 @@ private struct ViewingHeatmapCard: View {
             }
             GeometryReader { proxy in
                 let count = max(1, layout.columns.count)
-                let cell = max(8, min(visibleMonths == 1 ? 26 : 22, (proxy.size.width - 28 - CGFloat(count - 1) * 4) / CGFloat(count)))
+                let cell = max(8, min(visibleMonths == 1 ? 24 : 19, (proxy.size.width - 28 - CGFloat(count - 1) * 4) / CGFloat(count)))
                 HStack(alignment: .top, spacing: 8) {
                     VStack(spacing: 4) {
                         ForEach(["пн", "вт", "ср", "чт", "пт", "сб", "вс"], id: \.self) { day in
@@ -4759,7 +4759,7 @@ private struct ViewingHeatmapCard: View {
                     }
                     }
                 }
-            }.frame(height: visibleMonths == 1 ? 235 : 200)
+            }.frame(height: visibleMonths == 1 ? 220 : 175)
                 .accessibilityIdentifier("viewing-heatmap")
             HStack(spacing: 5) {
                 Text("Меньше").padding(.trailing, 3)
@@ -4774,7 +4774,7 @@ private struct ViewingHeatmapCard: View {
                 Spacer()
                 Text((daily[key(highlighted)] ?? 0) == 0 ? "Нет просмотров" : compactDuration(daily[key(highlighted)] ?? 0))
                     .monospacedDigit().contentTransition(.numericText())
-            }.font(.subheadline).padding(.vertical, 12)
+            }.font(.subheadline).padding(.vertical, 10)
                 .overlay(alignment: .top) { Rectangle().fill(CinemaPalette.line).frame(height: 1) }
             HStack {
                 Label("\(streak) дн. подряд", systemImage: "flame").foregroundStyle(CinemaPalette.muted)
