@@ -21,6 +21,16 @@ enum StudioPalette {
     static let danger = Color(red: 0.96, green: 0.49, blue: 0.47)
 }
 
+enum StudioMotion {
+    static var previewReduced: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("--ui-fixtures-reduce-motion")
+        #else
+        return false
+        #endif
+    }
+}
+
 extension View {
     func cinemaSurface<S: Shape>(_ shape: S = RoundedRectangle(cornerRadius: 14)) -> some View {
         background(CinemaPalette.surface, in: shape)
@@ -30,7 +40,8 @@ extension View {
 }
 
 private struct CinemaArrival: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     @State private var appeared = false
     func body(content: Content) -> some View {
         content.opacity(appeared ? 1 : 0)
@@ -43,7 +54,8 @@ private struct CinemaArrival: ViewModifier {
 
 struct CinemaPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.subheadline.weight(.semibold))
             .foregroundStyle(CinemaPalette.background)
@@ -124,8 +136,9 @@ struct StudioField: View {
 
 struct CinemaArtwork: View {
     let url: URL?
-    var contentMode: ContentMode = .fill
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var contentMode: SwiftUI.ContentMode = .fill
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     var body: some View {
         Group {
             if let url {
@@ -145,7 +158,8 @@ struct CinemaArtwork: View {
 }
 
 struct CinemaLoadingIndicator: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     var body: some View {
         HStack(spacing: 4) {
             ForEach(0..<3) { _ in Capsule().fill(CinemaPalette.muted).frame(width: 6, height: 18) }

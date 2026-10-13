@@ -18,11 +18,6 @@ struct PusheenApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .transformEnvironment(\.accessibilityReduceMotion) { value in
-                    #if DEBUG
-                    if ProcessInfo.processInfo.arguments.contains("--ui-fixtures-reduce-motion") { value = true }
-                    #endif
-                }
                 .transformEnvironment(\.dynamicTypeSize) { value in
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("--ui-fixtures-large-text") { value = .accessibility3 }

@@ -26,7 +26,8 @@ private struct ImportedRoomMovie: Transferable {
 }
 
 struct RootView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     @EnvironmentObject private var session: SessionStore
     var body: some View {
         Group {
@@ -232,6 +233,7 @@ struct HomeView: View {
     @State private var ownedOnly = false
     private var visibleRooms: [Room] { rooms.filter { (!ownedOnly || $0.owner == session.profile?.userId) && (roomQuery.isEmpty || $0.title.localizedCaseInsensitiveContains(roomQuery)) } }
     @State private var path = NavigationPath()
+    @Namespace private var roomTransition
     @State private var showCreate = false
     @State private var showJoin = false
     @State private var pendingRoomToOpen: Room?
@@ -276,6 +278,8 @@ struct HomeView: View {
                                 .transition(.move(edge: .leading).combined(with: .opacity))
                         }
                         RoomCard(room: room)
+                            .accessibilityIdentifier("room-\(room.id)")
+                            .matchedTransitionSource(id: room.id, in: roomTransition)
                             .cinemaArrival()
                             .scaleEffect(selected ? 0.985 : 1)
                             .opacity(isSelectingRooms && !canSelect ? 0.56 : 1)
@@ -351,7 +355,7 @@ struct HomeView: View {
                 }
             }
             .animation(.spring(response: 0.34, dampingFraction: 0.84), value: previewedRoom?.id)
-            .navigationDestination(for: Room.self) { RoomView(room: $0, api: session.api, token: session.token ?? "") }
+            .navigationDestination(for: Room.self) { room in RoomView(room: room, api: session.api, token: session.token ?? "").navigationTransition(.zoom(sourceID: room.id, in: roomTransition)) }
             .sheet(isPresented: $showCreate, onDismiss: openPendingRoom) {
                 CreateRoomSheet { room in
                     stageRoomForOpening(room)
@@ -1400,15 +1404,15 @@ struct MembersSheet: View {
                     } label: {
                         Label("Пригласить", systemImage: "person.badge.plus")
                             .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 11).frame(height: 36)
+                            .padding(.horizontal, 11).frame(minHeight: 44)
                     }
-                    .buttonStyle(AlivePressButtonStyle()).liquidCard(Capsule())
+                    .buttonStyle(AlivePressButtonStyle()).background(CinemaPalette.surface, in: Capsule())
                 }
                 ForEach(members) { member in
                     HStack(spacing: 11) {
                         HStack(spacing: 11) {
                             ZStack(alignment: .bottomTrailing) {
-                                AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 46)
+                                AvatarView(dataURL: member.avatarDataURL, name: member.nickname, size: 44, showsBorder: false)
                                 Circle().fill(member.isOnline ? Color(red: 0.32, green: 0.70, blue: 0.54) : Color.gray.opacity(0.55)).frame(width: 10, height: 10)
                                     .overlay(Circle().stroke(Color.black.opacity(0.55), lineWidth: 2))
                             }
@@ -1423,7 +1427,7 @@ struct MembersSheet: View {
                             profilePreview = UserProfileReference(member)
                         }
                         Spacer(); if member.isMuted { Image(systemName: "speaker.slash.fill").font(.caption).foregroundStyle(.orange) }
-                    }.padding(9).cinemaSurface(RoundedRectangle(cornerRadius: 17))
+                    }.padding(.vertical, 12).overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 1).padding(.leading, 58) }
                         .contentShape(RoundedRectangle(cornerRadius: 17))
                         .onLongPressGesture(minimumDuration: 0.38) {
                             guard member.userId != currentID else { return }
@@ -1466,7 +1470,7 @@ struct MembersSheet: View {
         .userProfilePresentation(preview: $profilePreview, fullProfile: $fullProfile)
         .animation(.spring(response: 0.32, dampingFraction: 0.84), value: selected?.id)
         .onChange(of: fullProfile?.id) { _, value in if value != nil { selectedDetent = .large } }
-        .presentationDetents([.medium, .large], selection: $selectedDetent).presentationBackground(.clear)
+        .presentationDetents([.medium, .large], selection: $selectedDetent).presentationBackground(CinemaPalette.background)
     }
 
     private func closeModerationMenu() {
@@ -1608,13 +1612,13 @@ private struct InviteFriendsPanel: View {
                                     RoomSelectionIndicator(selected: selected).scaleEffect(0.82)
                                 }
                             }
-                            .padding(9)
-                            .cinemaSurface(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .padding(.vertical, 12)
+                            .overlay(alignment: .bottom) { Rectangle().fill(CinemaPalette.line).frame(height: 1).padding(.leading, 58) }
                             .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                             .onTapGesture {
                                 guard !sent else { return }
                                 UISelectionFeedbackGenerator().selectionChanged()
-                                if selected { selectedIDs.remove(friend.id) } else { selectedIDs.insert(friend.id) }
+                                withAnimation(.spring(duration: 0.28, bounce: 0.2)) { if selected { selectedIDs.remove(friend.id) } else { selectedIDs.insert(friend.id) } }
                             }
                         }
                     }
@@ -1636,7 +1640,10 @@ private struct InviteFriendsPanel: View {
         .padding(.top, 18)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
+         .task {
+            #if DEBUG
+            if VisualFixtures.active { friends = VisualFixtures.friends; return }
+            #endif
             while !Task.isCancelled {
                 if let refreshed = try? await session.api.friends() {
                     withAnimation(.easeInOut(duration: 0.18)) { friends = refreshed }
@@ -2672,7 +2679,8 @@ private struct ImmediateGalleryButtonStyle: ButtonStyle {
 }
 
 struct AlivePressButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
@@ -3378,7 +3386,8 @@ private struct ReactionPickerBar: View {
 
 struct LiquidAuthView: View {
     @EnvironmentObject private var session: SessionStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     @State private var register = false
     @State private var nickname = ""
     @State private var username = ""
@@ -3546,7 +3555,8 @@ private struct AuthModeSwitcher: View {
 struct GlassField: View {
     let icon: String; let title: String; @Binding var text: String; var embedded = false
     @FocusState private var focused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !embedded { Text(title).font(.caption.weight(.medium)).foregroundStyle(CinemaPalette.muted) }
@@ -3568,7 +3578,8 @@ struct GlassField: View {
 struct GlassSecureField: View {
     let title: String; @Binding var text: String; var embedded = false
     @FocusState private var focused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !embedded { Text(title).font(.caption.weight(.medium)).foregroundStyle(CinemaPalette.muted) }
@@ -3801,12 +3812,16 @@ private struct UserProfilePreviewCard: View {
     private var shownAvatar: String { profile?.avatarDataURL ?? user.avatarDataURL }
 
     var body: some View {
-        VStack(spacing: 13) {
+        VStack(alignment: .leading, spacing: 20) {
             Capsule().fill(.white.opacity(0.28)).frame(width: 38, height: 5).padding(.top, 2)
-            AvatarView(dataURL: shownAvatar, name: shownName, size: 84, showsBorder: false)
-            VStack(spacing: 2) {
+            HStack(spacing: 14) {
+            AvatarView(dataURL: shownAvatar, name: shownName, size: 52, showsBorder: false)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(shownName).font(.title3.bold()).lineLimit(1)
                 if !shownUsername.isEmpty { Text("@\(shownUsername)").font(.subheadline).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 0)
+            StudioIconButton(symbol: "xmark", label: "Закрыть карточку пользователя", action: close)
             }
             if let watching = profile?.nowWatching {
                 CurrentWatchingPreview(watching: watching)
@@ -3821,25 +3836,21 @@ private struct UserProfilePreviewCard: View {
                     HStack(spacing: 6) {
                         ForEach(stats.genres.prefix(3)) { genre in
                             Text(genre.name).font(.caption2.weight(.semibold)).lineLimit(1)
-                                .padding(.horizontal, 9).padding(.vertical, 6).liquidCard(Capsule())
+                                .padding(.horizontal, 9).padding(.vertical, 6).background(CinemaPalette.elevated, in: Capsule())
                         }
                     }
                 }
             } else if profile?.analyticsVisible == false {
-                Label("Аналитика доступна друзьям", systemImage: "lock.fill")
+                Label("Статистика доступна друзьям", systemImage: "lock.fill")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 ProgressView().controlSize(.small)
             }
-            Button(action: openFull) {
-                Label("Открыть профиль", systemImage: "person.crop.circle")
-                    .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 11)
-            }
-            .buttonStyle(.plain)
-            .liquidCard(Capsule())
+            Button(action: openFull) { Label("Открыть профиль", systemImage: "arrow.up.right").frame(maxWidth: .infinity) }
+                .buttonStyle(CinemaPrimaryButtonStyle()).accessibilityIdentifier("open-full-profile")
         }
         .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .background(CinemaPalette.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).stroke(.white.opacity(0.16), lineWidth: 0.8))
         .shadow(color: .black.opacity(0.36), radius: 26, y: 14)
         .offset(y: max(0, dragY))
@@ -3847,6 +3858,12 @@ private struct UserProfilePreviewCard: View {
             .updating($dragY) { value, state, _ in if value.translation.height > 0 { state = value.translation.height } }
             .onEnded { value in if value.translation.height > 78 || value.predictedEndTranslation.height > 150 { close() } })
         .task(id: user.id) {
+            #if DEBUG
+            if VisualFixtures.active {
+                profile = PublicUserProfile(userId: user.id, username: user.username, nickname: user.nickname, avatarDataURL: user.avatarDataURL, isFriend: true, analyticsVisible: true, stats: VisualFixtures.stats, isOnline: true, lastSeen: nil, lastSeenAgeSeconds: nil, activityVisible: true, nowWatching: nil)
+                return
+            }
+            #endif
             while !Task.isCancelled {
                 if let refreshed = try? await session.api.publicProfile(userID: user.id) {
                     withAnimation(.easeInOut(duration: 0.22)) { profile = refreshed }
@@ -3860,11 +3877,11 @@ private struct UserProfilePreviewCard: View {
 
     private func previewMetric(_ icon: String, _ value: String, _ title: String) -> some View {
         VStack(spacing: 3) {
-            Image(systemName: icon).font(.caption).foregroundStyle(CinemaPalette.accent)
-            Text(value).font(.caption.weight(.bold)).lineLimit(1)
-            Text(title).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+            Image(systemName: icon).font(.caption).foregroundStyle(CinemaPalette.muted)
+            Text(value).font(.subheadline.weight(.semibold)).lineLimit(1)
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 8).cinemaSurface(RoundedRectangle(cornerRadius: 14))
+        .frame(maxWidth: .infinity).padding(.vertical, 8)
     }
 }
 
@@ -4132,7 +4149,7 @@ private struct PublicProfileScreen: View {
                         }
                         ViewingInsightsPager(stats: stats, friends: [])
                     } else if profile?.analyticsVisible == false {
-                        ContentUnavailableView("Статистика скрыта", systemImage: "lock.shield", description: Text("Агрегированная аналитика доступна только подтверждённым друзьям."))
+                        ContentUnavailableView("Статистика скрыта", systemImage: "lock.shield", description: Text("Статистика доступна друзьям."))
                             .padding(.vertical, 32).cinemaSurface(RoundedRectangle(cornerRadius: 25))
                     } else if loading {
                         ProgressView().padding(.vertical, 42)
@@ -4543,7 +4560,8 @@ private struct ViewingInsightsPager: View {
     let friends: [FriendProfile]
     @State private var page = 0
     @Namespace private var selection
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     @ScaledMetric(relativeTo: .body) private var genreHeight: CGFloat = 256
     private let titles = ["Жанры", "Активность", "Вместе"]
     private var motion: Animation? { reduceMotion ? nil : .spring(duration: 0.36, bounce: 0.16) }
@@ -4661,7 +4679,8 @@ private struct ViewingHeatmapCard: View {
     let daily: [String: Int]
     let backendMonthIncreasePercentage: Int?
     let backendStreakDays: Int?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     @State private var selectedDay: Date?
     @State private var visibleMonths = 3
     private let calendar = Calendar.current
@@ -4710,11 +4729,19 @@ private struct ViewingHeatmapCard: View {
             }
             GeometryReader { proxy in
                 let count = max(1, layout.columns.count)
-                let cell = max(8, min(26, (proxy.size.width - 26 - CGFloat(count - 1) * 4) / CGFloat(count)))
-                CalendarHeatmap(contributions: contributions, dateRange: firstDay...today)
+                let cell = max(8, min(visibleMonths == 1 ? 26 : 22, (proxy.size.width - 28 - CGFloat(count - 1) * 4) / CGFloat(count)))
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(spacing: 4) {
+                        ForEach(["пн", "вт", "ср", "чт", "пт", "сб", "вс"], id: \.self) { day in
+                            Text(day).font(.system(size: 10)).foregroundStyle(CinemaPalette.muted)
+                                .frame(width: 20, height: cell, alignment: .leading)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                    CalendarHeatmap(contributions: contributions, dateRange: firstDay...today)
                     .cellSize(cell).cellSpacing(4).cellCornerRadius(3)
                     .levels(colors).thresholds([1, 1800, 3600, 7200])
-                    .firstWeekday(.monday).showMonthLabels(true).showWeekdayLabels(true)
+                    .firstWeekday(.monday).showMonthLabels(false).showWeekdayLabels(false)
                     .scrollEnabled(false).todayHighlightColor(CinemaPalette.ink.opacity(0.75))
                     .onCellTap { day, _ in
                         withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { selectedDay = day }
@@ -4723,7 +4750,16 @@ private struct ViewingHeatmapCard: View {
                     .tooltipOnTap { day, value in "\(day.formatted(.dateTime.day().month().locale(Locale(identifier: "ru_RU")))) · \(compactDuration(Int(value)))" }
                     .accessibilityCellLabel { day, value in "\(day.formatted(date: .complete, time: .omitted)), просмотрено \(compactDuration(Int(value)))" }
                     .environment(\.locale, Locale(identifier: "ru_RU"))
-            }.frame(height: visibleMonths == 1 ? 235 : 190)
+                    HStack(spacing: 4) {
+                        ForEach(layout.columns.indices, id: \.self) { column in
+                            Text(layout.monthMarkers.first(where: { $0.column == column })?.label ?? "")
+                                .font(.system(size: 11)).foregroundStyle(CinemaPalette.muted)
+                                .fixedSize().frame(width: cell, alignment: .leading)
+                        }
+                    }
+                    }
+                }
+            }.frame(height: visibleMonths == 1 ? 235 : 200)
                 .accessibilityIdentifier("viewing-heatmap")
             HStack(spacing: 5) {
                 Text("Меньше").padding(.trailing, 3)
@@ -5583,7 +5619,8 @@ private enum FriendRequestFilter { case incoming, outgoing }
 
 struct FriendsGlassView: View {
     @EnvironmentObject private var session: SessionStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || StudioMotion.previewReduced }
     @State private var expanded = false
     @State private var query = ""
     @State private var friends: [FriendProfile] = []
