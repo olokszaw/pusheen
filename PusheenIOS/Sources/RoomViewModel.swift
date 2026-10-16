@@ -132,6 +132,16 @@ final class RoomViewModel: ObservableObject {
     }
 
     func start() async {
+        #if DEBUG
+        if VisualFixtures.active {
+            messages = VisualFixtures.messages
+            members = VisualFixtures.members
+            isOwner = currentUserID == room.owner
+            duration = 7200
+            position = 720
+            return
+        }
+        #endif
         guard !lifecycleActive else { return }
         lifecycleActive = true
         lifecycleGeneration &+= 1

@@ -1,6 +1,9 @@
 from pathlib import Path
 import os
 import dj_database_url
+from .environment import load_environment
+
+load_environment()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
