@@ -391,10 +391,15 @@ def current_activity_streak(daily_seconds, current_day=None):
 
 def activity_payload(activity):
     genres = safe_activity_map(activity.genre_counts)
+    # Imported partial distributions retain their unknown share in the total,
+    # without turning that bookkeeping entry into a visible genre.
     total = sum(genres.values())
     genre_rows = [
         {"name": name, "seconds": seconds, "percent": round((seconds / total * 100) if total else 0)}
-        for name, seconds in sorted(genres.items(), key=lambda item: item[1], reverse=True)[:5]
+        for name, seconds in sorted(
+            ((name, seconds) for name, seconds in genres.items() if name != "__unclassified__"),
+            key=lambda item: item[1], reverse=True,
+        )[:5]
     ]
     companion = (
         CompanionActivity.objects.filter(user=activity.user)
